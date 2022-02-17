@@ -1,0 +1,8 @@
+src
+tests
+dist
+docs
+coverage
+*.log
+README.md
+.travis.yml
