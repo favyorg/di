@@ -43,7 +43,7 @@
     // "noPropertyAccessFromIndexSignature": true,  /* Require undeclared properties from index signatures to use element accesses. */
 
     /* Module Resolution Options */
-    // "moduleResolution": "node",                  /* Specify module resolution strategy: 'node' (Node.js) or 'classic' (TypeScript pre-1.6). */
+    "moduleResolution": "node" /* Specify module resolution strategy: 'node' (Node.js) or 'classic' (TypeScript pre-1.6). */,
     // "baseUrl": "./",                             /* Base directory to resolve non-absolute module names. */
     // "paths": {},                                 /* A series of entries which re-map imports to lookup locations relative to the 'baseUrl'. */
     // "rootDirs": [],                              /* List of root folders whose combined content represents the structure of the project at runtime. */
@@ -53,7 +53,7 @@
     "esModuleInterop": true /* Enables emit interoperability between CommonJS and ES Modules via creation of namespace objects for all imports. Implies 'allowSyntheticDefaultImports'. */,
     // "preserveSymlinks": true,                    /* Do not resolve the real path of symlinks. */
     // "allowUmdGlobalAccess": true,                /* Allow accessing UMD globals from modules. */
-
+    "noErrorTruncation": true,
     /* Source Map Options */
     // "sourceRoot": "",                            /* Specify the location where debugger should locate TypeScript files instead of source locations. */
     // "mapRoot": "",                               /* Specify the location where debugger should locate map files instead of generated locations. */
@@ -66,7 +66,7 @@
 
     /* Advanced Options */
     "skipLibCheck": true /* Skip type checking of declaration files. */,
-    "forceConsistentCasingInFileNames": true /* Disallow inconsistently-cased references to the same file. */
+    "forceConsistentCasingInFileNames": false /* Disallow inconsistently-cased references to the same file. */
   },
-  "exclude": ["src/tests", "src/examples", "lib", "node_modules"]
+  "exclude": ["src/tests", "src/examples", "dist", "node_modules"]
 }

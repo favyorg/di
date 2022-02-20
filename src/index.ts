@@ -1,44 +1,67 @@
+const Deps = Symbol('Deps');
+const Create = Symbol('Create');
+const ModuleName = Symbol('ModuleName');
 const ModuleTag = Symbol('Module');
+const ExtractDeps = Symbol('ExtractDeps');
+const Live = Symbol('Live');
 
-type Live<T> = {
-  [k in keyof T]: k extends `create${infer N}` ? T[k] : T[k] extends (deps: infer D) => infer R ? R : never;
-};
+type SystemKeys = typeof Deps | typeof ExtractDeps | typeof Live;
 
 type UnionToIntersection<T> = (T extends any ? (x: T) => any : never) extends (x: infer R) => any ? R : never;
 
-const Module = <D extends unknown, R extends unknown = unknown, N extends string = string>(
-  name: N extends '' ? never : N,
+type ModuleLike<N extends keyof any, A, D, R> = { name: N } & ((deps: A) => R) & { [Deps]?: D };
+
+type WithDeps<R, D> = R & {
+  [Deps]?: D;
+};
+
+type ModuleDeps<D> = {
+  [k in keyof D]: D[k] extends {
+    [Deps]?: infer DD;
+    [Live]?: true;
+  }
+    ? Omit<D[k], SystemKeys> | ((deps: DD) => Omit<D[k], SystemKeys>)
+    : Omit<D[k], SystemKeys>;
+} & UnionToIntersection<
+  {
+    [k in keyof D]: D[k] extends {
+      [Deps]?: infer DD;
+      [ExtractDeps]?: true;
+    }
+      ? ModuleDeps<DD>
+      : never;
+  }[keyof D]
+>;
+
+type ModuleArgs<M> = unknown extends M ? [] : [ModuleDeps<M>];
+
+type LiveDeps<R, D> = WithDeps<R, D> & { [Live]?: true } & { [ExtractDeps]?: true };
+
+export type Live<T> = {
+  [k in keyof Omit<T, SystemKeys>]: T[k] extends ModuleLike<k, any, infer D, infer R> ? LiveDeps<R, D> : never;
+};
+
+export type Create<T> = {
+  [k in keyof Omit<T, SystemKeys> as `create${k extends string ? k : never}`]: T;
+};
+
+export function Module<D extends unknown, R extends unknown = unknown, N extends string = string>(
+  this: unknown,
+  name: N,
   create: (deps: D) => R,
-) => {
-  const fn = (
-    ...args: unknown extends D
-      ? []
-      : [
-          deps: {
-            [k in keyof D]: k extends `create${infer N}`
-              ? D[k]
-              : k extends string
-              ? D extends { [kk in `create${k}`]: infer R }
-                ? R
-                : never
-              : never;
-          } & UnionToIntersection<
-            {
-              [k in keyof D]: k extends `create${infer N}` ? Omit<D[k] extends (deps: infer DD) => infer R ? DD : D[k], 'name'> : never;
-            }[keyof D]
-          >,
-        ]
-  ) => {
+) {
+  const fn = (...args: ModuleArgs<D>) => {
     const deps = args[0] ?? {};
     // @ts-ignore
-    const resDeps = args[4] ?? {};
+    const resDeps = this?.cache ? this : { cache: true };
 
     for (let k in deps) {
-      if (name !== k && !k.startsWith('create') && !(k in resDeps)) {
+      // @ts-ignore
+      if (deps[k]?.tag === ModuleTag && !(k in resDeps)) {
         Object.defineProperty(resDeps, k, {
           get: () => {
             // @ts-ignore
-            const value = deps[k](deps, undefined, undefined, undefined, resDeps);
+            const value = deps[k][ModuleName] === k ? deps[k].call(resDeps, deps) : deps[k];
 
             Object.defineProperty(resDeps, k, {
               value,
@@ -49,74 +72,36 @@ const Module = <D extends unknown, R extends unknown = unknown, N extends string
           enumerable: false,
           configurable: true,
         });
+      } else {
+        // @ts-ignore
+        resDeps[k] = deps[k];
       }
     }
 
     return create(resDeps as D);
   };
 
-  // fix intersection
-  // (fn as any).tag = ModuleTag;
+  // fix never
+  (fn as any)[Create] = create;
+  (fn as any).tag = ModuleTag;
+  (fn as any)[ModuleName] = name;
+
   // @ts-expect-error
   fn[name] = fn;
-  // @ts-expect-error
-  fn[`create${name as N}`] = fn;
 
-  return fn as typeof fn & {
-    [k in `create${N}` | N]: typeof fn;
+  type System = typeof fn & {
+    [Deps]?: D;
+    [Live]?: false;
+    [ExtractDeps]?: false;
   };
-};
 
-//
-const Console = Module('Console', () => {
-  console.log('Create Console');
+  const typedFn = fn as System;
 
-  return {
-    error: (message: string) => console.error(`[Console] ${message}`),
-    log: (message: string) => console.log(`[Console] ${message}`),
+  type Module<T> = typeof typedFn & {
+    [k in N]: typeof typedFn & {
+      name: N;
+    };
   };
-});
-type ConsoleLive = Live<typeof Console>;
 
-// ----
-const ConsoleWithTime = Module('ConsoleWithTime', ({ Console }: ConsoleLive) => {
-  return {
-    error: (message: string) => Console.error(`[${new Date()}] ${message}`),
-    log: (message: string) => Console.log(`[${new Date()}] ${message}`),
-  };
-});
-
-type ConsoleWithTimeLive = Live<typeof ConsoleWithTime>;
-
-// ---
-const SomeApi = Module('SomeApi', ({ ConsoleWithTime }: ConsoleWithTimeLive) => {
-  console.log('Create Some Api');
-
-  return new (class {
-    fetch() {
-      ConsoleWithTime.log('SomeApi fetch');
-      return new Promise<string[]>((res) => res(['data']));
-    }
-  })();
-});
-
-type SomeApiLive = Live<typeof SomeApi>;
-// ----
-const App = Module('App', ({ SomeApi, Console }: SomeApiLive & ConsoleLive) => {
-  Console.log('Create App');
-
-  return class {
-    static run() {
-      Console.log('App run');
-      return SomeApi.fetch();
-    }
-  };
-});
-
-const app = App({
-  ...SomeApi,
-  ...Console,
-  ...ConsoleWithTime,
-});
-
-app.run();
+  return typedFn as Module<unknown extends D ? {} : D>;
+}
