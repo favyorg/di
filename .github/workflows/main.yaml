@@ -12,11 +12,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@master
-      - uses: codecov/codecov-action@v2
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
-          fail_ci_if_error: true # optional (default = false)
-          verbose: true # optional (default = false)
 
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v1
@@ -31,3 +26,8 @@ jobs:
 
       - name: Build
         run: yarn build
+
+      - uses: codecov/codecov-action@v2
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
+          fail_ci_if_error: true # optional (default = false)
