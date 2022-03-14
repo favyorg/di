@@ -1,6 +1,7 @@
 # Favy/di
 
 Type Safe dependency injection
+[![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di)
 
 ## Examples
 
