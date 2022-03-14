@@ -31,7 +31,7 @@ App({ Api: ApiMock });
 ```
 
 ```ts
-const Console = Module('Console', ({ prefix: string }) => ({
+const Console = Module('Console', ({ prefix }: { prefix: string }) => ({
   log(text: string) {
     console.log(`${prefix} ${text}`);
   },
@@ -46,5 +46,5 @@ const App = Module('App', async ({ Api }: ApiLive & ConsoleLive) => {
 });
 
 // Run app
-App({ Api, Console, path: 'Info: ' });
+App({ Api, Console, prefix: 'Info: ' });
 ```
