@@ -1,5 +1,10 @@
 # Favy/di
 
+Type Safe depencency injection
+
+[![Build Status](https://travis-ci.org/favy/di.svg?branch=master)](https://app.travis-ci.com/github/z81/lather)
+[![Coverage Status](https://coveralls.io/repos/github/favy/lather/badge.svg?branch=master)](https://coveralls.io/github/z81/lather?branch=master)
+
 ## Examples
 
 ```ts
