@@ -18,6 +18,6 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Install, build, test
         run: |
-          npm ci
-          npm test
-          npm run build
+          yarn install --frozen-lockfile
+          yarn test
+          yarn build
