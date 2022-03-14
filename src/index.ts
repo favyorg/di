@@ -4,6 +4,7 @@ const ModuleName = Symbol('ModuleName');
 const ModuleTag = Symbol('Module');
 const ExtractDeps = Symbol('ExtractDeps');
 const Live = Symbol('Live');
+const Cache = Symbol('Cache');
 
 type SystemKeys = typeof Deps | typeof ExtractDeps | typeof Live;
 
@@ -53,7 +54,7 @@ export function Module<D extends unknown, R extends unknown = unknown, N extends
   const fn = (...args: ModuleArgs<D>) => {
     const deps = args[0] ?? {};
     // @ts-ignore
-    const resDeps = this?.cache ? this : { cache: true };
+    const resDeps = this?.[Cache] ? this : { [Cache]: true };
 
     for (let k in deps) {
       // @ts-ignore

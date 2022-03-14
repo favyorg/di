@@ -1,6 +1,6 @@
 {
-  "name": "@eavy/di",
-  "version": "0.0.1",
+  "name": "@favy/di",
+  "version": "0.0.5",
   "license": "MIT",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,8 +9,8 @@
   ],
   "exports": {
     ".": {
-      "import": "./dist/lib.es.js",
-      "require": "./dist/lib.umd.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
     }
   },
   "keywords": [
@@ -26,7 +26,8 @@
     "test:code": "jest",
     "test:types": "jest -c jest.config.tsd.js",
     "test": "npm run test:types && npm run test:code",
-    "examples": "cd examples && npx vite build && node ./dist/di.es.js"
+    "examples": "cd examples && npx vite build && node ./dist/di.es.js",
+    "prepublishOnly": "npm run test && npm run build"
   },
   "devDependencies": {
     "@types/jest": "^27.4.1",
