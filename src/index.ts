@@ -106,3 +106,21 @@ export function Module<D extends unknown, R extends unknown = unknown, N extends
 
   return typedFn as Module<unknown extends D ? {} : D>;
 }
+
+export function Service<D extends unknown, R extends unknown = unknown, N extends string = string>(
+  this: unknown,
+  name: N,
+  create: (deps: D) => R,
+) {
+  let result: R;
+  let isCalled = false;
+
+  return Module(name, (deps: D) => {
+    if (!isCalled) {
+      result = create(deps);
+      isCalled = true;
+    }
+
+    return result;
+  });
+}

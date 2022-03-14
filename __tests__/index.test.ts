@@ -1,4 +1,4 @@
-import { Live, Module } from '../src/index';
+import { Live, Module, Service } from '../src/index';
 
 test('return val', () => {
   expect(Module('N', () => 1)()).toBe(1);
@@ -33,4 +33,49 @@ test('sub module deps', () => {
 
   const N = Module('N', ({ Ma, b }: MaLive & { b: number }) => Ma + b);
   expect(N({ a: 2, b: 2, Ma })).toBe(4);
+});
+
+test('module call', () => {
+  let i = 0;
+  const Ma = Module('Ma', () => i++);
+  Ma();
+  Ma();
+
+  expect(Ma()).toBe(2);
+});
+
+test('module call', () => {
+  let i = 0;
+  const Ma = Module('Ma', () => i++);
+  type MaLive = Live<typeof Ma>;
+
+  const Ha = Module('Ha', ({ Ma }: MaLive) => Ma);
+  Ha({ Ma });
+  Ha({ Ma });
+
+  expect(Ha({ Ma })).toBe(2);
+});
+
+test('module call', () => {
+  let i = 0;
+  const Ma = Module('Ma', () => i++);
+  type MaLive = Live<typeof Ma>;
+
+  const Ha = Module('Ha', ({ Ma }: MaLive) => Ma);
+  Ha({ Ma });
+  Ma();
+
+  expect(Ha({ Ma })).toBe(2);
+});
+
+test('service call', () => {
+  let i = 0;
+  const Ma = Service('Ma', () => i++);
+  type MaLive = Live<typeof Ma>;
+
+  const Ha = Service('Ha', ({ Ma }: MaLive) => Ma);
+  Ha({ Ma });
+  Ma();
+
+  expect(Ha({ Ma })).toBe(0);
 });
