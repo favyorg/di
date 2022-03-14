@@ -1,6 +1,6 @@
 {
   "name": "@favy/di",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "license": "MIT",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
