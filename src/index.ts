@@ -36,7 +36,7 @@ type ModuleDeps<D> = {
 
 type ModuleArgs<M> = unknown extends M ? [] : [ModuleDeps<M>];
 
-type LiveDeps<R, D> = WithDeps<R, D> & { [Live]?: true } & { [ExtractDeps]?: true };
+export type LiveDeps<R, D> = WithDeps<R, D> & { [Live]?: true } & { [ExtractDeps]?: true };
 
 export type Live<T> = {
   [k in keyof Omit<T, SystemKeys>]: T[k] extends ModuleLike<k, any, infer D, infer R> ? LiveDeps<R, D> : never;
@@ -51,14 +51,18 @@ export function Module<D extends unknown, R extends unknown = unknown, N extends
   name: N,
   create: (deps: D) => R,
 ) {
-  const fn = (...args: ModuleArgs<D>) => {
+  function fn(...args: ModuleArgs<D>) {
     const deps = args[0] ?? {};
     // @ts-ignore
     const resDeps = this?.[Cache] ? this : { [Cache]: true };
 
     for (let k in deps) {
+      if (k in resDeps) {
+        continue;
+      }
+
       // @ts-ignore
-      if (deps[k]?.tag === ModuleTag && !(k in resDeps)) {
+      if (deps[k]?.tag === ModuleTag) {
         Object.defineProperty(resDeps, k, {
           get: () => {
             // @ts-ignore
@@ -80,7 +84,7 @@ export function Module<D extends unknown, R extends unknown = unknown, N extends
     }
 
     return create(resDeps as D);
-  };
+  }
 
   // fix never
   (fn as any)[Create] = create;
@@ -106,6 +110,18 @@ export function Module<D extends unknown, R extends unknown = unknown, N extends
 
   return typedFn as Module<unknown extends D ? {} : D>;
 }
+
+export type ModuleFn<D, R> = (deps: D) => R;
+
+export type Module<NAME extends string, DEPS, RETURN> = ModuleFn<DEPS, RETURN> & {
+  [k in NAME]: ModuleFn<DEPS, RETURN> & {
+    name: NAME;
+  };
+} & {
+  [Deps]?: DEPS;
+  [Live]?: false;
+  [ExtractDeps]?: false;
+};
 
 export function Service<D extends unknown, R extends unknown = unknown, N extends string = string>(
   this: unknown,
