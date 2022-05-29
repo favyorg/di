@@ -6,14 +6,12 @@ import { Ping, PingLive } from './Ping';
 import { StdIn } from './StdIn';
 
 const App = Module('App', async ({ Menu, Ping, Hi }: MenuLive & PingLive & HiLive) => {
-  const commands = [Ping, Hi];
+  const Exit = () => process.exit(0);
+
+  const commands = [Ping, Hi, Exit];
 
   while (true) {
     const answer = await Menu.select(['Ping', 'Hi', 'Exit']);
-    if (answer === 2) {
-      process.exit(0);
-    }
-
     await commands[answer]();
   }
 });

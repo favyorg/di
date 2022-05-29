@@ -1,4 +1,4 @@
-import { Live, LiveDeps, Module, Service } from '../src/index';
+import { Live, Module, Service } from '../src/index';
 
 test('return val', () => {
   expect(Module('N', () => 1)()).toBe(1);
@@ -80,54 +80,40 @@ test('service call', () => {
   expect(Ha({ Ma })).toBe(0);
 });
 
-test('deps', () => {
-  const Fetch = Module('Fetch', ({ baseUrl }: { baseUrl: string }) => {
-    return () => {};
+test('deep deps', () => {
+  const X = Module('X', ({ a }: { a: 2 }) => {
+    return {
+      svcsd: 13,
+    };
+  });
+  type XLive = Live<typeof X>;
+
+  const Fetch = Module('Fetch', ({}: XLive) => {
+    return {
+      ascasc: 324,
+    };
   });
   type FetchLive = Live<typeof Fetch>;
 
   const Store = Module('Store', ({ Fetch }: FetchLive) => {
-    return () => {
-      Fetch();
+    return {
+      abc: 1,
     };
   });
   type StoreLive = Live<typeof Store>;
 
-  const Main = Module('Main', ({ Store }: StoreLive) => {
-    return () => {
-      Store();
-    };
+  const Store2 = Module('Store', ({ Fetch }: FetchLive) => {
+    return { abc: 1 };
   });
 
+  const Main = Module('Main', ({}: StoreLive) => {});
+
+  Fetch({ X, a: 2 });
+  Store({ Fetch, X, a: 2 });
   Main({
     Fetch,
-    Store,
-    baseUrl: '!',
+    Store: Store2,
+    X,
+    a: 2,
   });
 });
-
-// test('cycle deps', () => {
-//   const Ma = Module('Ma', ({ Ha }: Live<Module<'Ha', { inc(): number }, { i: number; inc(): number }>>) => ({
-//     //{ Ha: { i: number } }) => ({
-
-//     inc() {
-//       return Ha.i + 1;
-//     },
-//   }));
-//   type MaLive = Live<typeof Ma>;
-
-//   const Ha = Module('Ha', (deps: MaLive) => ({
-//     i: 0,
-//     inc() {
-//       return deps.Ma.inc();
-//     },
-//   }));
-
-//   type HaLive = Live<typeof Ha>;
-
-//   const App = Module('App', (deps: HaLive) => {
-//     return deps.Ha.inc();
-//   });
-
-//   expect(App({ Ha, Ma })).toBe(0);
-// });

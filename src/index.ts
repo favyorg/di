@@ -10,36 +10,41 @@ type SystemKeys = typeof Deps | typeof ExtractDeps | typeof Live;
 
 type UnionToIntersection<T> = (T extends any ? (x: T) => any : never) extends (x: infer R) => any ? R : never;
 
-type ModuleLike<N extends keyof any, A, D, R> = { name: N } & ((deps: A) => R) & { [Deps]?: D };
+type OmitWithFn<T> = T extends ((...args: infer A) => infer R) & infer O ? ((...deps: A) => R) & Omit<O, SystemKeys> : Omit<T, SystemKeys>;
 
-type WithDeps<R, D> = R & {
-  [Deps]?: D;
-};
-
-type ModuleDeps<D> = {
+type LocalDeps<D, ROOT extends boolean = true> = {
   [k in keyof D]: D[k] extends {
     [Deps]?: infer DD;
     [Live]?: true;
   }
-    ? Omit<D[k], SystemKeys> | ((deps: DD) => Omit<D[k], SystemKeys>)
-    : Omit<D[k], SystemKeys>;
-} & UnionToIntersection<
-  {
-    [k in keyof D]: D[k] extends {
-      [Deps]?: infer DD;
-      [ExtractDeps]?: true;
-    }
-      ? ModuleDeps<DD>
-      : never;
-  }[keyof D]
->;
+    ? OmitWithFn<D[k]> | ((deps: ROOT extends true ? ModuleDeps<DD, true> : DD) => OmitWithFn<D[k]>)
+    : OmitWithFn<D[k]>;
+};
+
+export type ModuleDeps<D, ROOT extends boolean = true> = LocalDeps<D, ROOT> &
+  UnionToIntersection<
+    {
+      [k in keyof D]: D[k] extends {
+        [Deps]?: infer DD;
+        [ExtractDeps]?: true;
+      }
+        ? ModuleDeps<DD, true>
+        : never;
+    }[keyof D]
+  >;
 
 type ModuleArgs<M> = unknown extends M ? [] : [ModuleDeps<M>];
 
-export type LiveDeps<R, D> = WithDeps<R, D> & { [Live]?: true } & { [ExtractDeps]?: true };
+type ModuleLike<N extends keyof any, A, D, R> = { name: N } & ((deps: A) => R) & { [Deps]?: D };
+
+type WithDeps<D, R> = (unknown extends R ? {} : R) & {
+  [Deps]?: D;
+};
+
+export type LiveDeps<D, R> = WithDeps<D, R> & { [Live]?: true } & { [ExtractDeps]?: true };
 
 export type Live<T> = {
-  [k in keyof Omit<T, SystemKeys>]: T[k] extends ModuleLike<k, any, infer D, infer R> ? LiveDeps<R, D> : never;
+  [k in keyof Omit<T, SystemKeys>]: T[k] extends ModuleLike<k, any, infer D, infer R> ? LiveDeps<D, R> : never;
 };
 
 export type Create<T> = {
@@ -108,7 +113,7 @@ export function Module<D extends unknown, R extends unknown = unknown, N extends
     };
   };
 
-  return typedFn as Module<unknown extends D ? {} : D>;
+  return typedFn as Module<D>;
 }
 
 export type ModuleFn<D, R> = (deps: D) => R;
