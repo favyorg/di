@@ -150,3 +150,24 @@ expectError(
     path: '23',
   }),
 );
+
+// Partial deps
+const A = Module('A', ({ path }: { path: string }) => {
+  return path;
+});
+type ALive = Live<typeof A>;
+
+const B = Module('B', ({A}: ALive) => {
+  return A;
+});
+type BLive = Live<typeof B>;
+
+const C = Module('C', ({B}: BLive) => {
+  return B;
+});
+
+expectType(A({path: ''}))
+expectError(A());
+expectError(A({}));
+expectType(B({ A, path: ''}))
+expectType(C({ B, A, path: 'test'}));

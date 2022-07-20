@@ -116,4 +116,55 @@ test('deep deps', () => {
     X,
     a: 2,
   });
+
+});
+
+
+test('provide some deps', () => {
+  const A = Module('A', ({ path }: { path: string }) => {
+    return path;
+  });
+  type ALive = Live<typeof A>;
+
+  const B = Module('B', ({A}: ALive) => {
+    return A;
+  });
+  type BLive = Live<typeof B>;
+
+  const C = Module('C', ({B}: BLive) => {
+    return B;
+  });
+
+
+  const part = C.provide({ A });
+  const part2 = part.provide({ B });
+
+  expect(C({ path: 'test', B, A })).toBe('test');
+  expect(part({ path: 'test', B })).toBe('test');
+  expect(part2({ path: 'test' })).toBe('test');
+});
+
+
+test('duplicate deps', () => {
+  let i = 0;
+  const A = Module('A', ({ path }: { path: string }) => {
+    return `${path}${i++}`;
+  });
+  type ALive = Live<typeof A>;
+
+  const B1 = Module('B1', ({A}: ALive) => {
+    return A;
+  });
+  type B1Live = Live<typeof B1>;
+
+  const B2 = Module('B2', ({A}: ALive) => {
+    return A;
+  });
+  type B2Live = Live<typeof B2>;
+
+  const C = Module('C', ({B2, B1, A}: B1Live & B2Live & ALive) => {
+    return B2 + B1 + A;
+  });
+
+  expect(C({ path: 'test', B1, B2, A })).toBe('test0test0test0');
 });

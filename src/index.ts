@@ -6,58 +6,58 @@ const ExtractDeps = Symbol('ExtractDeps');
 const Live = Symbol('Live');
 const Cache = Symbol('Cache');
 
-type SystemKeys = typeof Deps | typeof ExtractDeps | typeof Live;
+type SystemKeys = typeof Deps | typeof ExtractDeps | typeof Live | "provide";
 
 type UnionToIntersection<T> = (T extends any ? (x: T) => any : never) extends (x: infer R) => any ? R : never;
 
 type OmitWithFn<T> = T extends ((...args: infer A) => infer R) & infer O ? ((...deps: A) => R) & Omit<O, SystemKeys> : Omit<T, SystemKeys>;
 
-type LocalDeps<D, ROOT extends boolean = true> = {
-  [k in keyof D]: D[k] extends {
-    [Deps]?: infer DD;
+type LocalDeps<LOCAL_DEPS, ROOT extends boolean = true> = {
+  [NAME in keyof LOCAL_DEPS]: LOCAL_DEPS[NAME] extends {
+    [Deps]?: infer DEEP_DEPS;
     [Live]?: true;
   }
-    ? OmitWithFn<D[k]> | ((deps: ROOT extends true ? ModuleDeps<DD, true> : DD) => OmitWithFn<D[k]>)
-    : OmitWithFn<D[k]>;
+    ? OmitWithFn<LOCAL_DEPS[NAME]> | ((deps: ROOT extends true ? ModuleDeps<DEEP_DEPS, true> : DEEP_DEPS) => OmitWithFn<LOCAL_DEPS[NAME]>)
+    : OmitWithFn<LOCAL_DEPS[NAME]>;
 };
 
-export type ModuleDeps<D, ROOT extends boolean = true> = LocalDeps<D, ROOT> &
+export type ModuleDeps<DEPS, ROOT extends boolean = true> = LocalDeps<DEPS, ROOT> &
   UnionToIntersection<
     {
-      [k in keyof D]: D[k] extends {
-        [Deps]?: infer DD;
+      [NAME in keyof DEPS]: DEPS[NAME] extends {
+        [Deps]?: infer DEEP_DEPS;
         [ExtractDeps]?: true;
       }
-        ? ModuleDeps<DD, true>
+        ? ModuleDeps<DEEP_DEPS, true>
         : never;
-    }[keyof D]
+    }[keyof DEPS]
   >;
 
-type ModuleArgs<M> = unknown extends M ? [] : [ModuleDeps<M>];
+type ModuleArgs<MODULE> = unknown extends MODULE ? [] : [ModuleDeps<MODULE>];
 
-type ModuleLike<N extends keyof any, A, D, R> = { name: N } & ((deps: A) => R) & { [Deps]?: D };
+type ModuleLike<NAME extends keyof any, LOCAL_DEPS, DEEP_DEPS, RETURN> = { name: NAME } & ((deps: LOCAL_DEPS) => RETURN) & { [Deps]?: DEEP_DEPS };
 
-type WithDeps<D, R> = (unknown extends R ? {} : R) & {
-  [Deps]?: D;
+type WithDeps<DEPS, RETURN> = (unknown extends RETURN ? {} : RETURN) & {
+  [Deps]?: DEPS;
 };
 
-export type LiveDeps<D, R> = WithDeps<D, R> & { [Live]?: true } & { [ExtractDeps]?: true };
+export type LiveDeps<DEPS, RETURN> = WithDeps<DEPS, RETURN> & { [Live]?: true } & { [ExtractDeps]?: true };
 
-export type Live<T> = {
-  [k in keyof Omit<T, SystemKeys>]: T[k] extends ModuleLike<k, any, infer D, infer R> ? LiveDeps<D, R> : never;
+export type Live<MODULE> = {
+  [NAME in keyof Omit<MODULE, SystemKeys>]: MODULE[NAME] extends ModuleLike<NAME, any, infer DEPS, infer RETURN> ? LiveDeps<DEPS, RETURN> : never;
 };
 
 export type Create<T> = {
   [k in keyof Omit<T, SystemKeys> as `create${k extends string ? k : never}`]: T;
 };
 
-export function Module<D extends unknown, R extends unknown = unknown, N extends string = string>(
+export function Module<DEPS extends unknown, RETURN extends unknown = unknown, NAME extends string = string>(
   this: unknown,
-  name: N,
-  create: (deps: D) => R,
+  name: NAME,
+  create: (deps: DEPS) => RETURN,
 ) {
-  function fn(...args: ModuleArgs<D>) {
-    const deps = args[0] ?? {};
+  function fn(...args: ModuleArgs<DEPS>) {
+    const deps = Object.assign({}, ...args)
     // @ts-ignore
     const resDeps = this?.[Cache] ? this : { [Cache]: true };
 
@@ -71,7 +71,7 @@ export function Module<D extends unknown, R extends unknown = unknown, N extends
         Object.defineProperty(resDeps, k, {
           get: () => {
             // @ts-ignore
-            const value = deps[k][ModuleName] === k ? deps[k].call(resDeps, deps) : deps[k];
+            const value = deps[k].call(resDeps, deps)
 
             Object.defineProperty(resDeps, k, {
               value,
@@ -88,32 +88,46 @@ export function Module<D extends unknown, R extends unknown = unknown, N extends
       }
     }
 
-    return create(resDeps as D);
+    return create(resDeps as DEPS);
   }
 
-  // fix never
-  (fn as any)[Create] = create;
-  (fn as any).tag = ModuleTag;
-  (fn as any)[ModuleName] = name;
+  const pathFn = (fn: Function) => {
+    // fix never
+    (fn as any)[Create] = create;
+    (fn as any).tag = ModuleTag;
+    (fn as any)[ModuleName] = name;
 
-  // @ts-expect-error
-  fn[name] = fn;
+    // @ts-expect-error
+    fn[name] = fn;
+
+    // @ts-ignore
+    fn.provide = (deps: DEPS) => pathFn(fn.bind(fn, deps))
+
+    return fn
+  }
+
+  pathFn(fn);
 
   type System = typeof fn & {
-    [Deps]?: D;
+    [Deps]?: DEPS;
     [Live]?: false;
     [ExtractDeps]?: false;
   };
 
-  const typedFn = fn as System;
-
-  type Module<T> = typeof typedFn & {
-    [k in N]: typeof typedFn & {
-      name: N;
-    };
+  type Module<M_DEPS, F> = F & {
+    [k in NAME]: F & {
+      name: NAME;
+    }
+  } & {
+    provide<
+      ARGS extends ModuleArgs<M_DEPS>,
+      DEPS extends ARGS[0],
+      SOME_DEPS extends Partial<DEPS>,
+      NEXT_DEPS extends Omit<DEPS, keyof SOME_DEPS>
+    >(someDeps: SOME_DEPS): Module<NEXT_DEPS, (deps: NEXT_DEPS) => RETURN>
   };
 
-  return typedFn as Module<D>;
+  return fn as Module<DEPS, System>;
 }
 
 export type ModuleFn<D, R> = (deps: D) => R;
