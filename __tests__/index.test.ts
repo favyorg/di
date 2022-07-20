@@ -168,3 +168,18 @@ test('duplicate deps', () => {
 
   expect(C({ path: 'test', B1, B2, A })).toBe('test0test0test0');
 });
+
+
+test('service reset', () => {
+  let i = 0;
+
+  const A = Service('A', ({ path }: { path: string }) => {
+    return `${path}${i++}`;
+  });
+
+  expect(A({ path: 'test' })).toBe('test0');
+  expect(A({ path: 'test' })).toBe('test0');
+  A.reset();
+  expect(A({ path: 'test' })).toBe('test1');
+  expect(A({ path: 'test' })).toBe('test1');
+});

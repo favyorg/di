@@ -6,7 +6,7 @@ const ExtractDeps = Symbol('ExtractDeps');
 const Live = Symbol('Live');
 const Cache = Symbol('Cache');
 
-type SystemKeys = typeof Deps | typeof ExtractDeps | typeof Live | "provide";
+type SystemKeys = typeof Deps | typeof ExtractDeps | typeof Live | "provide" | "reset";
 
 type UnionToIntersection<T> = (T extends any ? (x: T) => any : never) extends (x: infer R) => any ? R : never;
 
@@ -150,7 +150,7 @@ export function Service<D extends unknown, R extends unknown = unknown, N extend
   let result: R;
   let isCalled = false;
 
-  return Module(name, (deps: D) => {
+  const module = Module(name, (deps: D) => {
     if (!isCalled) {
       result = create(deps);
       isCalled = true;
@@ -158,4 +158,19 @@ export function Service<D extends unknown, R extends unknown = unknown, N extend
 
     return result;
   });
+
+  // @ts-ignore
+  module.reset = () => {
+    isCalled = false;
+    return module
+  }
+
+  type Ret = typeof module & {
+    /**
+     * Reset calling state
+     */
+    reset(): Ret;
+  }
+
+  return module as Ret
 }
