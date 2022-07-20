@@ -26,7 +26,7 @@
     "test:code": "jest --collect-coverage",
     "test:types": "jest -c jest.config.tsd.js --collect-coverage",
     "test": "npm run test:types && npm run test:code",
-    "examples": "cd examples && npx vite build && node ./dist/di.es.js",
+    "examples:app": "cd examples/app && npx vite build && node ./dist/di.es.js",
     "prepublishOnly": "npm run test && npm run build"
   },
   "devDependencies": {
