@@ -29,16 +29,3 @@ MyService({ Logger })
 //[myService 2022-07-21T08:09:13.079Z] starting...
 MyService({ Logger: JSONLogger })
 //{"prefix":"myService","dateTime":1658390972822,"message":"starting..."}
-
-
-
-
-{
-  const Api = Module('Api', ({ baseUrl }: { baseUrl: string }) => ({
-    request(path: string) {
-      return fetch(`${baseUrl}${path}`).then((_) => _.json());
-    },
-  }));
-
-  Api({ abc: 123 }).request("/me")
-}

@@ -1,9 +1,49 @@
-# Favy/di
+# Favy/di [![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di)
 
-Простой и мощный подход для внедрения зависимостей.
-[![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di)
+Простой, мощный, типизированный и быстрый способ внедрения зависимостей.
+- **Легкий.** 480 байт (после минификации и gzip). Без зависимостей.
+- **Простой.** Так же простой как вызов функции, больше никаких IoC контейнеров.
+- **Быстрый.** В разы быстрее tsyringe и inversify.
+- **Безопасный.** При запуске требуются зависимости всех модулей и подмодулей.
+- **Интегрируемый.** Это просто функция! Можно использовать только там где необходимо.
+- **Работает везде.** Framework agnostic, Nodejs/Browser/ReactNative
+```ts
+import {Module} from "@favy/di";
+const Hello = Module("Hello", ({name}: {name: string}) => `Hi ${name}!`);
+Hello({name: "Alex"}); // Hi Alex!
+```
+Пример с несколькими модулями
+```ts
+import {Module, Live} from "@favy/di";
 
-## Examples
+const Hello = Module("Hello", ({ name }: { name: string }) => `Hi ${name}!`);
+type HelloLive = Live<typeof Hello>;
+
+const Logger = Module("Logger", () => ({
+  log(message: string) {
+    console.log(message)
+  }
+}));
+type LoggerLive = Live<typeof Logger>;
+
+const App = Module("App", ({ Hello, Logger }: HelloLive & LoggerLive) => {
+  Logger.log(Hello)
+});
+
+App({ name: "Alex" });
+// ^___Error: Argument of type '{ name: string; }' is not assignable to parameter oftype 'ModuleDeps<HelloLive & LoggerLive, true>'.
+// Нужно указать зависимости которые требуют все модули
+App({ Logger, Hello, name: "Alex" }); // Hi Alex!
+
+```
+## Установка
+```
+npm install --save @favy/di
+yarn add @favy/di
+```
+## Api
+
+## Примеры
 
 Легкое описание модулей.
 ```ts
@@ -15,38 +55,44 @@ const Api = Module('Api', ({baseUrl}: {baseUrl: string}) => ({
 //   Так же легко запустить как просто вызов функции
 Api({baseUrl: 'http://localhost/'}).request("/me")
 
-// Для запуска нужно предоставить все зависимости нужного типа всех модулей
+// Для запуска нужно предоставить все зависимости нужного типа для всех модулей
 Api({ abc: 123 }).request("/me")
-// Error: Argument of type '{ abc: number; }' is not assignable to parameter of type 'LocalDeps<{ baseUrl: string; }, true>'.
+//  ^____Error: Argument of type '{ abc: number; }' is not assignable to parameter of type 'LocalDeps<{ baseUrl: string; }, true>'.
 
 ```
-Легкая подмена зависимости на любом уровне.
+Легкая подмена зависимостей.
 ```ts
-const Api = Module('Api', () => ({
-  request(path: string) {
-    return fetch(path).then((_) => _.toJSON());
-  },
+const Logger = Module('Logger', ({ prefix }: { prefix: string }) => ({
+  log(message: string) {
+    console.log(`[${prefix} ${new Date().toISOString()}] ${message}`);
+  }
 }));
-type ApiLive = Live<typeof Api>;
+type LoggerLive = Live<typeof Logger>;
 
-const App = Module('App', async ({ Api }: ApiLive) => {
-  const res = await Api.request('/me');
+const App = Module('App', ({ Logger }: LoggerLive) => {
+  Logger.log("starting...");
   // ...
 });
 
-App({ Api, baseUrl: 'http://localhost/' }); // Run app
+App({ Logger, prefix: 'myService' })
+// [myService 2022-07-21T08:04:10.658Z] starting...
 
-// Сan override for tests
-const ApiMock = Module('ApiMock', () => ({
-  request(path: string) {
-    return new Promise<string>((res) => res(path));
-  },
+const JSONLogger = Module('JSONLogger', ({ prefix }: { prefix: string }) => ({
+  log(message: string) {
+    console.log(JSON.stringify({ prefix, dateTime: Date.now(), message }));
+  }
 }));
-type ApiMockLive = Live<typeof ApiMock>;
 
-App({ Api: ApiMock, baseUrl: 'http://localhost/' });
+App({ Logger: JSONLogger, prefix: 'myService' })
+// {"prefix":"myService","dateTime":1658390747811,"message":"starting..."}
+
+const MyService = App.provide({ prefix: 'myService' });
+MyService({ Logger })
+//[myService 2022-07-21T08:09:13.079Z] starting...
+MyService({ Logger: JSONLogger })
+//{"prefix":"myService","dateTime":1658390972822,"message":"starting..."}
 ```
-Зависимости могут быть любого типа.
+Зависимости могут быть любого типа, модуль может возвращать что угодно.
 
 ```ts
 const Console = Module('Console', ({ prefix }: { prefix: string }) => ({
@@ -56,6 +102,7 @@ const Console = Module('Console', ({ prefix }: { prefix: string }) => ({
 }));
 type ConsoleLive = Live<typeof Console>;
 
+//                                     Легко комбинирование модулей
 const App = Module('App', async ({ Api }: ApiLive & ConsoleLive) => {
   Console.log('Fetching me');
   const res = await Api.request('/me');
@@ -65,3 +112,21 @@ const App = Module('App', async ({ Api }: ApiLive & ConsoleLive) => {
 // Run app
 App({ Api, Console, prefix: 'Info: ',baseUrl: 'http://localhost/' });
 ```
+### Сервисы
+Сервис вызывается только один раз независимо от того где вызван.
+Для сброса состояние вызова можно использовать метод .reset()
+```ts
+  let i = 0;
+
+  const A = Service('A', ({ path }: { path: string }) => {
+    return `${path}${i++}`;
+  });
+
+  console.log(A({ path: 'test' }));// test0
+  console.log(A({ path: 'test' }));// test0
+  A.reset();
+  console.log(A({ path: 'test' }));// test1
+  console.log(A({ path: 'test' }));// test1
+```
+
+Большем примеров в папках [./examples/](https://github.com/favyorg/di/tree/master/examples) и [./__tests__/](https://github.com/favyorg/di/tree/master/__tests__)
