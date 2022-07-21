@@ -7,7 +7,7 @@ Easy, Powerful, type safe and fast way for dependency injection.
 - **Easy.** As easy as calling the function, no more IoC containers.
 - **Fast.** Many times faster than tsyringe and inversify.
 - **Safe.** Dependencies of all modules and submodules are required at startup.
-- **Integrated.** It's just a function! Can only be used where needed.
+- **Integrated.** It's just a function! Can be used only where needed.
 - **Works everywhere.** Framework agnostic, Nodejs/Browser/ReactNative
 ```ts
 import {Module} from "@favy/di";
