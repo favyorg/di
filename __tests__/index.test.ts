@@ -1,4 +1,4 @@
-import { Live, Module, Service } from '../src/index';
+import { Create, Live, Module, ModuleDeps, Service } from '../src/index';
 
 test('return val', () => {
   expect(Module('N', () => 1)()).toBe(1);
@@ -24,7 +24,7 @@ test('sub module deps spread', () => {
   type MaLive = Live<typeof Ma>;
 
   const N = Module('N', ({ Ma, b }: MaLive & { b: number }) => Ma + b);
-  expect(N({ a: 2, b: 2, ...Ma })).toBe(4);
+  expect(N({ a: 2, b: 2, Ma })).toBe(4);
 });
 
 test('sub module deps', () => {
@@ -88,7 +88,7 @@ test('deep deps', () => {
   });
   type XLive = Live<typeof X>;
 
-  const Fetch = Module('Fetch', ({}: XLive) => {
+  const Fetch = Module('Fetch', ({ }: XLive) => {
     return {
       ascasc: 324,
     };
@@ -106,7 +106,7 @@ test('deep deps', () => {
     return { abc: 1 };
   });
 
-  const Main = Module('Main', ({}: StoreLive) => {});
+  const Main = Module('Main', ({ }: StoreLive) => { });
 
   Fetch({ X, a: 2 });
   Store({ Fetch, X, a: 2 });
@@ -126,12 +126,12 @@ test('provide some deps', () => {
   });
   type ALive = Live<typeof A>;
 
-  const B = Module('B', ({A}: ALive) => {
+  const B = Module('B', ({ A }: ALive) => {
     return A;
   });
   type BLive = Live<typeof B>;
 
-  const C = Module('C', ({B}: BLive) => {
+  const C = Module('C', ({ B }: BLive) => {
     return B;
   });
 
@@ -152,17 +152,17 @@ test('duplicate deps', () => {
   });
   type ALive = Live<typeof A>;
 
-  const B1 = Module('B1', ({A}: ALive) => {
+  const B1 = Module('B1', ({ A }: ALive) => {
     return A;
   });
   type B1Live = Live<typeof B1>;
 
-  const B2 = Module('B2', ({A}: ALive) => {
+  const B2 = Module('B2', ({ A }: ALive) => {
     return A;
   });
   type B2Live = Live<typeof B2>;
 
-  const C = Module('C', ({B2, B1, A}: B1Live & B2Live & ALive) => {
+  const C = Module('C', ({ B2, B1, A }: B1Live & B2Live & ALive) => {
     return B2 + B1 + A;
   });
 
@@ -182,4 +182,21 @@ test('service reset', () => {
   A.reset();
   expect(A({ path: 'test' })).toBe('test1');
   expect(A({ path: 'test' })).toBe('test1');
+});
+
+test('create deps', () => {
+  const X = Service('X', ({ path }: { path: string }) => {
+    return `${path}`;
+  });
+  type XLive = Live<typeof X>;
+
+  const A = Service('A', ({ path, X }: { path: string } & XLive) => {
+    return `${path}+${X}`;
+  });
+
+  const B = Service('B', ({ X, createA }: Create<typeof A> & XLive) => {
+    return createA({ path: '123', X })
+  });
+
+  expect(B({ createA: A, X, path: '456' })).toBe('123+456');
 });

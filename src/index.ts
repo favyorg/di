@@ -17,8 +17,8 @@ type LocalDeps<LOCAL_DEPS, ROOT extends boolean = true> = {
     [Deps]?: infer DEEP_DEPS;
     [Live]?: true;
   }
-    ? OmitWithFn<LOCAL_DEPS[NAME]> | ((deps: ROOT extends true ? ModuleDeps<DEEP_DEPS, true> : DEEP_DEPS) => OmitWithFn<LOCAL_DEPS[NAME]>)
-    : OmitWithFn<LOCAL_DEPS[NAME]>;
+  ? OmitWithFn<LOCAL_DEPS[NAME]> | ((deps: ROOT extends true ? ModuleDeps<DEEP_DEPS, true> : DEEP_DEPS) => OmitWithFn<LOCAL_DEPS[NAME]>)
+  : OmitWithFn<LOCAL_DEPS[NAME]>;
 };
 
 export type ModuleDeps<DEPS, ROOT extends boolean = true> = LocalDeps<DEPS, ROOT> &
@@ -28,8 +28,8 @@ export type ModuleDeps<DEPS, ROOT extends boolean = true> = LocalDeps<DEPS, ROOT
         [Deps]?: infer DEEP_DEPS;
         [ExtractDeps]?: true;
       }
-        ? ModuleDeps<DEEP_DEPS, true>
-        : never;
+      ? ModuleDeps<DEEP_DEPS, true>
+      : never;
     }[keyof DEPS]
   >;
 
@@ -71,7 +71,7 @@ export function Module<DEPS extends unknown, RETURN extends unknown = unknown, N
         Object.defineProperty(resDeps, k, {
           get: () => {
             // @ts-ignore
-            const value = deps[k].call(resDeps, deps)
+            const value = deps[k][ModuleName] === k ? deps[k].call(resDeps, deps) : deps[k];
 
             Object.defineProperty(resDeps, k, {
               value,
@@ -165,12 +165,12 @@ export function Service<D extends unknown, R extends unknown = unknown, N extend
     return module
   }
 
-  type Ret = typeof module & {
+  type Service<D> = typeof module & {
     /**
      * Reset calling state
      */
-    reset(): Ret;
+    reset(): Service<D>;
   }
 
-  return module as Ret
+  return module as Service<D>
 }
