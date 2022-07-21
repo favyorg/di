@@ -57,7 +57,7 @@ const Api = Module('Api', ({baseUrl}: {baseUrl: string}) => ({
 //   Так же легко запустить как просто вызов функции
 Api({baseUrl: 'http://localhost/'}).request("/me")
 
-// Для запуска нужно предоставить все зависимости нужного типа для всех модулей
+// Для запуска нужно предоставить все зависимости нужного типа для всех модулей и подмодулей
 Api({ abc: 123 }).request("/me")
 //  ^____Error: Argument of type '{ abc: number; }' is not assignable to parameter of type 'LocalDeps<{ baseUrl: string; }, true>'.
 
