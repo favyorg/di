@@ -1,4 +1,4 @@
-# Favy/di [![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di)
+# Favy/di [![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di) [![npm version](https://badge.fury.io/js/@favy%2Fdi.svg)](https://badge.fury.io/js/@favy%2Fdi) ![npm bundle size](https://img.shields.io/bundlephobia/minzip/@favy/di) ![GitHub](https://img.shields.io/github/license/favyorg/di?style=flat)
 
 <img align="right" width="96" height="96" title="Favy logo"
      src="https://avatars.githubusercontent.com/u/101423384?s=400&u=5cf1213e9c56e3d9f2fcc6d131b80e00daf1c2bc&v=4">
