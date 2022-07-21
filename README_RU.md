@@ -1,8 +1,7 @@
-<img align="left" style="margin-right: 10px; border-radius: 20%;" width="32" height="32" title="Favy logo"
-     src="https://avatars.githubusercontent.com/u/101423384?s=400&u=5cf1213e9c56e3d9f2fcc6d131b80e00daf1c2bc&v=4">
 # Favy/di [![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di)
 
-
+<img align="right" width="128" height="128" title="Favy logo"
+     src="https://avatars.githubusercontent.com/u/101423384?s=400&u=5cf1213e9c56e3d9f2fcc6d131b80e00daf1c2bc&v=4">
 Простой, мощный, типизированный и быстрый способ внедрения зависимостей.
 - **Легкий.** 480 байт (после минификации и gzip). Без зависимостей.
 - **Простой.** Так же простой как вызов функции, больше никаких IoC контейнеров.
