@@ -1,6 +1,6 @@
 # Favy/di [![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di)
 
-<img align="right" width="128" height="128" title="Favy logo"
+<img align="right" width="96" height="96" title="Favy logo"
      src="https://avatars.githubusercontent.com/u/101423384?s=400&u=5cf1213e9c56e3d9f2fcc6d131b80e00daf1c2bc&v=4">
 Простой, мощный, типизированный и быстрый способ внедрения зависимостей.
 - **Легкий.** 480 байт (после минификации и gzip). Без зависимостей.
@@ -94,7 +94,7 @@ MyService({ Logger })
 MyService({ Logger: JSONLogger })
 //{"prefix":"myService","dateTime":1658390972822,"message":"starting..."}
 ```
-Зависимости могут быть любого типа, модуль может возвращать что угодно.
+Зависимости могут быть любого типа, модуль может возвращать любое значение.
 
 ```ts
 const Console = Module('Console', ({ prefix }: { prefix: string }) => ({
