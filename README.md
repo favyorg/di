@@ -5,7 +5,7 @@
 Easy, Powerful, type safe and fast way for dependency injection.
 - **Light.** 480 bytes (after minification and gzip). No dependencies.
 - **Easy.** As easy as calling the function, no more IoC containers.
-- **Fast.** Match faster than tsyringe and inversify.
+- **Fast.** Much faster than tsyringe and inversify.
 - **Safe.** Typescript checking all dependencies in all modules and submodules when function is needed to be called.
 - **Integrated.** It's just a function! You can include it everywhere you want.
 - **Works everywhere.** Framework agnostic, Nodejs/Browser/ReactNative
