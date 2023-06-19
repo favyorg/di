@@ -1,4 +1,4 @@
-import { expectAssignable, expectType, expectError } from 'tsd';
+import { expectType, expectError } from 'tsd-lite';
 import { Live, Module } from '../src/index';
 
 // deps type
