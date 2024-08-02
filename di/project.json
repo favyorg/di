@@ -1,0 +1,19 @@
+{
+  "name": "di",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "di/src",
+  "projectType": "library",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:swc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/di",
+        "main": "di/src/index.ts",
+        "tsConfig": "di/tsconfig.lib.json",
+        "assets": ["di/*.md"]
+      }
+    }
+  }
+}

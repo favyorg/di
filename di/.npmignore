@@ -1,0 +1,5 @@
+test
+.swcrc
+*.config.js
+*.config.ts
+*.json

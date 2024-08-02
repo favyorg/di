@@ -1,0 +1,47 @@
+{
+  "name": "react-example",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/react-example/src",
+  "projectType": "application",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/rspack:rspack",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "target": "web",
+        "outputPath": "dist/apps/react-example",
+        "main": "apps/react-example/src/main.tsx",
+        "tsConfig": "apps/react-example/tsconfig.app.json",
+        "rspackConfig": "apps/react-example/rspack.config.js",
+        "assets": [
+          "apps/react-example/src/favicon.ico",
+          "apps/react-example/src/assets"
+        ]
+      },
+      "configurations": {
+        "development": {
+          "mode": "development"
+        },
+        "production": {
+          "mode": "production",
+          "optimization": true,
+          "sourceMap": false
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/rspack:dev-server",
+      "options": {
+        "buildTarget": "react-example:build:development"
+      },
+      "configurations": {
+        "development": {},
+        "production": {
+          "buildTarget": "react-example:build:production"
+        }
+      }
+    }
+  }
+}
