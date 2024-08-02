@@ -1,0 +1,151 @@
+---
+title: transform input
+---
+
+import { Editor } from '../../../components/editor';
+
+In makeModule, there is a transformInput option that allows you to automatically transform or augment the module’s dependencies (inputs) before they reach the module’s main function. This is useful if you need to:
+• Add extra information (e.g., the module’s name).
+• Modify input fields.
+• Validate or check incoming data before processing.
+
+## How It Works
+
+<Editor client:only code={`
+import { makeModule } from '@favy/di';
+
+const Module = makeModule({
+\ttransformInput: (deps) => {
+\t\t// You can modify "deps" here and return a new or the same object
+\t\tconst newDeps = {
+\t\t\t...deps,
+\t\t\taddedField: 'example',
+\t\t};
+\t\treturn newDeps;
+\t},
+});
+
+const A = Module()('A', (deps) => {
+\t// "deps" now contains "addedField"
+\treturn deps.addedField;
+});
+console.log(A()); // "example"
+`} />
+
+## Logging Input Data with the Module Name
+
+If your implementation (or a custom signature) supports a second argument for the module name in transformInput, you can log both the incoming data and the name of the module:
+
+<Editor client:only code={`import { makeModule } from '@favy/di';
+
+const Module = makeModule({
+\ttransformInput: (deps, name) => {
+\t\tconsole.log('Incoming deps for module "', name, deps);
+\t\treturn deps;
+\t},
+});
+
+const M = Module<{ something: string }>()('M', () => 100);
+
+// Whenever the module M is called, log the module name and the received data:
+M({ something: 'test' });
+// Console output: "Incoming deps for module "M": { something: 'test' }"
+`} />
+
+• The input is augmented by the field `{ Module: { name: 'A' } }`.
+• Inside the module function, you can retrieve the module’s name, which is useful for logging, debugging, or dynamic logic that depends on the module name.
+
+## Dependency Validation
+
+<Editor client:only code={`import { makeModule } from '@favy/di';
+
+const Module = makeModule({
+\ttransformInput: (deps) => {
+\t\tconst user = (deps as any)?.user;
+\t\tif (!user) {
+\t\t\tthrow new Error('User data is missing');
+\t\t}
+\t\tif (!user?.id) {
+\t\t\tthrow new Error('User ID is required');
+\t\t}
+\t\treturn deps;
+\t},
+});
+
+const SomeModule = Module<{ user: { id: number } }>()('SomeModule', ({ user }) => {
+\treturn 'Current user ID: ' + user.id;
+});
+
+// Calling the module
+console.log(SomeModule({ user: { id: 123 } })); // "Current user ID: 123"
+`} />
+
+If the user field is missing or the user object lacks an id, an error is thrown before the module’s main logic even runs.
+
+## Transforming Input with Higher-Kinded Types (HKT)
+
+Higher-Kinded Types (HKT) in TypeScript allow you to introduce a “placeholder” type that can later be instantiated with specific logic—something standard infer can’t do, as infer only extracts types when matching a known shape. Since TypeScript doesn’t provide true HKTs out of the box, we use a hack to emulate them, much like passing a class into a function and creating an instance of it inside. By doing so, you can dynamically reshape your module’s dependencies and still maintain strict compile-time safety.
+
+### Example: Converting an Object to an Array
+
+Suppose you want to pass an object to the module but work with an array of values inside the module:
+
+<Editor client:only code={`import { makeModule, type HKT } from '@favy/di';
+
+/\*\*
+
+- 1.  Define a specialized HKT that transforms the module's final result.
+- We want to wrap the original dependencies in an object: { wrap: { array: ... } }.
+  \*/
+  interface FlattenHKT extends HKT {
+  \t// "this['_RESULT']" is the original dependencies
+  \t// "this['type']" becomes { wrap: { array: (string | number)[] } }
+  \treadonly type: {
+  \t\twrap: {
+  \t\t\tarray: (string | number)[];
+  \t\t};
+  \t};
+  }
+
+/\*\*
+
+- 2.  Create the makeModule instance with transformInput,
+      _\tcasting the return to FlattenHKT using "as any as FlattenHKT".
+      _/
+      const Module = makeModule({
+      \ttransformInput: (deps: Record<string, any>) => {
+      \t\t// Convert an object into a flattened array of [key, value].
+      \t\tif (typeof deps === 'object') {
+      \t\t\tconst array = Object.entries(deps).flat();
+      \t\t\treturn {
+      \t\t\t\twrap: {
+      \t\t\t\t\tarray,
+      \t\t\t\t},
+      \t\t\t} as any as FlattenHKT;
+      \t\t}
+      \t\t// If it's not a plain object, return an empty array or handle differently
+      \t\treturn {
+      \t\t\twrap: { array: [] },
+      \t\t} as any as FlattenHKT;
+      \t},
+      });
+
+/\*\*
+
+- 3.  Define a module that originally expects an object like { a: number; b: number; ... },
+      _\tbut after transform, we access it via deps.wrap.array.
+      _/
+      const ExampleModule = Module<{ a: number; b: number; c?: number }>()(
+      \t'ExampleModule',
+      \t(deps) => {
+      \t\t// After transform, "deps" is typed as { wrap: { array: (string | number)[] } }
+      \t\treturn deps.wrap.array.join(', ');
+      \t},
+      );
+
+// 4. Usage
+console.log(ExampleModule({ a: 1, b: 2, c: 3 }));
+// Outputs: "a, 1, b, 2, c, 3"
+`} />
+
+Here, the incoming object obj: `Record<string, number>` is automatically converted to a flattened array of key/value pairs, giving you more convenient handling of data in the `ExampleModule`.

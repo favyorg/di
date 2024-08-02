@@ -1,0 +1,61 @@
+---
+title: lazy Option Overview
+---
+
+import { Editor } from '../../../components/editor';
+
+In makeModule, the lazy option determines when modules (and their dependencies) are initialized.
+
+## lazy = true (default)
+
+• Initialization on Demand
+
+A module is only initialized at the moment you access the relevant value. If a module’s internal function never tries to retrieve a dependency, that dependency is not initialized.
+
+<Editor client:only code={`import { Module, Live } from '@favy/di';
+
+const F = Module()('F', () => {
+\tconsole.log('F is initialized');
+});
+type FLive = Live<typeof F>;
+
+// Module A depends on 'F'
+const A = Module<FLive>()('A', ({ F }) => F);
+// Because we use "F" inside the function, it will be initialized when A() is called.
+
+// Module B does NOT depend on 'F' (the function body doesn't reference $.F)
+const B = Module<FLive>()('B', ($) => {
+\t// Here, we don't do anything with the argument
+});
+// So if we call B(), we won't initialize 'F' at all.
+
+// Module C references $.F
+const C = Module<FLive>()('C', ($) => $.F);
+// Because we explicitly call $.F, the dependency 'F' is initialized when C() is invoked.
+`} />
+
+## lazy = false
+
+• Eager Initialization
+
+When you call the top-level module, all dependencies are initialized up front, regardless of whether their values are explicitly referenced in the module’s body.
+
+<Editor client:only code={`
+import { makeModule } from '@favy/di';
+
+const Module = makeModule({
+\tlazy: false,
+});
+
+// Dependencies
+let i = 0;
+const F = Module()('F', () => ++i);
+
+type FLive = { F: number };
+const A = Module<FLive>()('A', ({ F }) => {
+\t// Possibly do something with F
+});
+
+// Even if 'A' doesn't call 'F', as soon as we call A(),
+// 'F' gets initialized because lazy = false.
+`} />

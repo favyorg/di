@@ -2,7 +2,14 @@
 
 [![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di) [![npm version](https://badge.fury.io/js/@favy%2Fdi.svg)](https://badge.fury.io/js/@favy%2Fdi) ![npm bundle size](https://img.shields.io/bundlephobia/minzip/@favy/di) ![GitHub](https://img.shields.io/github/license/favyorg/di?style=flat)
 
-A lightweight and powerful dependency injection library for TypeScript.
+## Why?
+Imagine being able to substitute any function in an application?
+This will make it easy to test any part of the application.
+Low coupling will make it easy to change the structure of the application.
+
+## Problem
+All existing di for typescript are too complicated and make you write a lot of code.
+Almost nobody uses them.
 
 ## Features
 
@@ -56,7 +63,11 @@ console.log(PartialCalculator({ y: 3 })); // Output: 8
 ### Lazy Initialization
 
 ```typescript
-const LazyModule = Module({ lazy: true })('LazyModule', () => {
+const Module = makeModule({
+  lazy: false
+});
+
+const LazyModule = Module()('LazyModule', () => {
   console.log('LazyModule initialized');
   return 42;
 });
@@ -72,7 +83,11 @@ Consumer({ LazyModule });
 ### Cache Management
 
 ```typescript
-const CachedModule = Module({ cache: 'module' })('CachedModule', () => Math.random());
+const Module = makeModule({
+  cache: 'module' 
+});
+
+const CachedModule = Module()('CachedModule', () => Math.random());
 console.log(CachedModule()); // Random number
 console.log(CachedModule()); // Same number
 
