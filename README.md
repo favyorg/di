@@ -56,7 +56,11 @@ console.log(PartialCalculator({ y: 3 })); // Output: 8
 ### Lazy Initialization
 
 ```typescript
-const LazyModule = Module({ lazy: true })('LazyModule', () => {
+const Module = makeModule({
+  lazy: false
+});
+
+const LazyModule = Module()('LazyModule', () => {
   console.log('LazyModule initialized');
   return 42;
 });
@@ -72,7 +76,11 @@ Consumer({ LazyModule });
 ### Cache Management
 
 ```typescript
-const CachedModule = Module({ cache: 'module' })('CachedModule', () => Math.random());
+const Module = makeModule({
+  cache: 'module' 
+});
+
+const CachedModule = Module()('CachedModule', () => Math.random());
 console.log(CachedModule()); // Random number
 console.log(CachedModule()); // Same number
 
