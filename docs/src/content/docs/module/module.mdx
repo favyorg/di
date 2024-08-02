@@ -1,0 +1,30 @@
+---
+title: Module
+---
+
+import { Editor } from '../../../components/editor';
+
+### What Is Module?
+
+**Module** is simply a ready-to-use makeModule instance with default options:
+
+```typescript
+export const Module = makeModule({});
+```
+
+By default, **Module** has the following parameters:
+
+1. `cache = 'run'`
+   The results are cached only for the duration of a single call (see [Caching](./cache)).
+2. `lazy = true`
+   Modules are computed only when first accessed (see [Lazy Initialization](./lazy)).
+3. `transformInput = withModuleName`
+   Automatically adds a property to the dependencies object:
+
+<Editor client:only code={`import { Module } from '@favy/di';
+
+const A = Module()('A', ({ Module }) => Module.name);
+console.log(A()); // "A"
+`} />
+
+which lets any module function retrieve its own name (see [Transform Input/Output](http://google.com)).

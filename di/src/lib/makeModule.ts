@@ -4,60 +4,90 @@ import type { ModuleLive } from './module';
 
 const __deps__ = Symbol('Deps');
 
+type ProvideDeps<D> = {
+  [k in keyof D]: D[k] | ((deps: any) => D[k]);
+};
 
-type Create<P, R> = {} extends P
-  ? { (): R }
-  : {
-      (deps: P): R;
-    };
-
-type Callable<D, R, C> = D extends undefined ? { (): R } : Create<C, R>;
-
-export type TModule<
-  KEY extends PropertyKey,
-  RESULT,
-  DEPS = undefined,
-  PROV_DEPS = undefined,
-  CREATE = Omit<
-    DEPS extends { [__deps__]?: infer R } ? R & Omit<DEPS, keyof R> : DEPS,
-    keyof PROV_DEPS
-  >
-> = {
-  [key in KEY]: Callable<DEPS, RESULT, CREATE>;
-} & Callable<DEPS, RESULT, CREATE> & {
-    provide<PD extends Partial<CREATE>>(
-      deps: PD
-    ): TModule<KEY, RESULT, DEPS, PROV_DEPS, Omit<CREATE, keyof PD>>;
-    Live: Live<TModule<KEY, RESULT, DEPS, PROV_DEPS>>;
-  } & Generator<
-    TModule<KEY, RESULT, DEPS, PROV_DEPS, CREATE>,
-    RESULT, //TModule<KEY, RESULT, DEPS, PROV_DEPS, CREATE>,
-    {}
-  >;
+export type TModule<KEY extends PropertyKey, D, R> = ((
+  ...args: {} extends D ? [] : [deps: ProvideDeps<D>]
+) => R) & {
+  name: KEY;
+} & {
+  provide<PD extends Partial<ProvideDeps<D>>>(
+    ...args: {} extends D ? [] : [deps: PD]
+  ): TModule<KEY, Omit<D, keyof PD>, R>;
+};
 
 export type Live<T> = T extends TModule<
   infer K extends PropertyKey,
-  infer R,
   infer D,
-  infer PD
+  infer R
 >
-  ? {
+  ? D & {
       [k in K]: R;
-    } & {
-      [__deps__]?: {
-        [k in K]: T[k] | R;
-      } & {
-        [k in K]: T[k] extends (deps: infer D) => infer R ? D : never;
-      }[K];
     }
   : never;
 
-export type transformInput<D, M, PD> = (deps: D, name: PropertyKey) => PD;
-export type transformOutput<I, D, O> = (result: I, deps: D, isRoot: boolean) => O;
+export type transformInput<D, PD> = (deps: D, name: PropertyKey) => PD;
+export type transformOutput<I, D, O> = (
+  result: I,
+  deps: D,
+  isRoot: boolean
+) => O;
 
 export type MakeOptions<D, M, PD, I, O> = {
-  transformInput?: transformInput<D, M, PD>;
-  transformOutput?: transformOutput<I, transformInput<D, M, PD>, O>;
+  transformInput?: transformInput<D, PD>;
+  transformOutput?: transformOutput<I, transformInput<D, PD>, O>;
+  /**
+   * @default run
+   * cache = run | undefined
+   * ```ts
+   * let i = 0;
+   * const A = Module()('A', ++i);
+   * type ALive = Live<typeof A>;
+   *
+   * const B = Module<A>({ A })('B', A);
+   * type BLive = Live<typeof B>;
+   *
+   * const C = Module<A & B>({ A, B })('C', A + B);
+   * C() // 2 because module A was called 1 time (1 + 1)
+   * C() // 4 because module A was called 1 time (2 + 2)
+   *
+   * ```
+   * cache = module
+   * ```ts
+   * const Module = makeModule({
+   *    cache: 'module'
+   * });
+   * let i = 0;
+   * const A = Module()('A', ++i);
+   * type ALive = Live<typeof A>;
+   *
+   * const B = Module<A>({ A })('B', A);
+   * type BLive = Live<typeof B>;
+   *
+   * const C = Module<A & B>({ A, B })('C', A + B);
+   * C() // 2 because module A was called 1 time (1 + 1)
+   * C() // 2 because module A was called 1 time (1 + 1)
+   *
+   * ```
+   * cache = none
+   * ```ts
+   * const Module = makeModule({
+   *    cache: 'none'
+   * });
+   * let i = 0;
+   * const A = Module()('A', ++i);
+   * type ALive = Live<typeof A>;
+   *
+   * const B = Module<A>({ A })('B', A);
+   * type BLive = Live<typeof B>;
+   *
+   * const C = Module<A & B>({ A, B })('C', A + B);
+   * C() // 3 because module A was called 2 times (1 + 2)
+   * C() // 7 because module A was called 2 times (3 + 4)
+   * ```
+   */
   cache?: 'run' | 'module' | 'none';
   lazy?: boolean;
 };
@@ -71,7 +101,7 @@ export const withModuleName = (<D, M>(
       name,
     },
   });
-}) satisfies transformInput<any, any, ModuleLive>;
+}) satisfies transformInput<any, ModuleLive>;
 
 class Cache {}
 
@@ -174,17 +204,9 @@ export const makeModule = <
       };
       module[__deps__] = true;
 
-      // return module as TModule<
-      //   N,
-      //   O extends HKT
-      //     ? Kind<O, RR, PD extends HKT ? Kind<PD, ND, ND, ND> : ND, RR>
-      //     : RR,
-      //   ND,
-      //   PD
-      // >;
-
-      return module as O extends HKT ? Kind<O, N, RR, ND, PD, never> : TModule<N, RR, ND, PD>;
-
+      return module as O extends HKT
+        ? Kind<O, N, RR, Omit<ND, keyof PD>, never, never>
+        : TModule<N, Omit<ND, keyof PD>, RR>;
     };
 
   createModule.flushCache = () => {

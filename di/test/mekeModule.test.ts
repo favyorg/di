@@ -1,7 +1,7 @@
 import { makeModule, withModuleName } from '..';
 import type { Live } from '..';
 
-test('---', () => {
+test('makeModule transformInput', () => {
   const Module = makeModule({
     transformInput: () => {
       return 1;
@@ -11,14 +11,14 @@ test('---', () => {
   expect(A()).toBe(1);
 });
 
-test('---', () => {
+test('makeModule transformInput withModuleName', () => {
   const Module = makeModule({
     transformInput: withModuleName,
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F * 3);
   type ALive = Live<typeof A>;
@@ -30,14 +30,14 @@ test('---', () => {
   expect(C({ F, B, A })).toBe(7);
 });
 
-test('---', () => {
+test('makeModule cache=module', () => {
   const Module = makeModule({
-    cache: 'module'
+    cache: 'module',
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   A({ F });
@@ -45,135 +45,137 @@ test('---', () => {
   expect(A({ F })).toBe(1);
 });
 
-test('---', () => {
+test('makeModule cache=module flushCache', () => {
   const Module = makeModule({
-    cache: 'module'
+    cache: 'module',
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   A({ F });
-  Module.flushCache()
+  Module.flushCache();
   A({ F });
   expect(A({ F })).toBe(2);
 });
 
-
-test('---', () => {
+test('makeModule cache=run flushCache', () => {
   const Module = makeModule({
-    cache: 'run'
+    cache: 'run',
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   A({ F });
-  Module.flushCache()
+  Module.flushCache();
   A({ F });
   expect(A({ F })).toBe(3);
 });
 
-test('---', () => {
+test('makeModule cache=run', () => {
   const Module = makeModule({
-    cache: 'run'
+    cache: 'run',
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F);
-  const B = Module<(typeof A)['Live'] & FLive>()('A', ({ F, A }) => F + A);
+  type ALive = Live<typeof A>;
+
+  const B = Module<ALive & FLive>()('A', ({ F, A }) => F + A);
   expect(B({ F, A })).toBe(2);
 });
 
-test('---', () => {
+test('makeModule cache=run F+A', () => {
   const Module = makeModule({
-    cache: 'run'
+    cache: 'run',
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F);
-  const B = Module<(typeof A)['Live'] & FLive>()('A', ({ F, A }) => F + A);
+  type ALive = Live<typeof A>;
+
+  const B = Module<ALive & FLive>()('A', ({ F, A }) => F + A);
   B({ F, A });
   B({ F, A });
   expect(B({ F, A })).toBe(6);
 });
 
-test('---', () => {
+test('makeModule cache=none', () => {
   const Module = makeModule({
-    cache: 'none'
+    cache: 'none',
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F);
-  const B = Module<(typeof A)['Live'] & FLive>()('A', ({ F, A }) => F + A);
+  type ALive = Live<typeof A>;
+
+  const B = Module<ALive & FLive>()('A', ({ F, A }) => F + A);
   expect(B({ F, A })).toBe(3);
 });
 
-
-test('---', () => {
+test('makeModule lazy=true', () => {
   const Module = makeModule({
-    lazy: true
+    lazy: true,
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   expect(A({ F })).toBe(1);
 });
 
-test('---', () => {
+test('makeModule lazy=true A->F', () => {
   const Module = makeModule({
-    lazy: true
+    lazy: true,
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', () => 0);
   A({ F });
   expect(i).toBe(0);
 });
 
-
-test('---', () => {
+test('makeModule lazy=false', () => {
   const Module = makeModule({
-    lazy: false
+    lazy: false,
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', () => 0);
   A({ F });
   expect(i).toBe(1);
 });
 
-
-test('---', () => {
+test('makeModule lazy=false A->F', () => {
   const Module = makeModule({
-    lazy: false
+    lazy: false,
   });
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = (typeof F)['Live'];
+  type FLive = Live<typeof F>;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   expect(A({ F })).toBe(2);

@@ -1,4 +1,4 @@
-import { makeModule, withModuleName } from "./makeModule";
+import { makeModule, withModuleName } from './makeModule';
 
 export const Module = makeModule({
   transformInput: withModuleName,

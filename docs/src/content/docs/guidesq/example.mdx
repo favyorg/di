@@ -1,0 +1,117 @@
+---
+title: Welcome to my docs
+hasSidebar: false
+template: splash
+---
+import { CodeWithTabs } from './codeWithTabs.tsx';
+
+<CodeWithTabs client:only tabs={[
+  {
+  meta: 'inversify.ts',
+  lang: 'ts',
+  value: `import { Container, injectable, inject, interfaces } from "inversify";
+import "reflect-metadata";
+const TYPES = {
+    UserRepository: Symbol.for("UserRepository"),
+    UserService: Symbol.for("UserService"),
+    UserController: Symbol.for("UserController")
+};
+
+interface UserRepository {
+    findById(id: number): string;
+}
+
+@injectable()
+class UserRepositoryImpl implements UserRepository {
+    findById(id: number): string {
+      return \`User \${id}\`;
+    }
+}
+
+@injectable()
+class UserService {
+    constructor(
+      @inject(TYPES.UserRepository) private userRepository: UserRepository
+    ) {}
+
+    getUser(id: number): string {
+      return this.userRepository.findById(id);
+    }
+}
+
+@injectable()
+class UserController {
+    constructor(
+      @inject(TYPES.UserService) private userService: UserService
+    ) {}
+
+    handleGetUser(id: number): string {
+      return this.userService.getUser(id);
+    }
+}
+
+const container = new Container();
+container.bind<UserRepository>(TYPES.UserRepository).to(UserRepositoryImpl);
+container.bind<UserService>(TYPES.UserService).to(UserService);
+container.bind<UserController>(TYPES.UserController).to(UserController);
+
+const userController = container.get<UserController>(TYPES.UserController);
+console.log(userController.handleGetUser(1));`
+  },
+   {
+  meta: 'vanila.ts',
+  lang: 'ts',
+  value: `interface UserRepository {
+    findById(id: number): string;
+}
+
+function createUserRepository(): UserRepository {
+    return {
+      findById: (id: number): string => \`User \${id}\`
+    };
+}
+
+function createUserService(userRepository: UserRepository) {
+    return {
+      getUser: (id: number): string => userRepository.findById(id)
+    };
+}
+
+function createUserController(userService: ReturnType<typeof createUserService>) {
+    return {
+      handleGetUser: (id: number): string => userService.getUser(id)
+    };
+}
+
+const userRepo = createUserRepository();
+const userService = createUserService(userRepo);
+const userController = createUserController(userService);
+
+console.log(userController.handleGetUser(1));`
+
+   },
+    {
+  meta: 'favy.ts',
+  lang: 'ts',
+  value: `import { Module } from '@favy/di';
+
+const UserRepository = Module()('UserRepository', () => ({
+    findById: (id: number): string => \`User \${id}\`
+}));
+type UserRepositoryLive = typeof UserRepository.Live;
+
+const UserService = Module<UserRepositoryLive>()('UserService', ctx => ({
+    getUser: (id: number): string => ctx.UserRepository.findById(id)
+}));
+type UserServiceLive = typeof UserService.Live;
+
+const UserController = Module<UserServiceLive>()('UserController', ctx => ({
+    handleGetUser: (id: number): string => ctx.UserService.getUser(id)
+}))
+
+console.log(UserController({
+    UserRepository,
+    UserService,
+}));`
+    }
+]} />

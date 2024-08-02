@@ -26,7 +26,8 @@
       "options": {
         "targetName": "test"
       }
-    }
+    },
+    "@nxtensions/astro"
   ],
   "generators": {
     "@nx/react": {
@@ -51,6 +52,19 @@
       "cache": true,
       "dependsOn": ["^build"],
       "inputs": ["production", "^production"]
+    },
+    "@nxtensions/astro:build": {
+      "inputs": ["production", "^production"],
+      "outputs": ["{workspaceRoot}/dist/{projectRoot}"],
+      "cache": true
+    },
+    "@nxtensions/astro:check": {
+      "inputs": ["production", "^production"],
+      "cache": true
+    },
+    "@nxtensions/astro:preview": {
+      "dependsOn": ["build"]
     }
-  }
+  },
+  "defaultProject": "docs"
 }

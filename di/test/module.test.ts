@@ -1,4 +1,4 @@
-import { Module, type ModuleLive } from '../src/index';
+import { makeModule, Module, type ModuleLive } from '../src/index';
 import type { Live } from '..';
 
 test('---', () => {
@@ -132,4 +132,66 @@ test('---', () => {
   const F = Module<ELive>()('F', ($) => $.E + 'F');
 
   expect(F({ E, D, C, B, A })).toBe('ABCDEF');
+});
+
+test('---', () => {
+  const LVL4 = Module()('LVL4', () => '4');
+  type LVL4Live = Live<typeof LVL4>;
+
+  const LVL3 = Module<LVL4Live>()('LVL3', ($) => $.LVL4 + '3');
+  type LVL3Live = Live<typeof LVL3>;
+
+  const LVL2 = Module<LVL3Live>()('LVL2', ($) => $.LVL3 + '2');
+  type LVL2Live = Live<typeof LVL2>;
+
+  const LVL1 = Module<LVL2Live>()('LVL1', ($) => $.LVL2 + '1');
+
+  expect(LVL1({ LVL2, LVL3, LVL4 })).toBe('4321');
+});
+
+test('deep', () => {
+  const A = Module()('A', ($) => ({ a: [$.Module.name.toString()] }));
+  type ALive = Live<typeof A>;
+
+  const A1 = Module()('A1', () => ({ a: ['A1'], x: [''] }));
+  type A1Live = Live<typeof A1>;
+
+  const A2 = Module()('A2', () => ({ a: ['A2'], x: [''] }));
+  type A2Live = Live<typeof A2>;
+
+  // 1
+  const B = Module<ALive & A1Live & A2Live>()('B', ({ A }) => ({
+    c: [A.a[0] + 'B'],
+    x: '1',
+  }));
+  type BLive = Live<typeof B>;
+
+  // 2
+  const C = Module<BLive>()('C', ($) => ({ res: [$.B.c[0] + 'C'], z: 1 }));
+  type CLive = Live<typeof C>;
+
+  // 3
+  const D = Module<CLive>()('D', ($) => $.C.res[0] + 'D');
+  type DLive = Live<typeof D>;
+
+  // 4
+  const E = Module<DLive>()('E', ($) => [$.D + 'E']);
+  type ELive = Live<typeof E>;
+
+  // 5
+  const F = Module<ELive>()('F', ($) => $.E[0] + 'F');
+  type FLive = Live<typeof F>;
+
+  // 6
+  const G = Module<FLive>()('G', ($) => $.F + 'G');
+  type GLive = Live<typeof G>;
+
+  // 7
+  const H = Module<GLive>()('H', ($) => $.G + 'H');
+  type HLive = Live<typeof H>;
+
+  // 8
+  const I = Module<HLive>()('I', ($) => $.H + 'I');
+
+  expect(I({ H, G, F, E, D, C, B, A, A1, A2 })).toBe('ABCDEFGHI');
 });
