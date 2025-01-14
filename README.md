@@ -38,15 +38,19 @@ npm install @favy/di
 ## Quick Start
 
 ```typescript
-import { Module } from '@favy/di';
+import { Module, type Live } from '@favy/di';
 
 const SimpleModule = Module()('SimpleModule', () => 'Hello, DI!');
 console.log(SimpleModule()); // Output: Hello, DI!
 
 // Simple module combination
 const ModuleA = Module()('ModuleA', () => 10);
+type ALive = Live<typeof ModuleA>;
+
 const ModuleB = Module()('ModuleB', () => 5);
-const CombinedModule = Module()('CombinedModule', ($) => $.ModuleA + $.ModuleB);
+type BLive = Live<typeof ModuleB>;
+
+const CombinedModule = Module<ALive & BLive>()('CombinedModule', ($) => $.ModuleA + $.ModuleB);
 console.log(CombinedModule({ ModuleA, ModuleB })); // Output: 15
 ```
 
@@ -63,16 +67,15 @@ console.log(PartialCalculator({ y: 3 })); // Output: 8
 ### Lazy Initialization
 
 ```typescript
-const Module = makeModule({
-  lazy: false
-});
+import { Module, type Live } from '@favy/di';
 
 const LazyModule = Module()('LazyModule', () => {
   console.log('LazyModule initialized');
   return 42;
 });
+type LazyModuleLive = Live<typeof LazyModule>;
 
-const Consumer = Module()('Consumer', ($) => {
+const Consumer = Module<LazyModuleLive>()('Consumer', ($) => {
   setTimeout(() => $.LazyModule, 1000);
 });
 
