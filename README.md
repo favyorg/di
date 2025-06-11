@@ -100,7 +100,7 @@ console.log(CachedModule()); // New random number
 
 ## Documentation
 
-For more detailed information about the library's capabilities and usage examples, please refer to our [full documentation](https://github.com/favy/di/docs).
+For more detailed information about the library's capabilities and usage examples, please refer to our [full documentation](https://di.favy.dev/guides/introduction/).
 
 ## Contributing
 
