@@ -1,0 +1,225 @@
+---
+title: Testing
+description: Choose a test boundary, replace dependencies with typed fakes, and reset factory-wide caches safely.
+---
+
+import { Editor } from '../../../components/editor';
+
+Dependency injection makes a test boundary explicit. The right dependency to replace depends on what the test is meant to prove.
+
+The examples use Jest and import its globals explicitly. The dependency-boundary patterns are runner-independent and work the same way with other TypeScript test frameworks.
+
+## Choose the Boundary First
+
+- **Unit tests** keep one module real and replace its direct dependencies. Failures stay local to that module.
+- **Integration tests** keep a useful chain of modules real and replace an outer boundary such as a database, clock, filesystem, or HTTP transport.
+
+Replacing a direct dependency is not universally better than replacing a transitive one. It is the right choice for a unit test; a deliberate lower-level fake is useful when an integration test should exercise the wiring between several modules.
+
+## Unit Test: Replace a Direct Dependency
+
+This Jest test keeps `UserApi` real and replaces its direct `HttpClient` dependency:
+
+<Editor client:load code={`import { describe, expect, it } from '@jest/globals';
+import { Module } from '@favy/di';
+
+interface User {
+  id: number;
+  name: string;
+}
+
+interface HttpClient {
+  get: (url: string) => Promise<User>;
+}
+
+const UserApi = Module<{ HttpClient: HttpClient }>()(
+  'UserApi',
+  ({ HttpClient }) => ({
+    getUser: (id: number) => HttpClient.get('/api/users/' + id),
+  }),
+);
+
+describe('UserApi', () => {
+  it('requests and returns one user', async () => {
+    const requestedUrls: string[] = [];
+    const fakeHttpClient: HttpClient = {
+      get: async (url) => {
+        requestedUrls.push(url);
+        return { id: 1, name: 'Test User' };
+      },
+    };
+
+    const api = UserApi({ HttpClient: fakeHttpClient });
+
+    await expect(api.getUser(1)).resolves.toEqual({
+      id: 1,
+      name: 'Test User',
+    });
+    expect(requestedUrls).toEqual(['/api/users/1']);
+  });
+});`} />
+
+The fake implements the same interface as the production client, so TypeScript checks the test double without a container-specific mocking API.
+
+## Integration Test: Replace an Infrastructure Boundary
+
+This test keeps `UserRepository` and `UserService` real. Only the database boundary is fake, so the test covers dependency flow across both modules:
+
+<Editor client:load code={`import { describe, expect, it } from '@jest/globals';
+import { Module, type Live } from '@favy/di';
+
+interface User {
+  id: number;
+  name: string;
+}
+
+interface Database {
+  findUser: (id: number) => Promise<User | undefined>;
+}
+
+const UserRepository = Module<{ database: Database }>()(
+  'UserRepository',
+  ({ database }) => ({
+    findById: (id: number) => database.findUser(id),
+  }),
+);
+type UserRepositoryLive = Live<typeof UserRepository>;
+
+const UserService = Module<UserRepositoryLive>()(
+  'UserService',
+  ({ UserRepository }) => ({
+    getDisplayName: async (id: number) => {
+      const user = await UserRepository.findById(id);
+      return user?.name ?? 'Unknown user';
+    },
+  }),
+);
+
+describe('UserService integration', () => {
+  it('resolves the repository through a fake database boundary', async () => {
+    const fakeDatabase: Database = {
+      findUser: async (id) => ({ id, name: 'Ada' }),
+    };
+
+    const service = UserService({
+      database: fakeDatabase,
+      UserRepository,
+    });
+
+    await expect(service.getDisplayName(7)).resolves.toBe('Ada');
+  });
+});`} />
+
+## Reusable Fixtures with `.provide()`
+
+Use `.provide()` when many tests share the same dependency implementation. Keep mutable observations outside the fake so each fixture owns its state:
+
+<Editor client:load code={`import { describe, expect, it } from '@jest/globals';
+import { Module } from '@favy/di';
+
+interface Mailer {
+  send: (address: string, body: string) => void;
+}
+
+const WelcomeMessage = Module<{ Mailer: Mailer }>()(
+  'WelcomeMessage',
+  ({ Mailer }) => ({
+    sendTo: (address: string) => Mailer.send(address, 'Welcome!'),
+  }),
+);
+
+const createWelcomeFixture = () => {
+  const sentMessages: Array<{ address: string; body: string }> = [];
+  const fakeMailer: Mailer = {
+    send: (address, body) => {
+      sentMessages.push({ address, body });
+    },
+  };
+  const TestWelcomeMessage = WelcomeMessage.provide({ Mailer: fakeMailer });
+
+  return { sentMessages, TestWelcomeMessage };
+};
+
+describe('WelcomeMessage', () => {
+  it('sends the welcome body', () => {
+    const { sentMessages, TestWelcomeMessage } = createWelcomeFixture();
+
+    TestWelcomeMessage().sendTo('reader@example.com');
+
+    expect(sentMessages).toEqual([
+      { address: 'reader@example.com', body: 'Welcome!' },
+    ]);
+  });
+});`} />
+
+Create a fresh fixture in each test unless shared state is intentional.
+
+## Reset Factory-Wide Cache State
+
+`cache: 'module'` retains results in one `makeModule` factory. Flush that factory before each test:
+
+<Editor client:load code={`import { beforeEach, describe, expect, it } from '@jest/globals';
+import { makeModule } from '@favy/di';
+
+const CachedModule = makeModule({ cache: 'module' });
+
+let initializationCount = 0;
+const Counter = CachedModule()('Counter', () => ++initializationCount);
+
+beforeEach(() => {
+  CachedModule.flushCache();
+  initializationCount = 0;
+});
+
+describe('Counter', () => {
+  it('reuses a value until the factory cache is flushed', () => {
+    expect(Counter()).toBe(1);
+    expect(Counter()).toBe(1);
+    expect(initializationCount).toBe(1);
+  });
+});`} />
+
+The default `cache: 'run'` starts a fresh cache for every top-level call, so it normally needs no cross-test reset.
+
+## Verify Lazy Access
+
+Do not destructure an optional dependency before the condition you want to test. Access it through the dependency object inside the branch:
+
+<Editor client:load code={`import { describe, expect, it } from '@jest/globals';
+import { Module, type Live } from '@favy/di';
+
+let initializationCount = 0;
+const ExpensiveFeature = Module()('ExpensiveFeature', () => {
+  initializationCount += 1;
+  return {
+    run: () => 42,
+  };
+});
+type ExpensiveFeatureLive = Live<typeof ExpensiveFeature>;
+
+const App = Module<ExpensiveFeatureLive>()('App', ($) => ({
+  run: (enabled: boolean) => (enabled ? $.ExpensiveFeature.run() : 0),
+}));
+
+describe('App lazy dependency', () => {
+  it('initializes the feature only when the enabled branch uses it', () => {
+    initializationCount = 0;
+    const app = App({ ExpensiveFeature });
+
+    expect(app.run(false)).toBe(0);
+    expect(initializationCount).toBe(0);
+
+    expect(app.run(true)).toBe(42);
+    expect(initializationCount).toBe(1);
+  });
+});`} />
+
+## Checklist
+
+1. Name the boundary: unit or integration.
+2. Give fakes the same TypeScript interfaces as production dependencies.
+3. Create fixture state per test.
+4. Flush only the `makeModule` factory that owns a `module` cache.
+5. Keep lazy dependencies behind conditional property access.
+
+See [Partial Application](/module/partial/) for more fixture patterns and [Caching](/module/cache/) for cache lifetimes.

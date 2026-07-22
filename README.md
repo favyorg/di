@@ -1,33 +1,17 @@
 # @favy/di
 
-[![codecov](https://codecov.io/gh/favyorg/di/branch/master/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di) [![npm version](https://badge.fury.io/js/@favy%2Fdi.svg)](https://badge.fury.io/js/@favy%2Fdi) ![npm bundle size](https://img.shields.io/bundlephobia/minzip/@favy/di) ![GitHub](https://img.shields.io/github/license/favyorg/di?style=flat)
+[![codecov](https://codecov.io/gh/favyorg/di/branch/main/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di) [![npm version](https://badge.fury.io/js/@favy%2Fdi.svg)](https://badge.fury.io/js/@favy%2Fdi) ![npm bundle size](https://img.shields.io/bundlephobia/minzip/@favy/di) ![GitHub](https://img.shields.io/github/license/favyorg/di?style=flat)
 
-## Why?
-Imagine being able to substitute any function in an application?
-This will make it easy to test any part of the application.
-Low coupling will make it easy to change the structure of the application.
-
-## Problem
-All existing di for typescript are too complicated and make you write a lot of code.
-Almost nobody uses them.
+A lightweight dependency injection library for TypeScript. Modules are typed functions, dependencies stay explicit, and any implementation can be replaced at the application boundary.
 
 ## Features
 
-- 🚀 Create modules as easily as functions
-- 🔧 Easily replace any dependency at any level
-- 🌟 Simple integration into any project
-- 💪 Full TypeScript support with type inference
-- 🧩 High extensibility and support for Higher Kinded Types
-- 🎯 Caching and lazy initialization
-
-## Why @favy/di?
-
-Unlike many other solutions, @favy/di offers:
-
-- **Minimal syntax**: No need for decorators or complex configurations.
-- **Easy integration**: A module is just a function, so it can be integrated anywhere.
-- **Performance**: Minimal runtime overhead.
-- **Flexibility**: Easily adapts to different programming styles and patterns.
+- Create modules with ordinary functions—no decorators or container setup
+- Keep dependency contracts explicit while TypeScript infers module results
+- Replace direct or transitive dependencies in tests
+- Choose per-run, factory-wide, or disabled caching
+- Initialize dependencies lazily by default
+- Extend input and output types with higher-kinded types
 
 ## Installation
 
@@ -35,77 +19,86 @@ Unlike many other solutions, @favy/di offers:
 npm install @favy/di
 ```
 
+The declarations require TypeScript 5.0 or newer.
+
 ## Quick Start
 
 ```typescript
 import { Module, type Live } from '@favy/di';
 
-const SimpleModule = Module()('SimpleModule', () => 'Hello, DI!');
-console.log(SimpleModule()); // Output: Hello, DI!
+const Logger = Module()('Logger', () => ({
+  log: (message: string) => console.log(message),
+}));
+type LoggerLive = Live<typeof Logger>;
 
-// Simple module combination
-const ModuleA = Module()('ModuleA', () => 10);
-type ALive = Live<typeof ModuleA>;
+const App = Module<LoggerLive>()('App', ({ Logger }) => ({
+  start: () => Logger.log('Application started'),
+}));
 
-const ModuleB = Module()('ModuleB', () => 5);
-type BLive = Live<typeof ModuleB>;
-
-const CombinedModule = Module<ALive & BLive>()('CombinedModule', ($) => $.ModuleA + $.ModuleB);
-console.log(CombinedModule({ ModuleA, ModuleB })); // Output: 15
+App({ Logger }).start(); // Application started
 ```
 
-## Advanced Usage
+`Live<typeof Logger>` describes both the dependencies required by `Logger` and the value it provides under the `Logger` key. Pass module implementations to the top-level call; @favy/di resolves the graph from that boundary.
 
-### Partial Application with .provide()
+Dependency maps passed to module calls and `.provide()` may be any non-null object, including class instances and objects with custom prototypes. The library consumes their own string and symbol keys; inherited properties are ignored.
+
+## Partial Application
 
 ```typescript
-const CalculatorModule = Module<{ x: number, y: number }>()('Calculator', ({ x, y }) => x + y);
-const PartialCalculator = CalculatorModule.provide({ x: 5 });
-console.log(PartialCalculator({ y: 3 })); // Output: 8
+import { Module } from '@favy/di';
+
+const Calculator = Module<{ x: number; y: number }>()('Calculator', ({ x, y }) => x + y);
+
+const AddFive = Calculator.provide({ x: 5 });
+console.log(AddFive({ y: 3 })); // 8
 ```
 
-### Lazy Initialization
+## Lazy Initialization
+
+Dependencies are initialized when they are first accessed. Keep the dependency object intact when access needs to remain conditional.
 
 ```typescript
 import { Module, type Live } from '@favy/di';
 
-const LazyModule = Module()('LazyModule', () => {
-  console.log('LazyModule initialized');
+const ExpensiveValue = Module()('ExpensiveValue', () => {
+  console.log('ExpensiveValue initialized');
   return 42;
 });
-type LazyModuleLive = Live<typeof LazyModule>;
+type ExpensiveValueLive = Live<typeof ExpensiveValue>;
 
-const Consumer = Module<LazyModuleLive>()('Consumer', ($) => {
-  setTimeout(() => $.LazyModule, 1000);
-});
+const Consumer = Module<ExpensiveValueLive>()('Consumer', ($) => ({
+  read: () => $.ExpensiveValue,
+}));
 
-Consumer({ LazyModule }); 
-// Prints "LazyModule initialized" after 1 second
+const consumer = Consumer({ ExpensiveValue }); // Nothing logged yet
+console.log(consumer.read()); // Initializes ExpensiveValue, then prints 42
 ```
 
-### Cache Management
+## Cache Management
 
 ```typescript
-const Module = makeModule({
-  cache: 'module' 
-});
+import { makeModule } from '@favy/di';
 
-const CachedModule = Module()('CachedModule', () => Math.random());
-console.log(CachedModule()); // Random number
-console.log(CachedModule()); // Same number
+const CachedModule = makeModule({ cache: 'module' });
+const RandomValue = CachedModule()('RandomValue', () => Math.random());
 
-Module.flushCache(); // Clear cache
-console.log(CachedModule()); // New random number
+console.log(RandomValue()); // New value
+console.log(RandomValue()); // Same cached value
+
+CachedModule.flushCache();
+console.log(RandomValue()); // New value
 ```
+
+See [Caching](https://di.favy.dev/module/cache/), [Lazy Initialization](https://di.favy.dev/module/lazy/), and the [API Reference](https://di.favy.dev/reference/api/) for details.
 
 ## Documentation
 
-For more detailed information about the library's capabilities and usage examples, please refer to our [full documentation](https://di.favy.dev/guides/introduction/).
+Full documentation is available at [di.favy.dev](https://di.favy.dev/).
 
 ## Contributing
 
-We welcome community contributions! If you have suggestions for improvements or have found a bug, please create an issue or submit a pull request.
+See the [documentation contributor guide](https://github.com/favyorg/di/blob/main/docs/README.md) for local commands. Bug reports and pull requests are welcome in the [GitHub repository](https://github.com/favyorg/di).
 
 ## License
 
-@favy/di is distributed under the MIT license. See the [LICENSE](LICENSE) file for more information.
+@favy/di is distributed under the MIT license. See the [LICENSE](https://github.com/favyorg/di/blob/main/LICENSE) file.

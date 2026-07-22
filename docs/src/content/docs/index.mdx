@@ -1,12 +1,53 @@
 ---
-title: Welcome to @favy/di docs
-description: favy/di docs
+title: Dependency injection as typed functions
+description: Build explicit, composable TypeScript dependency graphs without decorators or container configuration.
 template: splash
 hero:
+  tagline: Lightweight dependency injection for TypeScript, with typed modules, replaceable dependencies, lazy initialization, and configurable caching.
   image:
     file: ../../assets/logo.jpeg
   actions:
-    - text: Introduction
-      link: /guides/introduction
+    - text: Get started
+      link: /guides/introduction/
       icon: right-arrow
+    - text: API reference
+      link: /reference/api/
+      icon: document
+      variant: minimal
 ---
+
+## Install
+
+```bash
+npm install @favy/di
+```
+
+## Quick Start
+
+```typescript
+import { Module, type Live } from '@favy/di';
+
+const Clock = Module()('Clock', () => ({
+  now: () => new Date(),
+}));
+type ClockLive = Live<typeof Clock>;
+
+const Greeting = Module<ClockLive>()('Greeting', ({ Clock }) => ({
+  message: () => 'Hello at ' + Clock.now().toISOString(),
+}));
+
+console.log(Greeting({ Clock }).message());
+```
+
+`Live<typeof Clock>` adds the value produced by `Clock` to the dependency type. The top-level call supplies module implementations, and @favy/di resolves them through the graph.
+
+## Choose Your Next Step
+
+- Start with the [Introduction](/guides/introduction/) and learn the [core Module model](/module/module/).
+- Understand execution lifetime with [Caching](/module/cache/) and [Lazy Initialization](/module/lazy/).
+- Preconfigure dependencies with [Partial Application](/module/partial/).
+- Learn isolation boundaries in [Testing](/guides/testing/) and apply the [Best Practices](/guides/best-practices/).
+- Customize advanced behavior with [Transform Input](/module/transform-input/) and [Transform Output](/module/transform-output/).
+- Look up exports and signatures in the [API Reference](/reference/api/).
+
+Source code and issues are available on [GitHub](https://github.com/favyorg/di).
