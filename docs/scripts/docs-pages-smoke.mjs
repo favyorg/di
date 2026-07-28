@@ -55,6 +55,81 @@ try {
   assert.ok(typography.lineHeight / typography.fontSize >= 1.65);
   assert.ok(typography.headingMargin >= 40);
 
+  await page.waitForSelector('.monaco-editor', { timeout: 15_000 });
+
+  const editorSurface = await page
+    .locator("astro-island[component-export='Editor']")
+    .first()
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      const cue = getComputedStyle(element, '::before').content;
+      return {
+        borderWidth: Number.parseFloat(style.borderTopWidth),
+        radius: Number.parseFloat(style.borderTopLeftRadius),
+        cue,
+      };
+    });
+
+  assert.ok(editorSurface.borderWidth >= 1);
+  assert.ok(editorSurface.radius >= 12);
+  assert.match(editorSurface.cue, /TypeScript/);
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    true,
+  );
+  assert.match(
+    await page
+      .locator("astro-island[component-export='Editor']")
+      .first()
+      .evaluate((element) => getComputedStyle(element, '::before').content),
+    /scroll|swipe/i,
+  );
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const modulePosition = await page
+    .locator('.monaco-editor .view-line')
+    .first()
+    .evaluate((line) => {
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node) {
+        const index = node.textContent?.indexOf('Module') ?? -1;
+        if (index >= 0) {
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + 'Module'.length);
+          const rect = range.getBoundingClientRect();
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }
+        node = walker.nextNode();
+      }
+      return null;
+    });
+  assert.ok(modulePosition);
+  await page.mouse.move(modulePosition.x, modulePosition.y);
+  await page.locator('.monaco-hover:visible').waitFor({ timeout: 5_000 });
+
+  const noScript = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: 390, height: 844 },
+  });
+  const noScriptPage = await noScript.newPage();
+  await noScriptPage.goto(`${origin}/guides/introduction/`, {
+    waitUntil: 'domcontentloaded',
+  });
+  assert.ok(
+    await noScriptPage
+      .locator(
+        "astro-island[component-export='Editor'] pre[aria-label='TypeScript example']",
+      )
+      .count(),
+  );
+  await noScript.close();
+
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('.docs-page-title').count(), 0);
   assert.equal(await page.locator('.home-workbench').count(), 1);
