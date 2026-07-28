@@ -25,7 +25,29 @@ export {
 } from '@favy/di';
 ```
 
-## `Module`
+<nav class="api-index" aria-label="API symbols">
+  <strong>Common API</strong>
+  <a href="#module">Module</a>
+  <a href="#livet">Live</a>
+  <a href="#modulelive">ModuleLive</a>
+
+  <strong>Factory configuration</strong>
+  <a href="#makemodule">makeModule</a>
+  <a href="#makeoptionsd-m-p-i-o">MakeOptions</a>
+  <a href="#defaultmodulefactory">DefaultModuleFactory</a>
+  <a href="#withmodulename">withModuleName</a>
+  <a href="#transforminputd-p">transformInput</a>
+  <a href="#transformoutputi-d-o">transformOutput</a>
+
+  <strong>Advanced types</strong>
+  <a href="#tmodulek-d-r-c--d">TModule</a>
+  <a href="#hkt">HKT</a>
+  <a href="#kindh-name-result-deps-meta-meta2">Kind</a>
+</nav>
+
+## Common API
+
+### `Module`
 
 `Module` is the default module factory. It uses `withModuleName`, run-scoped
 caching, lazy provider resolution, and the identity output transform.
@@ -65,10 +87,62 @@ caller does not supply that generated key.
 `cache: 'run'`, so this normally matters only on a factory created with
 `makeModule({ cache: 'module' })`.
 
-## `makeModule`
+### `Live<T>`
+
+Extracts a module's remaining requirements and adds its result under its
+declared key.
+
+```ts
+export type Live<T> = T extends {
+  name: infer K extends PropertyKey;
+  [__deps__]: Brand<infer D, infer R>;
+}
+  ? D & { [P in K]: R }
+  : never;
+```
+
+`Live` reads the module's existing private type marker directly, so it retains
+transitive requirements without recursively expanding the callable and its
+`.provide()` method.
+
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+const Database = Module<{ url: string }>()('Database', ({ url }) => ({ url }));
+type DatabaseLive = Live<typeof Database>;
+
+const Repository = Module<DatabaseLive>()(
+  'Repository',
+  ({ Database }) => Database.url,
+);
+type RepositoryLive = Live<typeof Repository>;
+
+const App = Module<RepositoryLive>()('App', ({ Repository }) => Repository);
+
+console.log(App({ url: 'memory://db', Database, Repository }));
+// "memory://db"`} />
+
+### `ModuleLive`
+
+Describes the metadata produced by the default input transform:
+
+```ts
+export type ModuleLive = {
+  Module: { name: PropertyKey };
+};
+```
+
+Intersect it into an explicit dependency contract when the callback needs both
+application dependencies and the current module name.
+
+## Factory configuration
+
+### `makeModule`
 
 Creates an independent factory. Pass an options object, omit it, or pass an
 input transform directly as shorthand.
+
+<details class="api-declaration">
+  <summary>Full declaration</summary>
 
 ```ts
 type Lifecycle = {
@@ -125,6 +199,8 @@ export declare const makeModule: {
 };
 ```
 
+</details>
+
 `Factory`, `Named`, `Domain`, `Added`, `Valid`, and `Identity`
 above are internal declaration helpers. They infer the input transform's
 minimum domain, the fields it adds, and the resulting module call signature;
@@ -150,7 +226,7 @@ console.log(Counter()); // 1
 SingletonModule.flushCache();
 console.log(Counter()); // 2`} />
 
-### Cache modes
+#### Cache modes
 
 - `'run'` shares a provider result within one root resolution and starts a new
   context for the next root call.
@@ -163,7 +239,7 @@ the module callback. Raw dependency values are never invoked. With
 `lazy: true`, object rest/spread can still force reads because it enumerates the
 context.
 
-## `MakeOptions<D, M, P, I, O>`
+### `MakeOptions<D, M, P, I, O>`
 
 The exported compatibility type for an options object is:
 
@@ -181,7 +257,7 @@ implementation. The actual `makeModule` value uses the overloads above so that
 omitted transforms receive their typed runtime defaults and HKT transforms can
 replace an ordinary callback or callable shape.
 
-## `DefaultModuleFactory`
+### `DefaultModuleFactory`
 
 ```ts
 type Named<N extends PropertyKey = PropertyKey> = {
@@ -203,13 +279,91 @@ Factory<TransformDomain, AddedInput, OutputTransform?>
 The first call may omit `Deps`. For the default factory this gives the callback
 the generated `Module` metadata and produces a zero-dependency callable.
 
-## `TModule<K, D, R, C = D>`
+### `withModuleName`
+
+The default input transform:
+
+```ts
+type Generated<N extends PropertyKey = PropertyKey> = {
+  Module: { name: N };
+};
+
+type Each<D, K extends PropertyKey> = D extends unknown ? Omit<D, K> : never;
+
+export declare const withModuleName: <
+  D extends object,
+  const N extends PropertyKey
+>(
+  deps: D,
+  name: N
+) => Each<D, 'Module'> & Generated<N>;
+```
+
+It assigns `{ Module: { name } }` to `deps` and returns that same object. The
+type preserves every other input field, preserves union branches, replaces a
+previous `Module` field, and keeps a literal string, number, or symbol name for
+direct calls.
+
+A custom input transform replaces this behavior unless it explicitly calls
+`withModuleName`.
+
+### `transformInput<D, P>`
+
+```ts
+export type transformInput<D extends object, P extends object> = <X extends D>(
+  deps: X,
+  name: PropertyKey
+) => X & P;
+```
+
+`D` is the minimum input domain and `P` describes added fields. The generic
+`X & P` result makes an ordinary transform preserve later dependency fields.
+Constrained transforms can be written inline as `<X extends Base>` or assigned
+an explicit `transformInput<Base, Added>` annotation. The caller-supplied
+portion of a module contract must still satisfy `Base`.
+
+Required inferred additions are removed from the module's caller requirements.
+Keys already known on the transform domain remain caller-supplied, while a new
+field can still be inferred when the domain has an open index signature. The
+compact types intentionally leave unusually ambiguous overlap and union-return
+diagnostics to the declared callback contract.
+
+Return an `HKT` marker when a transform intentionally replaces or wraps the
+callback input instead of preserving it.
+
+### `transformOutput<I, D, O>`
+
+```ts
+export type transformOutput<I, D, O> = (
+  result: I,
+  deps: D,
+  isRoot: boolean
+) => O;
+```
+
+It receives a successful callback result, that invocation's transformed input,
+and whether the call is the root resolution. A custom ordinary output transform
+constrains the callback result to `I` and makes the callable return `O`. A
+generic identity transform preserves each callback's inferred result. Return an
+output `HKT` when the callable type must be computed from its name, callback
+result, or remaining dependencies.
+
+The callback runs before `transformOutput`; this hook cannot catch a synchronous
+exception that the callback already threw and does not automatically await a
+rejected promise.
+
+## Advanced types
+
+### `TModule<K, D, R, C = D>`
 
 `TModule` is the callable returned by an ordinary factory. `D` is the
 dependency map still required from the next caller. `C` retains the compatible
 full context while `.provide()` binds fields.
 
 The emitted declaration is based on these compact helper types:
+
+<details class="api-declaration">
+  <summary>Full declaration</summary>
 
 ```ts
 declare const __deps__: unique symbol;
@@ -284,6 +438,8 @@ export type TModule<K extends PropertyKey, D, R, C = D> = {
 };
 ```
 
+</details>
+
 - A module with no remaining keys takes no argument. A contract compatible
   with `{}` takes an optional dependency object; other contracts require it.
 - Every dependency field accepts a final value or a branded module created by
@@ -322,127 +478,7 @@ const ReadyAdd = WithLeft.provide({ right: 3 });
 console.log(ReadyAdd()); // 5
 console.log(ReadyAdd.name); // "Add"`} />
 
-## `Live<T>`
-
-Extracts a module's remaining requirements and adds its result under its
-declared key.
-
-```ts
-export type Live<T> = T extends {
-  name: infer K extends PropertyKey;
-  [__deps__]: Brand<infer D, infer R>;
-}
-  ? D & { [P in K]: R }
-  : never;
-```
-
-`Live` reads the module's existing private type marker directly, so it retains
-transitive requirements without recursively expanding the callable and its
-`.provide()` method.
-
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
-
-const Database = Module<{ url: string }>()('Database', ({ url }) => ({ url }));
-type DatabaseLive = Live<typeof Database>;
-
-const Repository = Module<DatabaseLive>()(
-  'Repository',
-  ({ Database }) => Database.url,
-);
-type RepositoryLive = Live<typeof Repository>;
-
-const App = Module<RepositoryLive>()('App', ({ Repository }) => Repository);
-
-console.log(App({ url: 'memory://db', Database, Repository }));
-// "memory://db"`} />
-
-## `ModuleLive`
-
-Describes the metadata produced by the default input transform:
-
-```ts
-export type ModuleLive = {
-  Module: { name: PropertyKey };
-};
-```
-
-Intersect it into an explicit dependency contract when the callback needs both
-application dependencies and the current module name.
-
-## `withModuleName`
-
-The default input transform:
-
-```ts
-type Generated<N extends PropertyKey = PropertyKey> = {
-  Module: { name: N };
-};
-
-type Each<D, K extends PropertyKey> = D extends unknown ? Omit<D, K> : never;
-
-export declare const withModuleName: <
-  D extends object,
-  const N extends PropertyKey
->(
-  deps: D,
-  name: N
-) => Each<D, 'Module'> & Generated<N>;
-```
-
-It assigns `{ Module: { name } }` to `deps` and returns that same object. The
-type preserves every other input field, preserves union branches, replaces a
-previous `Module` field, and keeps a literal string, number, or symbol name for
-direct calls.
-
-A custom input transform replaces this behavior unless it explicitly calls
-`withModuleName`.
-
-## `transformInput<D, P>`
-
-```ts
-export type transformInput<D extends object, P extends object> = <X extends D>(
-  deps: X,
-  name: PropertyKey
-) => X & P;
-```
-
-`D` is the minimum input domain and `P` describes added fields. The generic
-`X & P` result makes an ordinary transform preserve later dependency fields.
-Constrained transforms can be written inline as `<X extends Base>` or assigned
-an explicit `transformInput<Base, Added>` annotation. The caller-supplied
-portion of a module contract must still satisfy `Base`.
-
-Required inferred additions are removed from the module's caller requirements.
-Keys already known on the transform domain remain caller-supplied, while a new
-field can still be inferred when the domain has an open index signature. The
-compact types intentionally leave unusually ambiguous overlap and union-return
-diagnostics to the declared callback contract.
-
-Return an `HKT` marker when a transform intentionally replaces or wraps the
-callback input instead of preserving it.
-
-## `transformOutput<I, D, O>`
-
-```ts
-export type transformOutput<I, D, O> = (
-  result: I,
-  deps: D,
-  isRoot: boolean
-) => O;
-```
-
-It receives a successful callback result, that invocation's transformed input,
-and whether the call is the root resolution. A custom ordinary output transform
-constrains the callback result to `I` and makes the callable return `O`. A
-generic identity transform preserves each callback's inferred result. Return an
-output `HKT` when the callable type must be computed from its name, callback
-result, or remaining dependencies.
-
-The callback runs before `transformOutput`; this hook cannot catch a synchronous
-exception that the callback already threw and does not automatically await a
-rejected promise.
-
-## `HKT`
+### `HKT`
 
 The nominal base interface for higher-kinded transformations:
 
@@ -467,7 +503,7 @@ the declared key as `_NAME` and the declared dependency map as `_RESULT` and
 dependency map. The symbol marker prevents an ordinary `_NAME` field from being
 mistaken for an HKT.
 
-## `Kind<H, NAME, RESULT, DEPS, META, META2>`
+### `Kind<H, NAME, RESULT, DEPS, META, META2>`
 
 Applies concrete slots to an HKT:
 

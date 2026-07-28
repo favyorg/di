@@ -206,6 +206,33 @@ try {
   );
   await noScript.close();
 
+  await page.goto(`${origin}/reference/api/`, {
+    waitUntil: 'domcontentloaded',
+  });
+
+  for (const id of [
+    'module',
+    'makemodule',
+    'makeoptionsd-m-p-i-o',
+    'defaultmodulefactory',
+    'tmodulek-d-r-c--d',
+    'livet',
+    'modulelive',
+    'withmodulename',
+    'transforminputd-p',
+    'transformoutputi-d-o',
+    'hkt',
+    'kindh-name-result-deps-meta-meta2',
+  ]) {
+    assert.equal(await page.locator(`#${id}`).count(), 1, `Missing #${id}`);
+  }
+
+  assert.equal(await page.locator('.api-index').count(), 1);
+  assert.equal(await page.locator('h2#common-api').count(), 1);
+  assert.equal(await page.locator('h2#factory-configuration').count(), 1);
+  assert.equal(await page.locator('h2#advanced-types').count(), 1);
+  assert.equal(await page.locator('details.api-declaration').count(), 2);
+
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('.docs-page-title').count(), 0);
   assert.equal(await page.locator('.home-workbench').count(), 1);
