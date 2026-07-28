@@ -23,6 +23,23 @@ html:not([data-has-hero]) {
   --sl-content-width: 45rem;
 }
 
+@media (max-width: 49.999rem) {
+  html:not([data-has-hero]) {
+    --sl-menu-button-size: 2.75rem;
+  }
+
+  html:not([data-has-hero]) .sidebar-pane a {
+    min-block-size: 2.75rem;
+    align-content: center;
+  }
+
+  html:not([data-has-hero]) .sidebar-pane summary,
+  html:not([data-has-hero]) mobile-starlight-toc .dropdown a {
+    min-block-size: 2.75rem;
+    align-items: center;
+  }
+}
+
 html:not([data-has-hero]) body {
   background-color: var(--docs-surface);
 }

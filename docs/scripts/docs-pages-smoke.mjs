@@ -9,6 +9,13 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 
+const assertMinimumTargetSize = async (locator, label) => {
+  const box = await locator.boundingBox();
+  assert.ok(box, `${label} should be visible`);
+  assert.ok(box.width >= 44, `${label} width was ${box.width}px`);
+  assert.ok(box.height >= 44, `${label} height was ${box.height}px`);
+};
+
 try {
   await page.goto(`${origin}/guides/introduction/`, {
     waitUntil: 'domcontentloaded',
@@ -51,6 +58,37 @@ try {
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('.docs-page-title').count(), 0);
   assert.equal(await page.locator('.home-workbench').count(), 1);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${origin}/guides/introduction/`, {
+    waitUntil: 'domcontentloaded',
+  });
+
+  const menuButton = page.locator('starlight-menu-button button');
+  await assertMinimumTargetSize(menuButton, 'Mobile menu button');
+  await menuButton.click();
+  await page.waitForFunction(() =>
+    document.body.hasAttribute('data-mobile-menu-expanded'),
+  );
+
+  await assertMinimumTargetSize(
+    page.locator('.sidebar-pane a[aria-current="page"]'),
+    'Current sidebar link',
+  );
+  await assertMinimumTargetSize(
+    page.locator('.sidebar-pane summary').first(),
+    'Sidebar group summary',
+  );
+
+  await menuButton.click();
+  await page.waitForFunction(
+    () => !document.body.hasAttribute('data-mobile-menu-expanded'),
+  );
+  await page.locator('mobile-starlight-toc summary').click();
+  await assertMinimumTargetSize(
+    page.locator('mobile-starlight-toc .dropdown a').first(),
+    'Mobile table of contents link',
+  );
 } finally {
   await browser.close();
 }
