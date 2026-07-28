@@ -20,6 +20,17 @@ Replacing a direct dependency is not universally better than replacing a transit
 
 This Jest test keeps `UserApi` real and replaces its direct `HttpClient` dependency:
 
+<dl class="example-contract">
+  <dt>Boundary</dt>
+  <dd>UserApi</dd>
+  <dt>Kept real</dt>
+  <dd>UserApi</dd>
+  <dt>Replaced</dt>
+  <dd>HttpClient</dd>
+  <dt>Proves</dt>
+  <dd>Returned user and requested URL</dd>
+</dl>
+
 <Editor client:load code={`import { describe, expect, it } from '@jest/globals';
 import { Module } from '@favy/di';
 
@@ -65,6 +76,17 @@ The fake implements the same interface as the production client, so TypeScript c
 
 This test keeps `UserRepository` and `UserService` real. Only the database boundary is fake, so the test covers dependency flow across both modules:
 
+<dl class="example-contract">
+  <dt>Boundary</dt>
+  <dd>Database</dd>
+  <dt>Kept real</dt>
+  <dd>UserRepository → UserService</dd>
+  <dt>Replaced</dt>
+  <dd>Database</dd>
+  <dt>Proves</dt>
+  <dd>Service output and forwarded user ID</dd>
+</dl>
+
 <Editor client:load code={`import { describe, expect, it } from '@jest/globals';
 import { Module, type Live } from '@favy/di';
 
@@ -104,6 +126,17 @@ real repository forwarded the boundary argument.
 ## Reusable Fixtures with `.provide()`
 
 Use `.provide()` when many tests share the same dependency implementation. Keep mutable observations outside the fake so each fixture owns its state:
+
+<dl class="example-contract">
+  <dt>Boundary</dt>
+  <dd>Mailer</dd>
+  <dt>Kept real</dt>
+  <dd>WelcomeMessage</dd>
+  <dt>Replaced</dt>
+  <dd>Mailer via .provide()</dd>
+  <dt>Proves</dt>
+  <dd>Message payload and isolated fixture state</dd>
+</dl>
 
 <Editor client:load code={`import { describe, expect, it } from '@jest/globals';
 import { Module } from '@favy/di';
@@ -149,6 +182,17 @@ Create a fresh fixture in each test unless shared state is intentional.
 
 `cache: 'module'` retains results in one `makeModule` factory. Flush that factory before each test:
 
+<dl class="example-contract">
+  <dt>Boundary</dt>
+  <dd>CachedModule factory</dd>
+  <dt>Kept real</dt>
+  <dd>Counter</dd>
+  <dt>Replaced</dt>
+  <dd>Nothing; the owned cache is reset</dd>
+  <dt>Proves</dt>
+  <dd>One initialization per test</dd>
+</dl>
+
 <Editor client:load code={`import { beforeEach, describe, expect, it } from '@jest/globals';
 import { makeModule } from '@favy/di';
 
@@ -185,6 +229,17 @@ and normally needs no cross-test reset.
 
 Do not destructure a conditionally used dependency before the condition you want
 to test. Access it through the dependency object inside the branch:
+
+<dl class="example-contract">
+  <dt>Boundary</dt>
+  <dd>ExpensiveFeature access</dd>
+  <dt>Kept real</dt>
+  <dd>App and ExpensiveFeature</dd>
+  <dt>Replaced</dt>
+  <dd>Nothing; initialization is observed</dd>
+  <dt>Proves</dt>
+  <dd>The disabled branch stays lazy and the enabled branch resolves once</dd>
+</dl>
 
 <Editor client:load code={`import { describe, expect, it } from '@jest/globals';
 import { Module, type Live } from '@favy/di';

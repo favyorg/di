@@ -206,6 +206,15 @@ try {
   );
   await noScript.close();
 
+  await page.goto(`${origin}/guides/testing/`, {
+    waitUntil: 'domcontentloaded',
+  });
+  assert.equal(await page.locator('dl.example-contract').count(), 5);
+  assert.deepEqual(
+    await page.locator('dl.example-contract dt').allTextContents(),
+    Array(5).fill(['Boundary', 'Kept real', 'Replaced', 'Proves']).flat(),
+  );
+
   await page.goto(`${origin}/reference/api/`, {
     waitUntil: 'domcontentloaded',
   });
