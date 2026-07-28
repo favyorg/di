@@ -68,47 +68,38 @@ This test keeps `UserRepository` and `UserService` real. Only the database bound
 <Editor client:load code={`import { describe, expect, it } from '@jest/globals';
 import { Module, type Live } from '@favy/di';
 
-interface User {
-  id: number;
-  name: string;
-}
-
 interface Database {
-  findUser: (id: number) => Promise<User | undefined>;
+  findUser: (id: number) => { name: string } | undefined;
 }
 
-const UserRepository = Module<{ database: Database }>()(
-  'UserRepository',
-  ({ database }) => ({
-    findById: (id: number) => database.findUser(id),
-  }),
-);
+const UserRepository = Module<{ database: Database }>()('UserRepository', ({ database }) => ({
+  findById: (id: number) => database.findUser(id),
+}));
 type UserRepositoryLive = Live<typeof UserRepository>;
 
-const UserService = Module<UserRepositoryLive>()(
-  'UserService',
-  ({ UserRepository }) => ({
-    getDisplayName: async (id: number) => {
-      const user = await UserRepository.findById(id);
-      return user?.name ?? 'Unknown user';
-    },
-  }),
-);
+const UserService = Module<UserRepositoryLive>()('UserService', ({ UserRepository }) => ({
+  getDisplayName: (id: number) => UserRepository.findById(id)?.name ?? 'Unknown user',
+}));
 
 describe('UserService integration', () => {
-  it('resolves the repository through a fake database boundary', async () => {
-    const fakeDatabase: Database = {
-      findUser: async (id) => ({ id, name: 'Ada' }),
+  it('passes the user ID through the real repository', () => {
+    const requestedIds: number[] = [];
+    const database: Database = {
+      findUser: (id) => {
+        requestedIds.push(id);
+        return { name: 'User ' + id };
+      },
     };
 
-    const service = UserService({
-      database: fakeDatabase,
-      UserRepository,
-    });
+    const service = UserService({ database, UserRepository });
 
-    await expect(service.getDisplayName(7)).resolves.toBe('Ada');
+    expect(service.getDisplayName(7)).toBe('User 7');
+    expect(requestedIds).toEqual([7]);
   });
 });`} />
+
+The result assertion proves the service output, while `requestedIds` proves the
+real repository forwarded the boundary argument.
 
 ## Reusable Fixtures with `.provide()`
 
@@ -172,18 +163,28 @@ beforeEach(() => {
 });
 
 describe('Counter', () => {
-  it('reuses a value until the factory cache is flushed', () => {
+  it('reuses a value within one test', () => {
+    expect(Counter()).toBe(1);
+    expect(Counter()).toBe(1);
+    expect(initializationCount).toBe(1);
+  });
+
+  it('starts the next test with an empty factory cache', () => {
     expect(Counter()).toBe(1);
     expect(Counter()).toBe(1);
     expect(initializationCount).toBe(1);
   });
 });`} />
 
-The default `cache: 'run'` starts a fresh cache for every top-level call, so it normally needs no cross-test reset.
+The second test also expects one initialization. If `flushCache()` is removed,
+the cached value survives while the counter is reset to zero, so that assertion
+fails. The default `cache: 'run'` starts a fresh cache for every top-level call
+and normally needs no cross-test reset.
 
 ## Verify Lazy Access
 
-Do not destructure an optional dependency before the condition you want to test. Access it through the dependency object inside the branch:
+Do not destructure a conditionally used dependency before the condition you want
+to test. Access it through the dependency object inside the branch:
 
 <Editor client:load code={`import { describe, expect, it } from '@jest/globals';
 import { Module, type Live } from '@favy/di';
