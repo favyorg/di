@@ -80,6 +80,14 @@ html:not([data-has-hero])
 
 html:not([data-has-hero])
   .sl-markdown-content
+  details
+  > summary:not(:where(.not-content *)) {
+  min-block-size: 2.75rem;
+  align-content: center;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
   details:not([open]):hover:not(:where(.not-content *)),
 html:not([data-has-hero])
   .sl-markdown-content
@@ -203,6 +211,7 @@ html:not([data-has-hero])
 html:not([data-has-hero]) .sl-markdown-content .api-index a {
   display: inline-flex;
   align-items: center;
+  min-block-size: 2.75rem;
   border: 1px solid var(--docs-border);
   border-radius: 999px;
   padding: 0.4rem 0.7rem;
@@ -263,7 +272,7 @@ html:not([data-has-hero])
 
 html:not([data-has-hero]) .sl-markdown-content .example-contract dt {
   border-inline-end: 1px solid var(--docs-border);
-  color: var(--docs-secondary);
+  color: var(--sl-color-white);
   background-color: color-mix(
     in srgb,
     var(--docs-secondary) 8%,

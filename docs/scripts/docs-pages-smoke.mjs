@@ -55,6 +55,82 @@ try {
   assert.ok(typography.lineHeight / typography.fontSize >= 1.65);
   assert.ok(typography.headingMargin >= 40);
 
+  await page.locator('.sl-markdown-content').evaluate((content) => {
+    const fixture = document.createElement('div');
+    fixture.dataset.smokeContentPrimitives = '';
+    fixture.innerHTML = `
+      <nav class="api-index" aria-label="API symbols">
+        <strong>Common API</strong>
+        <a href="#module">Module</a>
+      </nav>
+      <details class="api-declaration">
+        <summary>Full declaration</summary>
+        <p>Declaration</p>
+      </details>
+      <dl class="example-contract">
+        <dt>Boundary</dt>
+        <dd>UserApi</dd>
+      </dl>
+    `;
+    content.append(fixture);
+  });
+
+  const contentPrimitives = page.locator('[data-smoke-content-primitives]');
+  await assertMinimumTargetSize(
+    contentPrimitives.locator('.api-index a'),
+    'API index link',
+  );
+  await assertMinimumTargetSize(
+    contentPrimitives.locator('details > summary'),
+    'Content details summary',
+  );
+
+  const originalTheme = await page.locator('html').getAttribute('data-theme');
+  for (const theme of ['dark', 'light']) {
+    await page.locator('html').evaluate((element, value) => {
+      element.setAttribute('data-theme', value);
+    }, theme);
+    const contrast = await contentPrimitives
+      .locator('.example-contract dt')
+      .evaluate((term) => {
+        const channels = (value) => {
+          const values = value.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+          if (!values) throw new Error(`Unsupported color: ${value}`);
+          return value.startsWith('color(srgb')
+            ? values
+            : values.map((channel) => channel / 255);
+        };
+        const luminance = (value) =>
+          channels(value)
+            .map((channel) =>
+              channel <= 0.04045
+                ? channel / 12.92
+                : ((channel + 0.055) / 1.055) ** 2.4,
+            )
+            .reduce(
+              (sum, channel, index) =>
+                sum + channel * [0.2126, 0.7152, 0.0722][index],
+              0,
+            );
+        const style = getComputedStyle(term);
+        const foreground = luminance(style.color);
+        const background = luminance(style.backgroundColor);
+        return (
+          (Math.max(foreground, background) + 0.05) /
+          (Math.min(foreground, background) + 0.05)
+        );
+      });
+    assert.ok(
+      contrast >= 4.5,
+      `Example contract term ${theme} contrast was ${contrast.toFixed(2)}:1`,
+    );
+  }
+  await page.locator('html').evaluate((element, theme) => {
+    if (theme) element.setAttribute('data-theme', theme);
+    else element.removeAttribute('data-theme');
+  }, originalTheme);
+  await contentPrimitives.evaluate((fixture) => fixture.remove());
+
   await page.waitForSelector('.monaco-editor', { timeout: 15_000 });
 
   const editorSurface = await page
