@@ -209,10 +209,82 @@ try {
   await page.goto(`${origin}/guides/testing/`, {
     waitUntil: 'domcontentloaded',
   });
-  assert.equal(await page.locator('dl.example-contract').count(), 5);
+
+  const expectedTestingContracts = [
+    [
+      ['Boundary', 'UserApi'],
+      ['Kept real', 'UserApi'],
+      ['Replaced', 'HttpClient'],
+      ['Proves', 'Returned user and requested URL'],
+    ],
+    [
+      ['Boundary', 'Database'],
+      ['Kept real', 'UserRepository → UserService'],
+      ['Replaced', 'Database'],
+      ['Proves', 'Service output and forwarded user ID'],
+    ],
+    [
+      ['Boundary', 'Mailer'],
+      ['Kept real', 'WelcomeMessage'],
+      ['Replaced', 'Mailer via .provide()'],
+      ['Proves', 'Message payload and isolated fixture state'],
+    ],
+    [
+      ['Boundary', 'CachedModule factory'],
+      ['Kept real', 'Counter'],
+      ['Replaced', 'Nothing; the owned cache is reset'],
+      ['Proves', 'One initialization per test'],
+    ],
+    [
+      ['Boundary', 'ExpensiveFeature access'],
+      ['Kept real', 'App and ExpensiveFeature'],
+      ['Replaced', 'Nothing; initialization is observed'],
+      [
+        'Proves',
+        'The disabled branch stays lazy and the enabled branch resolves once',
+      ],
+    ],
+  ];
+  const testingContracts = await page
+    .locator('dl.example-contract')
+    .evaluateAll((contracts) =>
+      contracts.map((contract, contractIndex) => {
+        let editor = contract.nextElementSibling;
+        if (
+          contractIndex === 0 &&
+          editor?.tagName === 'STYLE' &&
+          editor.nextElementSibling?.tagName === 'SCRIPT'
+        ) {
+          editor = editor.nextElementSibling.nextElementSibling;
+        }
+        const elements = [...contract.children];
+        return {
+          pairs: Array.from(
+            { length: Math.ceil(elements.length / 2) },
+            (_, pairIndex) => {
+              const label = elements[pairIndex * 2];
+              const value = elements[pairIndex * 2 + 1];
+              return [
+                label?.tagName,
+                label?.textContent?.trim(),
+                value?.tagName,
+                value?.textContent?.trim(),
+              ];
+            },
+          ),
+          adjacentEditor:
+            editor?.matches(
+              "astro-island[component-export='Editor']",
+            ) ?? false,
+        };
+      }),
+    );
   assert.deepEqual(
-    await page.locator('dl.example-contract dt').allTextContents(),
-    Array(5).fill(['Boundary', 'Kept real', 'Replaced', 'Proves']).flat(),
+    testingContracts,
+    expectedTestingContracts.map((pairs) => ({
+      pairs: pairs.map(([label, value]) => ['DT', label, 'DD', value]),
+      adjacentEditor: true,
+    })),
   );
 
   await page.goto(`${origin}/reference/api/`, {
