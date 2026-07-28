@@ -77,7 +77,7 @@ const Greeting = StringBoxModule()('Greeting', () => 'hello');
 const box = Greeting();
 
 const message: string = box.value;
-console.log(box.value); // "hello"`} />
+console.log(message); // "hello"`} />
 
 Because this transform accepts `string`, a module callback returning an object or number is rejected. For observation that returns the input unchanged, use a generic identity transform; the callable then preserves each callback's inferred result type:
 

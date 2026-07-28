@@ -139,7 +139,7 @@ they are not additional package exports.
 
 <Editor client:load code={`import { makeModule } from '@favy/di';
 
-const SingletonModule = makeModule({ cache: 'module', lazy: true });
+const SingletonModule = makeModule({ cache: 'module' });
 
 let runs = 0;
 const Counter = SingletonModule()('Counter', () => ++runs);
