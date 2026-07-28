@@ -33,51 +33,44 @@ Small modules are easier to replace, but avoid splitting code merely to increase
 
 ## Keep Dependency Boundaries Explicit
 
-Use interfaces for infrastructure or application ports. Use `Live<typeof Module>` when another module depends on a concrete module in the graph.
+Use an interface for a replaceable port:
+
+<Editor client:load code={`import { Module } from '@favy/di';
+
+interface ClockPort {
+  now: () => number;
+}
+
+const Timestamp = Module<{ Clock: ClockPort }>()(
+  'Timestamp',
+  ({ Clock }) => Clock.now(),
+);
+
+const fakeClock: ClockPort = { now: () => 123 };
+
+console.log(Timestamp({ Clock: fakeClock })); // 123`} />
+
+Use an interface when the dependency is an external or application boundary
+that callers should replace without knowing a concrete module.
+
+Use `Live<typeof Module>` when the dependency is a concrete provider in the
+application graph:
 
 <Editor client:load code={`import { Module, type Live } from '@favy/di';
 
-interface User {
-  id: number;
-  name: string;
-}
-
-const Database = Module<{ connectionName: string }>()(
-  'Database',
-  ({ connectionName }) => ({
-    findUser: async (id: number): Promise<User> => ({
-      id,
-      name: connectionName + '-user-' + id,
-    }),
-  }),
+const Config = Module<{ environment: 'dev' | 'prod' }>()(
+  'Config',
+  ({ environment }) => ({ environment }),
 );
-type DatabaseLive = Live<typeof Database>;
+type ConfigLive = Live<typeof Config>;
 
-const UserRepository = Module<DatabaseLive>()(
-  'UserRepository',
-  ({ Database }) => ({
-    findById: (id: number) => Database.findUser(id),
-  }),
-);
-type UserRepositoryLive = Live<typeof UserRepository>;
-
-const UserService = Module<UserRepositoryLive>()(
-  'UserService',
-  ({ UserRepository }) => ({
-    getDisplayName: async (id: number) => {
-      const user = await UserRepository.findById(id);
-      return user.name;
-    },
-  }),
+const ApiUrl = Module<ConfigLive>()(
+  'ApiUrl',
+  ({ Config }) => 'https://' + Config.environment + '.example.com',
 );
 
-const service = UserService({
-  connectionName: 'primary',
-  Database,
-  UserRepository,
-});
-
-void service.getDisplayName(1);`} />
+console.log(ApiUrl({ environment: 'dev', Config }));
+// "https://dev.example.com"`} />
 
 Keep dependency flow in one direction, for example infrastructure → repositories → services → entry points. A cycle makes initialization order and replacement boundaries difficult to reason about; extract the shared capability behind a lower-level interface instead. If resolution reads a provider key that is already being resolved, the runtime stops and throws `Circular dependency: <key>`.
 
@@ -91,29 +84,27 @@ The default `cache: 'run'` reuses dependencies during one top-level module call.
 
 <Editor client:load code={`import { Module, type Live } from '@favy/di';
 
+let contextCreationCount = 0;
 const RequestContext = Module<{ requestId: string }>()(
   'RequestContext',
-  ({ requestId }) => ({
-    id: requestId,
-    startedAt: Date.now(),
-  }),
+  ({ requestId }) => requestId + ':' + ++contextCreationCount,
 );
 type RequestContextLive = Live<typeof RequestContext>;
 
-const RequestHandler = Module<RequestContextLive>()(
-  'RequestHandler',
-  ({ RequestContext }) => ({
-    handle: () => ({
-      requestId: RequestContext.id,
-      startedAt: RequestContext.startedAt,
-    }),
-  }),
+const ReadContextTwice = Module<RequestContextLive>()(
+  'ReadContextTwice',
+  ($) => [$.RequestContext, $.RequestContext] as const,
 );
 
-export const handleRequest = (requestId: string) =>
-  RequestHandler({ requestId, RequestContext }).handle();`} />
+console.log(ReadContextTwice({ requestId: 'a', RequestContext }));
+// ["a:1", "a:1"]
+console.log(ReadContextTwice({ requestId: 'b', RequestContext }));
+// ["b:2", "b:2"]
+console.log(contextCreationCount); // 2`} />
 
-Calling `RequestHandler` twice creates two runs. @favy/di does not infer an HTTP request boundary on its own.
+The two reads in one root call share a provider result. The second root call
+creates a new run and a new context. With `cache: 'none'`, the two values inside
+each pair would differ.
 
 ### `module`: One Factory-Wide Cache
 
@@ -161,34 +152,41 @@ interface UserRepositoryPort {
   findById: (id: number) => Promise<User | undefined>;
 }
 
-type Result<T> = { ok: true; value: T } | { ok: false; error: Error };
+class RepositoryUnavailable extends Error {}
 
-const UserService = Module<{
-  UserRepository: UserRepositoryPort;
-}>()('UserService', ({ UserRepository }) => ({
-  getUser: async (id: number): Promise<Result<User>> => {
+type Result<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: 'not-found' | 'unavailable' };
+
+const GetUser = Module<{ UserRepository: UserRepositoryPort }>()(
+  'GetUser',
+  ({ UserRepository }) => async (id: number): Promise<Result<User>> => {
     try {
       const user = await UserRepository.findById(id);
-      if (!user) {
-        return {
-          ok: false,
-          error: new Error('User not found: ' + id),
-        };
-      }
-      return { ok: true, value: user };
+      return user ? { ok: true, value: user } : { ok: false, error: 'not-found' };
     } catch (error: unknown) {
-      return {
-        ok: false,
-        error:
-          error instanceof Error
-            ? error
-            : new Error('Unknown repository error'),
-      };
+      if (!(error instanceof RepositoryUnavailable)) throw error;
+      return { ok: false, error: 'unavailable' };
     }
   },
-}));`} />
+);
 
-`transformOutput` receives a value after the module body returns. It can validate or wrap successful values, but it cannot catch an exception already thrown by the module body, and it does not await a rejected promise automatically.
+const getUser = GetUser({
+  UserRepository: {
+    findById: async () => {
+      throw new RepositoryUnavailable();
+    },
+  },
+});
+
+void getUser(1).then(console.log);
+// { ok: false, error: "unavailable" }`} />
+
+Only the declared infrastructure failure becomes a domain result. Unknown
+exceptions are rethrown because this boundary does not know how to recover from
+them. `transformOutput` receives a value after the module body returns; it
+cannot catch an exception already thrown by the module body and does not await
+a rejected promise automatically.
 
 ## Build Test Helpers Around Instance State
 
@@ -196,37 +194,22 @@ Keep observations in the object returned by a mock factory. Do not attach per-te
 
 <Editor client:load code={`import { Module } from '@favy/di';
 
-interface LoggerPort {
-  info: (message: string) => void;
-  error: (message: string) => void;
-}
+type LoggerPort = { info: (message: string) => void };
 
-const Audit = Module<{ Logger: LoggerPort }>()('Audit', ({ Logger }) => ({
-  recordLogin: (userId: number) => {
-    Logger.info('login:' + userId);
-  },
-}));
+const Audit = Module<{ Logger: LoggerPort }>()('Audit', ({ Logger }) => Logger.info);
 
 const createMockLogger = () => {
   const logs: string[] = [];
-  const errors: string[] = [];
-
   return {
     logs,
-    errors,
-    info: (message: string) => {
-      logs.push(message);
-    },
-    error: (message: string) => {
-      errors.push(message);
-    },
+    info: (message: string) => logs.push(message),
   };
 };
 
-const mockLogger = createMockLogger();
-Audit({ Logger: mockLogger }).recordLogin(7);
+const logger = createMockLogger();
+Audit({ Logger: logger })('login:7');
 
-console.log(mockLogger.logs); // ['login:7']`} />
+console.log(logger.logs); // ['login:7']`} />
 
 For complete unit and integration examples, see [Testing](/guides/testing/).
 
