@@ -1,0 +1,1392 @@
+---
+const installCommand = 'npm install @favy/di';
+const quickStart = [
+  "import { Module, type Live } from '@favy/di';",
+  '',
+  "const Clock = Module()('Clock', () => ({",
+  '  now: () => new Date(),',
+  '}));',
+  'type ClockLive = Live<typeof Clock>;',
+  '',
+  'const Greeting = Module<ClockLive>()(',
+  "  'Greeting',",
+  '  ({ Clock }) => ({',
+  "    message: () => 'Hello at ' + Clock.now().toISOString(),",
+  '  }),',
+  ');',
+  '',
+  'Greeting({ Clock }).message();',
+].join('\n');
+
+const proofPoints = [
+  { value: '0', label: 'decorators' },
+  { value: 'Typed', label: 'end to end' },
+  { value: 'Lazy', label: 'by default' },
+  { value: 'Replaceable', label: 'boundaries' },
+];
+
+const steps = [
+  {
+    number: '01',
+    title: 'Define',
+    copy: 'A module is a named function with a typed input and output.',
+  },
+  {
+    number: '02',
+    title: 'Compose',
+    copy: "ClockLive names Clock's output for reuse as a typed dependency.",
+  },
+  {
+    number: '03',
+    title: 'Run',
+    copy: 'Supply implementations at the boundary and call the resulting graph.',
+  },
+];
+
+const capabilities = [
+  {
+    label: 'Graph',
+    title: 'Dependencies stay explicit',
+    copy: 'Read the contract at the function boundary. TypeScript verifies every connection.',
+    links: [{ href: '/module/module/', label: 'Module model' }],
+  },
+  {
+    label: 'Lifetime',
+    title: 'Cache on your terms',
+    copy: 'Choose run, module, or no caching without changing the consumer.',
+    links: [{ href: '/module/cache/', label: 'Caching' }],
+  },
+  {
+    label: 'Resolution',
+    title: 'Initialize only when used',
+    copy: 'Dependencies resolve lazily by default, including deep inside the graph.',
+    links: [{ href: '/module/lazy/', label: 'Lazy initialization' }],
+  },
+  {
+    label: 'Composition',
+    title: 'Preconfigure a boundary',
+    copy: 'Provide part of a graph once, then expose only what the caller should supply.',
+    links: [{ href: '/module/partial/', label: 'Partial application' }],
+  },
+  {
+    label: 'Testing',
+    title: 'Replace values, not machinery',
+    copy: 'Pass a small fake at the same typed boundary—there is no container to reset.',
+    links: [{ href: '/guides/testing/', label: 'Testing guide' }],
+  },
+  {
+    label: 'Advanced',
+    title: 'Shape the edges',
+    copy: 'Transform input and output while preserving inference through the graph.',
+    links: [
+      { href: '/module/transform-input/', label: 'Input' },
+      { href: '/module/transform-output/', label: 'Output' },
+    ],
+  },
+];
+
+const paths = [
+  {
+    number: '01',
+    title: 'Start',
+    copy: 'Build the first graph and learn the core mental model.',
+    links: [
+      { href: '/guides/introduction/', label: 'Introduction' },
+      { href: '/module/module/', label: 'Module' },
+    ],
+  },
+  {
+    number: '02',
+    title: 'Build',
+    copy: 'Control when dependencies resolve and how long values live.',
+    links: [
+      { href: '/module/cache/', label: 'Caching' },
+      { href: '/module/lazy/', label: 'Lazy' },
+      { href: '/module/partial/', label: 'Partial' },
+    ],
+  },
+  {
+    number: '03',
+    title: 'Test',
+    copy: 'Design replaceable boundaries and keep each test isolated.',
+    links: [
+      { href: '/guides/testing/', label: 'Testing' },
+      { href: '/guides/best-practices/', label: 'Best practices' },
+    ],
+  },
+  {
+    number: '04',
+    title: 'Extend',
+    copy: 'Use transformations and exact signatures when the graph gets advanced.',
+    links: [
+      { href: '/module/transform-input/', label: 'Transform input' },
+      { href: '/module/transform-output/', label: 'Transform output' },
+      { href: '/reference/api/', label: 'API reference' },
+    ],
+  },
+];
+---
+
+<div class="home not-content">
+  <div class="home-workbench">
+    <div class="workbench-grid">
+      <div class="hero-copy">
+        <p class="eyebrow">
+          <span aria-hidden="true"></span>v3 · TypeScript-first DI
+        </p>
+        <div class="hero-title" aria-hidden="true">
+          Dependency graphs, just typed functions.
+        </div>
+        <p class="hero-lede">
+          Explicit dependencies. Replaceable boundaries. No decorators,
+          reflection, or container ceremony.
+        </p>
+
+        <div class="hero-actions">
+          <a class="button button-primary" href="/guides/introduction/">
+            Get started <span aria-hidden="true">→</span>
+          </a>
+          <a class="button button-secondary" href="/reference/api/">
+            API reference
+          </a>
+        </div>
+
+        <div class="install-row" aria-label="Install @favy/di">
+          <span class="terminal-mark" aria-hidden="true">$</span>
+          <code>{installCommand}</code>
+          <button
+            class="copy-button"
+            type="button"
+            data-copy
+            data-copy-state="idle"
+            data-copy-value={installCommand}
+            aria-label="Copy install command"
+            data-copy-success-label="Install command copied"
+            data-copy-error-label="Could not copy install command"
+            hidden
+          >
+            <svg aria-hidden="true" viewBox="0 0 20 20">
+              <rect x="7" y="7" width="9" height="9" rx="2"></rect>
+              <path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"
+              ></path>
+            </svg>
+            <span data-copy-label aria-live="polite">Copy</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="demo-panel">
+        <div class="panel-bar">
+          <div class="window-dots" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <span class="panel-file">greeting.ts</span>
+          <button
+            class="copy-button code-copy"
+            type="button"
+            data-copy
+            data-copy-state="idle"
+            data-copy-value={quickStart}
+            aria-label="Copy quick start code"
+            data-copy-success-label="Quick start code copied"
+            data-copy-error-label="Could not copy quick start code"
+            hidden
+          >
+            <svg aria-hidden="true" viewBox="0 0 20 20">
+              <rect x="7" y="7" width="9" height="9" rx="2"></rect>
+              <path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"
+              ></path>
+            </svg>
+            <span data-copy-label aria-live="polite">Copy</span>
+          </button>
+        </div>
+
+        <pre
+          class="code-block"
+          tabindex="0"
+          aria-label="TypeScript quick start"><code><span class="code-line"><span class="token-keyword">import</span> &#123; <span class="token-type">Module</span>, <span class="token-keyword">type</span> <span class="token-type">Live</span> &#125; <span class="token-keyword">from</span> <span class="token-string">'@favy/di'</span>;</span>
+<span class="code-line" />
+<span class="code-line"><span class="token-keyword">const</span> <span class="token-name">Clock</span> = <span class="token-call">Module</span>()(<span class="token-string">'Clock'</span>, () =&gt; (&#123;</span>
+<span class="code-line">  <span class="token-property">now</span>: () =&gt; <span class="token-keyword">new</span> <span class="token-call">Date</span>(),</span>
+<span class="code-line">&#125;));</span>
+<span class="code-line"><span class="token-keyword">type</span> <span class="token-type">ClockLive</span> = <span class="token-type">Live</span>&lt;<span class="token-keyword">typeof</span> <span class="token-name">Clock</span>&gt;;</span>
+<span class="code-line" />
+<span class="code-line"><span class="token-keyword">const</span> <span class="token-name">Greeting</span> = <span class="token-call">Module</span>&lt;<span class="token-type">ClockLive</span>&gt;()(</span>
+<span class="code-line">  <span class="token-string">'Greeting'</span>,</span>
+<span class="code-line">  (&#123; <span class="token-name">Clock</span> &#125;) =&gt; (&#123;</span>
+<span class="code-line">    <span class="token-property">message</span>: () =&gt; <span class="token-string">'Hello at '</span> + <span class="token-name">Clock</span>.<span class="token-call">now</span>().<span class="token-call">toISOString</span>(),</span>
+<span class="code-line">  &#125;),</span>
+<span class="code-line">);</span>
+<span class="code-line" />
+<span class="code-line"><span class="token-call">Greeting</span>(&#123; <span class="token-name">Clock</span> &#125;).<span class="token-call">message</span>();</span></code></pre>
+        <span class="scroll-hint" aria-hidden="true">Swipe code →</span>
+
+        <div class="graph-panel">
+          <div class="module-graph" aria-hidden="true">
+            <div class="graph-node">
+              <span>module</span>
+              <strong>Clock</strong>
+            </div>
+            <div class="graph-edge">
+              <span>provides</span>
+              <svg viewBox="0 0 56 12">
+                <path d="M1 6h50"></path>
+                <path d="m47 2 4 4-4 4"></path>
+              </svg>
+            </div>
+            <div class="graph-node graph-node-accent">
+              <span>module</span>
+              <strong>Greeting</strong>
+            </div>
+            <div class="graph-edge">
+              <span>returns</span>
+              <svg viewBox="0 0 56 12">
+                <path d="M1 6h50"></path>
+                <path d="m47 2 4 4-4 4"></path>
+              </svg>
+            </div>
+            <div class="graph-node">
+              <span>value</span>
+              <strong>message()</strong>
+            </div>
+          </div>
+          <p>
+            <code>Clock</code> is resolved when <code>Greeting</code> uses it. Types
+            verify the connection before the graph runs.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <ul class="proof-strip" aria-label="Library characteristics">
+      {
+        proofPoints.map(({ value, label }) => (
+          <li>
+            <strong>{value}</strong>
+            <span>{label}</span>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+
+  <section class="home-section model-section" aria-labelledby="model-title">
+    <div class="section-intro">
+      <p class="section-label">One mental model</p>
+      <h2 id="model-title">The graph is the configuration.</h2>
+      <p>
+        Each edge is an ordinary TypeScript contract. Follow it in the code,
+        replace it in a test, or preconfigure it for the next caller.
+      </p>
+      <div class="text-links">
+        <a href="/guides/introduction/">Read the introduction <span>→</span></a>
+        <a href="/module/module/">Explore Module <span>→</span></a>
+      </div>
+    </div>
+
+    <ol class="steps">
+      {
+        steps.map(({ number, title, copy }) => (
+          <li>
+            <span class="step-number">{number}</span>
+            <div>
+              <h3>{title}</h3>
+              <p>{copy}</p>
+            </div>
+          </li>
+        ))
+      }
+    </ol>
+  </section>
+
+  <section class="home-section" aria-labelledby="capabilities-title">
+    <div class="section-heading">
+      <div>
+        <p class="section-label">Small API, deliberate control</p>
+        <h2 id="capabilities-title">Only the machinery your graph needs.</h2>
+      </div>
+      <p>
+        Start with typed functions. Add lifetime and transformation rules at the
+        boundary where they matter.
+      </p>
+    </div>
+
+    <div class="capability-grid">
+      {
+        capabilities.map(({ label, title, copy, links }) => (
+          <article class="capability-card">
+            <span class="card-label">{label}</span>
+            <h3>{title}</h3>
+            <p>{copy}</p>
+            <div class="card-links">
+              {links.map(({ href, label: linkLabel }) => (
+                <a href={href}>
+                  {linkLabel} <span aria-hidden="true">→</span>
+                </a>
+              ))}
+            </div>
+          </article>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="home-section paths-section" aria-labelledby="paths-title">
+    <div class="section-heading">
+      <div>
+        <p class="section-label">Documentation paths</p>
+        <h2 id="paths-title">Go straight to the work at hand.</h2>
+      </div>
+      <p>
+        The core stays small. Pick a path when you need the next layer of
+        control.
+      </p>
+    </div>
+
+    <div class="path-grid">
+      {
+        paths.map(({ number, title, copy, links }) => (
+          <article class="path-card">
+            <span class="path-number">{number}</span>
+            <div class="path-copy">
+              <h3>{title}</h3>
+              <p>{copy}</p>
+              <div class="path-links">
+                {links.map(({ href, label }) => (
+                  <a href={href}>{label}</a>
+                ))}
+              </div>
+            </div>
+          </article>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="closing-panel" aria-labelledby="closing-title">
+    <div>
+      <p class="section-label">Build the first edge</p>
+      <h2 id="closing-title">
+        Start with one module. Grow when the graph does.
+      </h2>
+    </div>
+    <div class="closing-actions">
+      <a class="button button-primary" href="/guides/introduction/">
+        Get started <span aria-hidden="true">→</span>
+      </a>
+      <a class="button closing-secondary" href="https://github.com/favyorg/di">
+        View on GitHub
+      </a>
+    </div>
+  </section>
+</div>
+
+<script>
+  const copyTimers = new WeakMap<HTMLButtonElement, number>();
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>(
+    '.home [data-copy]',
+  )) {
+    button.hidden = false;
+    button.dataset.copyDefaultLabel =
+      button.getAttribute('aria-label') ?? 'Copy';
+
+    button.addEventListener('click', async () => {
+      const value = button.dataset.copyValue;
+      const label = button.querySelector<HTMLElement>('[data-copy-label]');
+
+      if (!value || !label) return;
+
+      const previousTimer = copyTimers.get(button);
+      if (previousTimer) window.clearTimeout(previousTimer);
+
+      try {
+        await navigator.clipboard.writeText(value);
+        button.dataset.copyState = 'copied';
+        button.setAttribute(
+          'aria-label',
+          button.dataset.copySuccessLabel ?? 'Copied',
+        );
+        label.textContent = 'Copied';
+      } catch {
+        button.dataset.copyState = 'error';
+        button.setAttribute(
+          'aria-label',
+          button.dataset.copyErrorLabel ?? 'Copy failed',
+        );
+        label.textContent = 'Copy failed';
+      }
+
+      copyTimers.set(
+        button,
+        window.setTimeout(() => {
+          button.dataset.copyState = 'idle';
+          button.setAttribute(
+            'aria-label',
+            button.dataset.copyDefaultLabel ?? 'Copy',
+          );
+          label.textContent = 'Copy';
+        }, 1800),
+      );
+    });
+  }
+</script>
+
+<style>
+  :global(html[data-has-hero] main .content-panel > .sl-container) {
+    max-width: 76rem;
+  }
+
+  :global(html[data-has-hero] .hero) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  :global(html[data-has-hero] .hero h1) {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+  }
+
+  :global(html[data-has-hero] .hero + .sl-markdown-content) {
+    margin-top: 0;
+  }
+
+  .home {
+    --home-radius-lg: 1.5rem;
+    --home-radius-md: 1rem;
+    width: 100%;
+    color: var(--sl-color-text);
+  }
+
+  .home *,
+  .home *::before,
+  .home *::after {
+    box-sizing: border-box;
+  }
+
+  .home a {
+    text-decoration: none;
+  }
+
+  .home-workbench {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    color: #f7f8ff;
+    background:
+      radial-gradient(
+        circle at 78% 6%,
+        rgba(120, 104, 255, 0.2),
+        transparent 30rem
+      ),
+      radial-gradient(
+        circle at 8% 92%,
+        rgba(52, 211, 204, 0.11),
+        transparent 24rem
+      ),
+      #080b16;
+    border: 1px solid rgba(159, 169, 214, 0.18);
+    border-radius: var(--home-radius-lg);
+    box-shadow:
+      0 32px 70px rgba(2, 5, 17, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .home-workbench::before {
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(143, 153, 197, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(143, 153, 197, 0.045) 1px, transparent 1px);
+    background-size: 2rem 2rem;
+    mask-image: linear-gradient(to bottom, black, transparent 78%);
+    content: '';
+    pointer-events: none;
+  }
+
+  .workbench-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.88fr) minmax(31rem, 1.12fr);
+    gap: clamp(2.5rem, 5vw, 5.25rem);
+    align-items: center;
+    padding: clamp(2rem, 5vw, 4.75rem);
+  }
+
+  .hero-copy,
+  .demo-panel {
+    min-width: 0;
+  }
+
+  .eyebrow,
+  .section-label {
+    margin: 0;
+    font-size: 0.75rem;
+    line-height: 1.25;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+  }
+
+  .eyebrow {
+    display: flex;
+    gap: 0.55rem;
+    align-items: center;
+    color: #b9b3ff;
+  }
+
+  .eyebrow > span {
+    width: 0.5rem;
+    height: 0.5rem;
+    background: #6be3dc;
+    border-radius: 999px;
+    box-shadow: 0 0 0 0.25rem rgba(107, 227, 220, 0.1);
+  }
+
+  .hero-title {
+    max-width: 12ch;
+    margin: 1.2rem 0 0;
+    color: #fff;
+    font-size: clamp(2.65rem, 5.5vw, 5rem);
+    line-height: 0.98;
+    font-weight: 680;
+    letter-spacing: -0.052em;
+    text-wrap: balance;
+  }
+
+  .hero-lede {
+    max-width: 40rem;
+    margin: 1.6rem 0 0;
+    color: #b9c0d4;
+    font-size: clamp(1rem, 1.6vw, 1.15rem);
+    line-height: 1.7;
+  }
+
+  .hero-actions,
+  .closing-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .hero-actions {
+    margin-top: 2rem;
+  }
+
+  .button {
+    display: inline-flex;
+    min-height: 2.75rem;
+    gap: 0.55rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0.7rem 1rem;
+    border: 1px solid transparent;
+    border-radius: 0.7rem;
+    font-size: 0.92rem;
+    line-height: 1;
+    font-weight: 700;
+    transition:
+      transform 160ms ease,
+      border-color 160ms ease,
+      background-color 160ms ease;
+  }
+
+  .button-primary {
+    color: #090b16;
+    background: #f4f2ff;
+    box-shadow: 0 10px 24px rgba(125, 112, 255, 0.18);
+  }
+
+  .button-primary:hover {
+    color: #090b16;
+    background: #fff;
+    transform: translateY(-1px);
+  }
+
+  .button-secondary {
+    color: #e7e9f4;
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(194, 200, 227, 0.24);
+  }
+
+  .button-secondary:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(194, 200, 227, 0.42);
+  }
+
+  .install-row {
+    display: flex;
+    min-width: 0;
+    min-height: 3rem;
+    margin-top: 2.2rem;
+    align-items: center;
+    padding: 0.3rem 0.35rem 0.3rem 0.9rem;
+    color: #d7dbea;
+    background: rgba(4, 7, 17, 0.58);
+    border: 1px solid rgba(159, 169, 214, 0.2);
+    border-radius: 0.8rem;
+  }
+
+  .terminal-mark {
+    flex: none;
+    color: #6be3dc;
+    font-family: var(--__sl-font-mono);
+  }
+
+  .install-row code {
+    min-width: 0;
+    margin-inline: 0.65rem auto;
+    overflow: hidden;
+    color: inherit;
+    background: none;
+    font-size: 0.83rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .copy-button {
+    display: inline-flex;
+    min-width: 4.65rem;
+    min-height: 2.75rem;
+    flex: none;
+    gap: 0.4rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0.45rem 0.65rem;
+    color: #aeb5ca;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(173, 183, 222, 0.17);
+    border-radius: 0.55rem;
+    font: 650 0.72rem/1 var(--__sl-font);
+    cursor: pointer;
+    transition:
+      color 160ms ease,
+      background-color 160ms ease,
+      border-color 160ms ease;
+  }
+
+  .copy-button[hidden] {
+    display: none;
+  }
+
+  .copy-button:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(173, 183, 222, 0.32);
+  }
+
+  .copy-button[data-copy-state='copied'] {
+    color: #7ce8c9;
+    border-color: rgba(124, 232, 201, 0.36);
+  }
+
+  .copy-button[data-copy-state='error'] {
+    color: #ffb5b5;
+    border-color: rgba(255, 181, 181, 0.34);
+  }
+
+  .copy-button svg {
+    width: 0.9rem;
+    height: 0.9rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.5;
+  }
+
+  .demo-panel {
+    position: relative;
+    overflow: hidden;
+    background: rgba(11, 15, 29, 0.92);
+    border: 1px solid rgba(159, 169, 214, 0.22);
+    border-radius: 1rem;
+    box-shadow:
+      0 24px 50px rgba(0, 0, 0, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .panel-bar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    min-height: 3rem;
+    align-items: center;
+    padding: 0.35rem 0.5rem 0.35rem 0.9rem;
+    background: rgba(255, 255, 255, 0.025);
+    border-bottom: 1px solid rgba(159, 169, 214, 0.14);
+  }
+
+  .window-dots {
+    display: flex;
+    gap: 0.38rem;
+  }
+
+  .window-dots span {
+    width: 0.5rem;
+    height: 0.5rem;
+    background: #3a4054;
+    border-radius: 50%;
+  }
+
+  .window-dots span:nth-child(1) {
+    background: #7466e9;
+  }
+
+  .window-dots span:nth-child(2) {
+    background: #3d8ca0;
+  }
+
+  .panel-file {
+    color: #8f97ae;
+    font: 500 0.72rem/1 var(--__sl-font-mono);
+  }
+
+  .code-copy {
+    min-width: 4.3rem;
+    min-height: 2.75rem;
+    justify-self: end;
+  }
+
+  .code-block {
+    max-width: 100%;
+    margin: 0;
+    overflow-x: auto;
+    color: #d8dcec;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    outline-offset: -0.2rem;
+    padding: 1.35rem 1rem 1.45rem;
+    font: 500 0.77rem/1.7 var(--__sl-font-mono);
+    tab-size: 2;
+  }
+
+  .code-block code {
+    display: flex;
+    flex-direction: column;
+    width: max-content;
+    min-width: 100%;
+    color: inherit;
+    background: none;
+    counter-reset: code-line;
+  }
+
+  .code-line {
+    display: block;
+    min-height: 1.7em;
+    counter-increment: code-line;
+  }
+
+  .code-line::before {
+    display: inline-block;
+    width: 1.85rem;
+    margin-right: 1rem;
+    color: #7f879d;
+    content: counter(code-line);
+    text-align: right;
+    user-select: none;
+  }
+
+  .token-keyword {
+    color: #c7a8ff;
+  }
+
+  .token-type,
+  .token-call {
+    color: #72d8eb;
+  }
+
+  .token-string {
+    color: #a9dd9d;
+  }
+
+  .token-name {
+    color: #e3d8ff;
+  }
+
+  .token-property {
+    color: #f2c58b;
+  }
+
+  .scroll-hint {
+    display: none;
+  }
+
+  .graph-panel {
+    padding: 1.1rem;
+    background: rgba(255, 255, 255, 0.025);
+    border-top: 1px solid rgba(159, 169, 214, 0.14);
+  }
+
+  .module-graph {
+    display: grid;
+    grid-template-columns:
+      minmax(0, 1fr) minmax(2.5rem, 0.55fr) minmax(0, 1fr) minmax(
+        2.5rem,
+        0.55fr
+      )
+      minmax(0, 1fr);
+    gap: 0.55rem;
+    align-items: center;
+  }
+
+  .graph-node {
+    min-width: 0;
+    padding: 0.65rem 0.55rem;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(159, 169, 214, 0.18);
+    border-radius: 0.55rem;
+    text-align: center;
+  }
+
+  .graph-node-accent {
+    background: rgba(119, 102, 233, 0.1);
+    border-color: rgba(155, 139, 255, 0.34);
+    box-shadow: 0 0 22px rgba(119, 102, 233, 0.08);
+  }
+
+  .graph-node span,
+  .graph-node strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .graph-node span {
+    color: #8f97ae;
+    font: 600 0.7rem/1 var(--__sl-font);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .graph-node strong {
+    margin-top: 0.35rem;
+    color: #e6e8f3;
+    font: 650 0.72rem/1.2 var(--__sl-font-mono);
+  }
+
+  .graph-edge {
+    min-width: 0;
+    color: #8f97ae;
+    text-align: center;
+  }
+
+  .graph-edge span {
+    display: block;
+    margin-bottom: 0.1rem;
+    font: 500 0.65rem/1 var(--__sl-font);
+  }
+
+  .graph-edge svg {
+    display: block;
+    width: 100%;
+    height: 0.75rem;
+    fill: none;
+    stroke: #3f9da8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.2;
+  }
+
+  .graph-panel > p {
+    margin: 0.85rem 0 0;
+    color: #7f879d;
+    font-size: 0.75rem;
+    line-height: 1.55;
+    text-align: center;
+  }
+
+  .graph-panel code {
+    color: #b9b3ff;
+    background: none;
+    font-size: inherit;
+  }
+
+  .proof-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid rgba(159, 169, 214, 0.16);
+    list-style: none;
+  }
+
+  .proof-strip li {
+    min-width: 0;
+    padding: 1.25rem clamp(1rem, 2.4vw, 2rem);
+  }
+
+  .proof-strip li + li {
+    border-left: 1px solid rgba(159, 169, 214, 0.16);
+  }
+
+  .proof-strip strong,
+  .proof-strip span {
+    display: block;
+  }
+
+  .proof-strip strong {
+    color: #f4f3ff;
+    font-size: 0.92rem;
+    line-height: 1.2;
+    font-weight: 700;
+  }
+
+  .proof-strip span {
+    margin-top: 0.25rem;
+    color: #767f97;
+    font-size: 0.7rem;
+    line-height: 1.25;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
+
+  .home-section {
+    padding-block: clamp(4.5rem, 8vw, 7.5rem);
+  }
+
+  .home-section + .home-section {
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+
+  .model-section {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: clamp(3rem, 8vw, 7rem);
+    align-items: start;
+  }
+
+  .section-label,
+  .card-label {
+    color: var(--sl-color-text-accent);
+  }
+
+  .section-intro h2,
+  .section-heading h2,
+  .closing-panel h2 {
+    margin: 0.7rem 0 0;
+    color: var(--sl-color-white);
+    font-size: clamp(2rem, 4vw, 3.3rem);
+    line-height: 1.06;
+    font-weight: 680;
+    letter-spacing: -0.04em;
+    text-wrap: balance;
+  }
+
+  .section-intro > p:not(.section-label),
+  .section-heading > p {
+    margin: 1.25rem 0 0;
+    line-height: 1.75;
+  }
+
+  .section-intro > p:not(.section-label) {
+    max-width: 34rem;
+  }
+
+  .text-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem 1.25rem;
+    margin-top: 1.6rem;
+  }
+
+  .text-links a,
+  .card-links a {
+    color: var(--sl-color-text-accent);
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+
+  .text-links a:hover,
+  .card-links a:hover {
+    color: var(--sl-color-white);
+  }
+
+  .text-links span,
+  .card-links span {
+    display: inline-block;
+    margin-left: 0.2rem;
+    transition: transform 160ms ease;
+  }
+
+  .text-links a:hover span,
+  .card-links a:hover span {
+    transform: translateX(0.2rem);
+  }
+
+  .steps {
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--sl-color-hairline-light);
+    list-style: none;
+  }
+
+  .steps li {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr);
+    gap: 1.25rem;
+    padding-block: 1.55rem;
+    border-bottom: 1px solid var(--sl-color-hairline-light);
+  }
+
+  .step-number,
+  .path-number {
+    color: var(--sl-color-text-accent);
+    font: 650 0.7rem/1.3 var(--__sl-font-mono);
+  }
+
+  .steps h3,
+  .capability-card h3,
+  .path-card h3 {
+    margin: 0;
+    color: var(--sl-color-white);
+    line-height: 1.2;
+    font-weight: 680;
+    letter-spacing: -0.02em;
+  }
+
+  .steps h3 {
+    font-size: 1.08rem;
+  }
+
+  .steps p {
+    max-width: 38rem;
+    margin: 0.45rem 0 0;
+    font-size: 0.9rem;
+    line-height: 1.65;
+  }
+
+  .section-heading {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(17rem, 0.7fr);
+    gap: 3rem;
+    align-items: end;
+    margin-bottom: 2.5rem;
+  }
+
+  .section-heading > p {
+    max-width: 30rem;
+    justify-self: end;
+  }
+
+  .capability-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.9rem;
+  }
+
+  .capability-card {
+    display: flex;
+    min-width: 0;
+    min-height: 15rem;
+    flex-direction: column;
+    padding: 1.4rem;
+    background: var(--sl-color-bg-nav);
+    border: 1px solid var(--sl-color-hairline-light);
+    border-radius: var(--home-radius-md);
+    transition:
+      transform 160ms ease,
+      border-color 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .capability-card:hover {
+    border-color: var(--sl-color-accent);
+    box-shadow: var(--sl-shadow-md);
+    transform: translateY(-2px);
+  }
+
+  .card-label {
+    font-size: 0.68rem;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .capability-card h3 {
+    margin-top: 1.8rem;
+    font-size: 1.18rem;
+  }
+
+  .capability-card > p {
+    margin: 0.75rem 0 1.5rem;
+    font-size: 0.85rem;
+    line-height: 1.65;
+  }
+
+  .card-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem 1rem;
+    margin-top: auto;
+  }
+
+  .paths-section {
+    padding-bottom: clamp(4.5rem, 8vw, 7rem);
+  }
+
+  .path-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.9rem;
+  }
+
+  .path-card {
+    display: grid;
+    grid-template-columns: 2.2rem minmax(0, 1fr);
+    gap: 1.1rem;
+    min-width: 0;
+    padding: 1.5rem;
+    background: transparent;
+    border: 1px solid var(--sl-color-hairline-light);
+    border-radius: var(--home-radius-md);
+  }
+
+  .path-card h3 {
+    font-size: 1.15rem;
+  }
+
+  .path-card p {
+    margin: 0.55rem 0 1.1rem;
+    font-size: 0.85rem;
+    line-height: 1.65;
+  }
+
+  .path-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .path-links a {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    padding: 0.35rem 0.6rem;
+    color: var(--sl-color-text);
+    background: var(--sl-color-bg-nav);
+    border: 1px solid var(--sl-color-hairline-light);
+    border-radius: 999px;
+    font-size: 0.7rem;
+    line-height: 1;
+    font-weight: 650;
+  }
+
+  .path-links a:hover {
+    color: var(--sl-color-white);
+    border-color: var(--sl-color-accent);
+  }
+
+  .closing-panel {
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+    justify-content: space-between;
+    padding: clamp(2rem, 5vw, 3.5rem);
+    background:
+      linear-gradient(120deg, rgba(116, 102, 233, 0.12), transparent 52%),
+      var(--sl-color-bg-nav);
+    border: 1px solid var(--sl-color-hairline-light);
+    border-radius: var(--home-radius-lg);
+  }
+
+  .closing-panel h2 {
+    max-width: 18ch;
+    font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+  }
+
+  .closing-actions {
+    flex: none;
+    justify-content: flex-end;
+  }
+
+  .closing-secondary {
+    color: var(--sl-color-white);
+    background: transparent;
+    border-color: var(--sl-color-hairline-light);
+  }
+
+  .closing-secondary:hover {
+    color: var(--sl-color-white);
+    border-color: var(--sl-color-accent);
+  }
+
+  .home a:focus-visible,
+  .home button:focus-visible,
+  .code-block:focus-visible {
+    outline: 3px solid var(--sl-color-accent);
+    outline-offset: 3px;
+  }
+
+  @media (max-width: 70rem) {
+    .workbench-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hero-title {
+      max-width: 13ch;
+    }
+
+    .model-section {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .section-heading {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
+    }
+
+    .section-heading > p {
+      justify-self: start;
+    }
+
+    .capability-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 45rem) {
+    .home-workbench {
+      border-radius: 1.1rem;
+    }
+
+    .workbench-grid {
+      gap: 2rem;
+      padding: 1.5rem;
+    }
+
+    .code-line::before {
+      display: none;
+    }
+
+    .scroll-hint {
+      display: block;
+      margin: -0.7rem 1rem 0.8rem;
+      color: #8f97ae;
+      font: 600 0.65rem/1 var(--__sl-font);
+      letter-spacing: 0.06em;
+      text-align: right;
+      text-transform: uppercase;
+    }
+
+    .hero-title {
+      font-size: clamp(2.45rem, 12vw, 3.9rem);
+    }
+
+    .proof-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .proof-strip li:nth-child(3) {
+      border-left: 0;
+    }
+
+    .proof-strip li:nth-child(n + 3) {
+      border-top: 1px solid rgba(159, 169, 214, 0.16);
+    }
+
+    .capability-grid,
+    .path-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .capability-card {
+      min-height: 0;
+    }
+
+    .path-card {
+      padding: 1.1rem;
+    }
+
+    .path-card p {
+      display: none;
+    }
+
+    .home-section {
+      padding-block: 3.75rem;
+    }
+
+    .closing-panel {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .closing-actions {
+      justify-content: flex-start;
+    }
+  }
+
+  @media (max-width: 30rem) {
+    .workbench-grid {
+      padding: 1.25rem;
+    }
+
+    .hero-title {
+      font-size: clamp(2.25rem, 12vw, 3rem);
+    }
+
+    .hero-actions,
+    .closing-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      width: 100%;
+    }
+
+    .install-row {
+      padding-left: 0.7rem;
+    }
+
+    .copy-button {
+      min-width: 2.75rem;
+    }
+
+    .copy-button span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .module-graph {
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: stretch;
+    }
+
+    .graph-edge {
+      width: 2rem;
+      justify-self: center;
+      transform: rotate(90deg);
+    }
+
+    .graph-edge span {
+      display: none;
+    }
+
+    .section-intro h2,
+    .section-heading h2 {
+      font-size: 2rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .home *,
+    .home *::before,
+    .home *::after {
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+</style>
