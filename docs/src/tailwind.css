@@ -66,7 +66,3 @@
     @apply bg-background text-foreground;
   }
 }
-
-.sl-markdown-content :not(a, strong, em, del, span, input, code)+ :not(a, strong, em, del, span, input, code, :where(.not-content *)) {
-  margin-top: 0;
-}

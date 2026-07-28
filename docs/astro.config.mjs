@@ -50,7 +50,14 @@ export default defineConfig({
           items: [{ label: 'API Reference', slug: 'reference/api' }],
         },
       ],
-      customCss: ['/src/tailwind.css'],
+      components: {
+        PageTitle: './src/components/docs-page-title.astro',
+      },
+      customCss: [
+        '/src/tailwind.css',
+        '/src/styles/docs-shell.css',
+        '/src/styles/docs-content.css',
+      ],
     }),
     react(),
     tailwind({
