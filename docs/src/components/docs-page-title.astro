@@ -1,0 +1,60 @@
+---
+import type { Props } from '@astrojs/starlight/props';
+
+const { entry } = Astro.props;
+const slug = entry.slug;
+const label = slug.startsWith('guides/')
+  ? 'Guide'
+  : slug.startsWith('reference/')
+    ? 'Reference'
+    : slug.includes('transform-')
+      ? 'Advanced'
+      : 'Core concept';
+---
+
+<header class="docs-page-title">
+  <p class="docs-page-label">{label}</p>
+  <h1 id="_top">{entry.data.title}</h1>
+  {
+    entry.data.description && (
+      <p class="docs-page-description">{entry.data.description}</p>
+    )
+  }
+</header>
+
+<style>
+  .docs-page-title {
+    margin-top: 0.75rem;
+  }
+
+  .docs-page-label {
+    margin: 0;
+    color: color-mix(
+      in srgb,
+      var(--docs-secondary) 70%,
+      var(--sl-color-white)
+    );
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1.5;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    margin: 0.65rem 0 0;
+    color: var(--sl-color-white);
+    font-size: clamp(2.6rem, 7vw, 3.25rem);
+    font-weight: 700;
+    line-height: 1.05;
+    letter-spacing: -0.04em;
+  }
+
+  .docs-page-description {
+    max-width: 42rem;
+    margin: 1rem 0 0;
+    color: var(--docs-muted);
+    font-size: 1.1rem;
+    line-height: 1.7;
+  }
+</style>

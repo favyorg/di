@@ -1,5 +1,140 @@
 ---
-title: transform output
+title: Transform Output
+description: Inspect or transform successful module results at runtime and with HKT typing.
 ---
 
-...
+import { Editor } from '../../../components/editor';
+
+`transformOutput` runs after a module callback returns. It receives `(result, deps, isRoot)`:
+
+- `result` is the callback's returned value;
+- `deps` is the value produced by `transformInput`;
+- `isRoot` is `true` for a direct call and `false` when the module is being resolved as another module's provider.
+
+## Observe successful results
+
+The standard input transform still applies when only `transformOutput` is customized, so the transformed dependency context contains the current invocation's `Module.name` at runtime. A nested provider gets its own metadata view and cannot overwrite the outer transform's name.
+
+<Editor client:load code={`import { makeModule, type ModuleLive } from '@favy/di';
+
+const TracedModule = makeModule({
+  transformOutput: (result, deps, isRoot) => {
+    const name = (deps as unknown as ModuleLive).Module.name;
+    console.log(name.toString() + ' root=' + isRoot + ' result=' + result);
+    return result;
+  },
+});
+
+const Sum = TracedModule<{ a: number; b: number }>()(
+  'Sum',
+  ({ a, b }) => a + b,
+);
+
+console.log(Sum({ a: 2, b: 3 })); // 5`} />
+
+Use `isRoot` when root calls and internally resolved providers need different logging, metadata, or validation.
+
+## Callback errors are not intercepted
+
+The module callback is evaluated before `transformOutput` is called. If the callback throws, the transform never receives a result and cannot catch that error.
+
+<Editor client:load code={`import { makeModule } from '@favy/di';
+
+let transformed = 0;
+
+const ObservedModule = makeModule({
+  transformOutput: (result) => {
+    transformed += 1;
+    return result;
+  },
+});
+
+const Fails = ObservedModule()('Fails', () => {
+  throw new Error('callback failed');
+});
+
+try {
+  Fails();
+} catch {
+  console.log('caught by the caller');
+}
+
+console.log(transformed); // 0`} />
+
+Handle callback failures in the callback itself or around the module call. `transformOutput` can validate a successfully returned value and may throw its own error.
+
+## Ordinary transforms define a concrete output type
+
+For an ordinary `transformOutput<I, D, O>`, the module callback must return a value assignable to `I`, and the created callable returns `O`. This keeps a concrete runtime transformation aligned with its TypeScript type.
+
+<Editor client:load code={`import { makeModule } from '@favy/di';
+
+const StringBoxModule = makeModule({
+  transformOutput: (result: string) => ({ value: result }),
+});
+
+const Greeting = StringBoxModule()('Greeting', () => 'hello');
+const box = Greeting();
+
+const message: string = box.value;
+console.log(message); // "hello"`} />
+
+Because this transform accepts `string`, a module callback returning an object or number is rejected. For observation that returns the input unchanged, use a generic identity transform; the callable then preserves each callback's inferred result type:
+
+```ts
+const ObservedModule = makeModule({
+  transformOutput: <T>(result: T) => {
+    console.log(result);
+    return result;
+  },
+});
+```
+
+## Use an HKT for a static result transformation
+
+Return an `HKT` marker when the output type must be calculated generically from the module name, callback result, or remaining dependencies. An output HKT must produce a callable type; `TModule` can preserve the normal callable shape while replacing its result.
+
+<Editor client:load code={`import { makeModule, type HKT, type ModuleLive, type TModule } from '@favy/di';
+
+type Box<Name, Result> = {
+  value: Result;
+  name: Name;
+};
+
+type BoxedModule<Name extends PropertyKey, Result, Deps> = TModule<
+  Name,
+  Deps,
+  Box<Name, Result>
+>;
+
+interface BoxHKT extends HKT {
+  readonly type: BoxedModule<this['_NAME'], this['_RESULT'], this['_DEPS']>;
+}
+
+const BoxModule = makeModule({
+  transformOutput: (result, deps) =>
+    ({
+      value: result,
+      name: (deps as unknown as ModuleLive).Module.name,
+    } as unknown as BoxHKT),
+});
+
+const Greeting = BoxModule()('Greeting', () => 'hello');
+const output = Greeting();
+
+const message: string = output.value;
+const exactName: 'Greeting' = output.name;
+
+console.log(exactName + ': ' + message); // "Greeting: hello"`} />
+
+Here `this['_RESULT']` becomes the callback return type, `this['_NAME']` becomes the declared key, and `this['_DEPS']` preserves the callable's remaining dependencies. The runtime object and the statically computed result now have the same shape.
+
+## `transformInput` comparison
+
+| Feature                 | `transformInput`                      | `transformOutput`                   |
+| ----------------------- | ------------------------------------- | ----------------------------------- |
+| Timing                  | Before the module callback            | After a successful callback return  |
+| Runtime value           | Callback dependencies                 | Callback result                     |
+| Arguments               | `(deps, name)`                        | `(result, transformedDeps, isRoot)` |
+| Concrete static rewrite | Preserves input and adds compatible fields | Uses `I → O` directly            |
+| Generic static rewrite  | Requires an input HKT                 | Requires an output HKT              |

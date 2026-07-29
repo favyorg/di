@@ -1,0 +1,134 @@
+# @favy/di
+
+> Documentation for the current @favy/di source, a lightweight dependency injection library for TypeScript.
+
+Canonical documentation: https://di.favy.dev/
+Source: https://github.com/favyorg/di
+
+## Start Here
+
+- Introduction: https://di.favy.dev/guides/introduction/
+- Core Module model: https://di.favy.dev/module/module/
+- Caching: https://di.favy.dev/module/cache/
+- Lazy initialization: https://di.favy.dev/module/lazy/
+- Partial application: https://di.favy.dev/module/partial/
+- Testing: https://di.favy.dev/guides/testing/
+- Best practices: https://di.favy.dev/guides/best-practices/
+- Transform input: https://di.favy.dev/module/transform-input/
+- Transform output: https://di.favy.dev/module/transform-output/
+- API reference: https://di.favy.dev/reference/api/
+
+## Installation
+
+```bash
+npm install @favy/di
+```
+
+The declarations require TypeScript 5.0 or newer.
+
+## Typed Quick Start
+
+```typescript
+import { Module, type Live } from '@favy/di';
+
+const Logger = Module()('Logger', () => ({
+  log: (message: string) => console.log(message),
+}));
+type LoggerLive = Live<typeof Logger>;
+
+const App = Module<LoggerLive>()('App', ({ Logger }) => ({
+  start: () => Logger.log('Application started'),
+}));
+
+App({ Logger }).start();
+```
+
+`Live<T>` combines the dependencies required by a module with the value that module provides under its name. A top-level module call supplies module implementations and dependency values. Module implementations are resolved through the graph.
+
+Dependency contracts describe object maps. Runtime maps passed to module calls or `.provide()` may be any non-null object, including class instances and custom-prototype objects; only their own string and symbol keys are consumed. Discriminated unions retain their branch-specific required fields. The default factory supplies generated `{ Module: { name } }` invocation metadata; use `ModuleLive` when a callback needs it.
+
+A provider's remaining dependencies must appear in the matching branch of the consumer's declared dependency context. Use `Live<typeof Provider>` to carry those transitive requirements; a module requiring extra fields cannot be inserted into a result-only dependency slot and turned into an unsafe zero-argument callable. Discriminated-union calls and partials may use a branch-specific provider once their discriminant selects the branch that contains its requirements.
+
+## Partial Application
+
+```typescript
+import { Module } from '@favy/di';
+
+const Add = Module<{ left: number; right: number }>()(
+  'Add',
+  ({ left, right }) => left + right,
+);
+
+const AddTen = Add.provide({ left: 10 });
+AddTen({ right: 5 }); // 15
+```
+
+`.provide()` tracks the supplied keys and updates the returned callable's remaining dependency type. Bound values take precedence over the same keys in a wider root object.
+
+## Lazy Dependencies
+
+The default `lazy: true` initializes a module dependency only when its property is accessed. Avoid destructuring a dependency before a conditional access. Object rest/spread enumerates the context and reads every included provider.
+
+```typescript
+import { Module, type Live } from '@favy/di';
+
+const Expensive = Module()('Expensive', () => ({
+  value: 42,
+}));
+type ExpensiveLive = Live<typeof Expensive>;
+
+const Consumer = Module<ExpensiveLive>()('Consumer', ($) => ({
+  read: (enabled: boolean) => (enabled ? $.Expensive.value : 0),
+}));
+
+Consumer({ Expensive }).read(false); // Expensive is not initialized
+```
+
+## Custom Module Factories
+
+```typescript
+import { makeModule } from '@favy/di';
+
+const SingletonModule = makeModule({
+  cache: 'module',
+  lazy: true,
+});
+
+const Connection = SingletonModule()('Connection', () => ({
+  id: crypto.randomUUID(),
+}));
+
+Connection();
+SingletonModule.flushCache();
+```
+
+Cache modes:
+
+- `run` (default): reuse a dependency during one top-level call.
+- `module`: reuse values for the lifetime of that `makeModule` factory, until `flushCache()`.
+- `none`: recompute whenever a module dependency is accessed.
+
+An ordinary `transformInput<D, PD>` has the preserving signature `<DX extends D>(deps: DX, name) => DX & PD`; TypeScript rejects transforms that drop input fields and requires the caller-supplied portion of every later module dependency map to satisfy `D`. Constrained preserving transforms can be written inline as `<DX extends Base>` or assigned an explicit `transformInput<Base, Added>` type. Fields explicitly required by `Base` remain caller-supplied because the transform receives that input before it adds callback values. Use an `HKT` when replacing the callback shape; an input HKT receives the declared module key in `_NAME` and the dependency map in `_RESULT` and `_DEPS`. The HKT marker is nominal, so an ordinary `_NAME` field does not activate it. Custom metadata keeps its declared `name` type unless the transform returns `withModuleName(...)`.
+
+Omitting transforms in `makeModule({})` uses typed defaults: generated `Module.name` input and identity output. A custom ordinary `transformOutput<I, D, O>` constrains callback results to `I` and makes module callables return `O`; a generic identity output preserves each callback result. Use an output HKT when the callable type must be computed from the module name, result, or dependencies.
+
+## Public Exports
+
+```typescript
+import {
+  Module,
+  makeModule,
+  withModuleName,
+  type DefaultModuleFactory,
+  type HKT,
+  type Kind,
+  type Live,
+  type MakeOptions,
+  type ModuleLive,
+  type TModule,
+  type transformInput,
+  type transformOutput,
+} from '@favy/di';
+```
+
+Use the API reference for signatures and the focused guides for lifecycle and transformation semantics.

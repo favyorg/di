@@ -1,30 +1,86 @@
 ---
 title: Module
+description: Understand module callables, explicit dependencies, Live types, and root execution.
 ---
 
 import { Editor } from '../../../components/editor';
 
-### What Is Module?
+## What `Module` is
 
-**Module** is simply a ready-to-use makeModule instance with default options:
+`Module` is the package's ready-to-use module factory:
 
-```typescript
-export const Module = makeModule({});
+```ts
+export const Module = makeModule({
+  transformInput: withModuleName,
+});
 ```
 
-By default, **Module** has the following parameters:
+Its lifecycle defaults are `cache: 'run'` and `lazy: true`. Its default input transform adds `{ Module: { name } }` before the callback runs.
 
-1. `cache = 'run'`
-   The results are cached only for the duration of a single call (see [Caching](./cache)).
-2. `lazy = true`
-   Modules are computed only when first accessed (see [Lazy Initialization](./lazy)).
-3. `transformInput = withModuleName`
-   Automatically adds a property to the dependencies object:
+Keep the two levels distinct:
 
-<Editor client:only code={`import { Module } from '@favy/di';
+- `Module` is a factory shared by all callables created from it.
+- `Module<Deps>()('Key', callback)` creates one named callable module.
 
-const A = Module()('A', ({ Module }) => Module.name);
-console.log(A()); // "A"
-`} />
+## Create and call a module
 
-which lets any module function retrieve its own name (see [Transform Input/Output](http://google.com)).
+The `Deps` type is an explicit object dependency-map contract. At runtime, the map passed to a module may be any non-null object, including a class instance or an object with a custom prototype; resolution consumes only its own string and symbol keys. Discriminated unions retain their branch-specific required fields. If the callback also needs the default module metadata, include `ModuleLive`; callers do not pass the `Module` field because the factory adds it.
+The default factory uses the `Module` property for this metadata, so avoid using that key for unrelated application data.
+
+<Editor client:load code={`import { Module, type ModuleLive } from '@favy/di';
+
+type GreeterDeps = {
+  recipient: string;
+} & ModuleLive;
+
+const Greeter = Module<GreeterDeps>()(
+  'Greeter',
+  ({ recipient, Module }) => Module.name.toString() + ': Hello, ' + recipient,
+);
+
+console.log(Greeter({ recipient: 'Ada' })); // "Greeter: Hello, Ada"
+console.log(Greeter.name); // "Greeter"`} />
+
+The callable's `name` property is the declared key (`'Greeter'` here), including on callables returned by `.provide()`.
+
+## Describe a graph with `Live`
+
+For `TModule<Key, Deps, Result>`, `Live<T>` evaluates to `Deps & { [Key]: Result }`. It therefore includes both the named output and all requirements needed to produce that output.
+
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+const Config = Module<{ file: string }>()('Config', ({ file }) => ({ file }));
+type ConfigLive = Live<typeof Config>;
+
+const Repository = Module<ConfigLive>()('Repository', ({ Config }) => ({
+  source: Config.file,
+}));
+type RepositoryLive = Live<typeof Repository>;
+
+const App = Module<RepositoryLive>()(
+  'App',
+  ({ Repository }) => Repository.source,
+);
+
+console.log(
+  App({
+    file: 'app.json',
+    Config,
+    Repository,
+  }),
+); // "app.json"`} />
+
+`RepositoryLive` includes the transitive `file` and `Config` requirements plus the keyed `Repository` result. The direct `App` call is the composition root, so it receives the complete object of values and providers.
+
+## Root and internal calls
+
+A direct call to `App` with its dependency object starts a run. Provider callables in that object are resolved internally against one shared dependency context.
+
+With the defaults:
+
+1. providers are lazy, so unused dependency keys are not executed;
+2. the first read executes the provider;
+3. `cache: 'run'` reuses that value for the remainder of the same root call;
+4. another direct root call creates a fresh run cache.
+
+Use [`makeModule`](/reference/api/#makemodule) to change those defaults, [`provide()`](/module/partial/) to bind dependencies before the root, and [`Live`](/reference/api/#livet) to carry a module's full requirements through a larger graph.

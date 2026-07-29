@@ -1,5 +1,111 @@
 ---
-title: partial
+title: Partial Application
+description: Bind module dependencies incrementally with the chainable provide method.
 ---
 
-...
+import { Editor } from '../../../components/editor';
+
+Every module has a `.provide()` method. It binds some dependency keys and returns another callable module whose type contains only the remaining keys. Bound values take runtime precedence even if a structurally wider root variable still contains the same keys. A partial may be any non-null object; `.provide()` consumes its own string and symbol keys and ignores inherited properties.
+
+## Bind values
+
+<Editor client:load code={`import { Module } from '@favy/di';
+
+const Calculator = Module<{ x: number; y: number }>()(
+  'Calculator',
+  ({ x, y }) => x + y,
+);
+
+const AddFive = Calculator.provide({ x: 5 });
+
+console.log(AddFive({ y: 3 })); // 8
+console.log(AddFive({ y: 10 })); // 15
+console.log(AddFive.name); // "Calculator"`} />
+
+The returned callable retains the original declared name.
+
+## Chain `.provide()`
+
+Each call removes the newly bound keys, so partial application can be built in stages.
+
+<Editor client:load code={`import { Module } from '@favy/di';
+
+const Expression = Module<{ a: number; b: number; c: number }>()(
+  'Expression',
+  ({ a, b, c }) => a * b + c,
+);
+
+const WithA = Expression.provide({ a: 2 });
+const WithAB = WithA.provide({ b: 3 });
+const ReadyExpression = WithAB.provide({ c: 4 });
+
+console.log(ReadyExpression()); // 10
+console.log(ReadyExpression.name); // "Expression"`} />
+
+TypeScript accepts known keys with compatible values and updates the callable signature after every step based on the supplied partial type.
+
+## Bind a provider callable
+
+A dependency can be bound to its final value or to a branded provider created by `Module` or `makeModule`. Arbitrary functions remain ordinary dependency values; branded callables always participate in DI resolution. Therefore, for a function-valued dependency, a branded provider must return that function rather than merely having a matching callable signature. A module returned from `.provide()` keeps the provider marker, so it can be nested inside another module. In a discriminated union, a branch-specific provider is accepted after the same partial selects a compatible branch, or after an earlier `.provide()` call narrows to that branch.
+
+<Editor client:load code={`import { Module } from '@favy/di';
+
+const Prefix = Module<{ prefix: string }>()('Prefix', ({ prefix }) => prefix);
+
+const Uppercase = Module<{ Prefix: string }>()('Uppercase', ({ Prefix }) =>
+  Prefix.toUpperCase(),
+);
+
+const BoundPrefix = Prefix.provide({ prefix: 'ready' });
+const ReadyUppercase = Uppercase.provide({ Prefix: BoundPrefix });
+
+console.log(ReadyUppercase()); // "READY"`} />
+
+Each configured callable owns its bound dependencies. With `cache: 'run'` or `cache: 'none'`, two variants created from the same base module can bind different values without leaking them into each other, while unresolved dependencies can still use the parent run context. With `cache: 'module'`, the factory-wide cache is keyed by module name, so same-name variants intentionally share whichever result was cached first until `flushCache()`.
+
+## `Live` keeps transitive requirements
+
+Providing a nested module's keyed output does **not** automatically remove that module's transitive dependencies from a parent `Live` type. Those requirements are explicit fields and must be provided at the parent as well.
+
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+const Database = Module()('Database', () => ({
+  findUser: (id: number) => ({ id, name: 'User ' + id }),
+}));
+type DatabaseLive = Live<typeof Database>;
+
+const UserRepository = Module<DatabaseLive>()(
+  'UserRepository',
+  ({ Database }) => ({
+    findById: (id: number) => Database.findUser(id),
+  }),
+);
+type UserRepositoryLive = Live<typeof UserRepository>;
+
+const UserService = Module<UserRepositoryLive>()(
+  'UserService',
+  ({ UserRepository }) => ({
+    displayName: (id: number) => UserRepository.findById(id).name,
+  }),
+);
+
+const BoundRepository = UserRepository.provide({ Database });
+
+// Binding only UserRepository still leaves Database in UserRepositoryLive.
+const ServiceWithRepository = UserService.provide({
+  UserRepository: BoundRepository,
+});
+
+const ReadyService = ServiceWithRepository.provide({ Database });
+
+console.log(ReadyService().displayName(1)); // "User 1"`} />
+
+This explicitness is intentional: `Live<typeof UserRepository>` contains both `DatabaseLive` and the keyed `UserRepository` result, so the composition root can always see the full graph contract. Bind all of those fields when you want a zero-argument callable.
+
+## Summary
+
+- `.provide({ key: value })` binds produced values.
+- `.provide({ key: provider })` binds module/provider callables.
+- `.provide()` is chainable, and every returned callable retains its declared name.
+- `.provide()` tracks remaining fields and supports narrowing discriminated-union dependencies as values are bound.
+- Any non-null object can be a partial; only its own keys are bound.

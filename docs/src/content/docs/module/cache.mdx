@@ -1,19 +1,20 @@
 ---
 title: Caching
+description: Choose run-scoped, factory-wide, or disabled module caching.
 ---
 
 import { Editor } from '../../../components/editor';
 
-Below is a concise overview of how caching works in makeModule. The cache option determines when and how often a module is recomputed. It can be set to one of the following values:
+The `cache` option controls whether a provider result is reused after dependency resolution. It accepts `'run'`, `'module'`, or `'none'`.
 
-## cache = 'run' (default)
+## `cache: 'run'` (default)
 
-Each module is computed once per “run.” If you call the same module multiple times within one run, its value is reused. Upon a new run (or after certain resets), the module is computed again.
+Each top-level module call starts a run with a fresh cache. Within that call, repeated access to the same dependency key reuses one result. A later top-level call computes it again.
 
-<Editor client:only code={`import { Module, Live } from '@favy/di';
-// Default: cache = 'run'
-let i = 0;
-const A = Module()('A', () => ++i);
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+let runs = 0;
+const A = Module()('A', () => ++runs);
 type ALive = Live<typeof A>;
 
 const B = Module<ALive>()('B', ({ A }) => A);
@@ -21,79 +22,69 @@ type BLive = Live<typeof B>;
 
 const C = Module<ALive & BLive>()('C', ({ A, B }) => A + B);
 
-C({ A, B }); // 2 because A was computed once (1 + 1)
-C({ A, B }); // 4 because A was computed again (2 + 2)
-`} />
+console.log(C({ A, B })); // 2: A ran once, then its value was reused
+console.log(C({ A, B })); // 4: a new run computed A as 2
+console.log(runs); // 2`} />
 
-```mermaid
-flowchart LR
-    Caller((Caller)) --> C("<b>C</b> <span style="font-size:13px">❲Cache❳</span>")
-    C --> B(<b>B</b>)
-    C --> A(<b>A</b>)
-    B --> A(<b>A</b>)
-```
+The direct calls to `C` are separate runs. The two paths to `A` inside each run share the same resolved value.
 
-## cache = 'module'
+## `cache: 'module'`
 
-The result is computed only once per module’s lifetime. Repeated calls to the same module within that lifetime return the same cached value.
+This mode uses one cache owned by the factory returned from `makeModule`. It survives separate root calls and is shared by every callable created from that factory. Entries are keyed by each callable's declared `name`.
 
-<Editor client:only code={`import { makeModule, Live } from '@favy/di';
+<Editor client:load code={`import { makeModule, type Live } from '@favy/di';
 
-const Module = makeModule({
-\tcache: 'module',
-});
+const CachedModule = makeModule({ cache: 'module' });
 
-let i = 0;
-const A = Module()('A', () => ++i);
+let runs = 0;
+const A = CachedModule()('A', () => ++runs);
 type ALive = Live<typeof A>;
 
-const B = Module<ALive>()('B', ({ A }) => A);
+const B = CachedModule<ALive>()('B', ({ A }) => A);
 type BLive = Live<typeof B>;
 
-const C = Module<ALive & BLive>()('C', ({ A, B }) => A + B);
+const C = CachedModule<ALive & BLive>()('C', ({ A, B }) => A + B);
 
-C({ A, B }); // 2 because A was computed once (1 + 1)
-C({ A, B }); // 2 because A is not recomputed (still 1 + 1)
-`} />
+console.log(C({ A, B })); // 2
+console.log(C({ A, B })); // 2: C itself is cached by this factory
+console.log(runs); // 1
 
-```mermaid
-flowchart LR
-    Caller((Caller)) --> C
-    C --> B
-    B --> A
-    C --> A
-    subgraph ModuleInstance["<span style="font-size:14px">makeModule Instance</span> <span style="font-size:14px">❲Cache❳</span>"]
-        A
-        B
-        C
-    end
-```
+CachedModule.flushCache();
 
-## cache = 'none'
+console.log(C({ A, B })); // 4: the factory-wide cache was cleared
+console.log(runs); // 2`} />
 
-No caching at all. Each time you call a module, it runs the computation anew.
+Because the store is name-keyed, names must be unique within a factory that uses `cache: 'module'`. Two different callables with the same name address the same cache entry. `flushCache()` clears every entry owned by that factory, not just one module.
 
-<Editor client:only code={`
-import { makeModule, Live } from '@favy/di';
+Only module results enter this factory-wide store. Plain input values still belong to the current root call, so using the same input key with a different value in another module does not leak the earlier value.
 
-const Module = makeModule({
-\tcache: 'none',
-});
+## `cache: 'none'`
 
-let i = 0;
-const A = Module()('A', () => ++i);
+No resolved dependency value is retained. Every access invokes its provider again, even during one root call.
+
+<Editor client:load code={`import { makeModule, type Live } from '@favy/di';
+
+const UncachedModule = makeModule({ cache: 'none' });
+
+let runs = 0;
+const A = UncachedModule()('A', () => ++runs);
 type ALive = Live<typeof A>;
 
-const B = Module<ALive>()('B', ({ A }) => A);
+const B = UncachedModule<ALive>()('B', ({ A }) => A);
 type BLive = Live<typeof B>;
 
-const C = Module<ALive & BLive>()('C', ({ A, B }) => A + B);
+const C = UncachedModule<ALive & BLive>()('C', ({ A, B }) => A + B);
 
-C({ A, B }); // 3 because A was called twice (1 + 2)
-C({ A, B }); // 7 because A was called ag
-`} />
+console.log(C({ A, B })); // 3: direct A = 1, then B's A = 2
+console.log(C({ A, B })); // 7: direct A = 3, then B's A = 4
+console.log(runs); // 4`} />
 
-Use cache according to your application’s needs:
-• run (default) — Cache the result for each run.
-• module — Cache the result for the entire module lifetime.
-• none — Never cache; recompute on every call.
+## Choosing a mode
+
+| Mode | Scope | Recomputed on a new root call? | Typical use |
+| --- | --- | --- | --- |
+| `'run'` | One root call | Yes | Request- or operation-scoped dependencies |
+| `'module'` | Entire factory, keyed by module name | No, until `flushCache()` | Process-wide singleton-style dependencies |
+| `'none'` | No cache | Yes, on every access | Values that must always be recomputed |
+
+Caching only affects providers that are resolved. The [`lazy` option](/module/lazy/) separately controls whether unused providers run at all.

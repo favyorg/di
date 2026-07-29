@@ -1,55 +1,59 @@
-# Starlight Starter Kit: Basics
+# @favy/di documentation
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+The public documentation site is built with Astro and Starlight. Its source lives in `docs/src/content/docs` and is published at [di.favy.dev](https://di.favy.dev/).
 
-```
-npm create astro@latest -- --template starlight
-```
+## Prerequisites
 
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/withastro/starlight/tree/main/examples/basics)
-[![Open with CodeSandbox](https://assets.codesandbox.io/github/button-edit-lime.svg)](https://codesandbox.io/p/sandbox/github/withastro/starlight/tree/main/examples/basics)
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/withastro/starlight&create_from_path=examples/basics)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fwithastro%2Fstarlight%2Ftree%2Fmain%2Fexamples%2Fbasics&project-name=my-starlight-docs&repository-name=my-starlight-docs)
+- Node.js 20
+- npm
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+## Local development
 
-## 🚀 Project Structure
+The documentation package has its own lockfile, so install and run it from this directory:
 
-Inside of your Astro + Starlight project, you'll see the following folders and files:
-
-```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   ├── docs/
-│   │   └── config.ts
-│   └── env.d.ts
-├── astro.config.mjs
-├── package.json
-└── tsconfig.json
+```bash
+cd docs
+npm ci
+npm run dev
 ```
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+Astro starts the site at `http://localhost:4321` by default.
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+Useful commands:
 
-Static assets, like favicons, can be placed in the `public/` directory.
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the local development server |
+| `npm run build` | Type-check and build the production site |
+| `npm run preview` | Preview the production build |
+| `npm run astro -- check` | Run Astro diagnostics |
 
-## 🧞 Commands
+If the repository-level dependencies are installed, the equivalent Nx commands from the repository root are:
 
-All commands are run from the root of the project, from a terminal:
+```bash
+npx nx dev docs
+npx nx check docs
+npx nx build docs
+npx nx preview docs
+```
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
+## Editing content
 
-## 👀 Want to learn more?
+- Public pages are `.mdx` files under `src/content/docs`.
+- The landing page is `src/content/docs/index.mdx`.
+- Sidebar labels and ordering are defined in `astro.config.mjs`.
+- Shared interactive examples use `src/components/editor.tsx`.
+- Static files such as `llms.txt` live in `public`.
 
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+When adding a page, give it a clear `title` and `description`, add it to the sidebar, and link it from the page that naturally precedes it. Examples shown in `Editor` should be complete TypeScript rather than fragments with undeclared names.
+
+## Verification
+
+Before opening a pull request:
+
+```bash
+cd docs
+npm run build
+```
+
+Also open the generated site and check the landing page, sidebar order, internal links, code overflow, and both light and dark themes.

@@ -1,0 +1,150 @@
+:root {
+  --docs-accent: #7766e9;
+  --docs-accent-soft: color-mix(in srgb, #7766e9 15%, transparent);
+  --docs-secondary: #3f9da8;
+  --docs-surface: #111827;
+  --docs-surface-raised: #1c2738;
+  --docs-border: rgba(151, 163, 190, 0.2);
+  --docs-muted: #a6aec2;
+  --docs-radius-md: 0.8rem;
+  --docs-radius-lg: 1.15rem;
+  --docs-shadow: 0 18px 45px rgba(2, 6, 23, 0.12);
+}
+
+:root[data-theme='light'] {
+  --docs-surface: #f8f9fc;
+  --docs-surface-raised: #ffffff;
+  --docs-border: rgba(51, 65, 85, 0.16);
+  --docs-muted: #596276;
+  --docs-shadow: 0 18px 45px rgba(30, 41, 59, 0.08);
+}
+
+html:not([data-has-hero]) {
+  --sl-content-width: 45rem;
+}
+
+@media (max-width: 49.999rem) {
+  html:not([data-has-hero]) {
+    --sl-menu-button-size: 2.75rem;
+  }
+
+  html:not([data-has-hero]) site-search > button {
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+  }
+
+  html:not([data-has-hero]) .sidebar-pane a {
+    min-block-size: 2.75rem;
+    align-content: center;
+  }
+
+  html:not([data-has-hero]) .sidebar-pane summary,
+  html:not([data-has-hero]) mobile-starlight-toc .dropdown a {
+    min-block-size: 2.75rem;
+    align-items: center;
+  }
+}
+
+html:not([data-has-hero]) body {
+  background-color: var(--docs-surface);
+}
+
+html:not([data-has-hero]) header.header {
+  border-bottom-color: var(--docs-border);
+  background-color: color-mix(in srgb, var(--docs-surface) 92%, transparent);
+  box-shadow: 0 1px 0 var(--docs-border);
+}
+
+html:not([data-has-hero]) .sidebar-pane {
+  border-inline-end-color: var(--docs-border);
+  background-color: var(--docs-surface);
+}
+
+html:not([data-has-hero]) .sidebar-pane a[aria-current='page'] {
+  border-radius: var(--docs-radius-md);
+  color: var(--sl-color-white);
+  background-color: var(--docs-accent-soft);
+  box-shadow: inset 3px 0 0 var(--docs-accent);
+}
+
+html:not([data-has-hero])
+  .sidebar-pane
+  a[aria-current='page']:is(:hover, :focus-visible) {
+  color: var(--sl-color-white);
+  background-color: color-mix(in srgb, var(--docs-accent) 22%, transparent);
+}
+
+html:not([data-has-hero]) starlight-toc a[aria-current='true'] {
+  border-inline-start-color: var(--docs-accent);
+  color: var(--sl-color-white);
+  background-color: var(--docs-accent-soft);
+  font-weight: 650;
+}
+
+html:not([data-has-hero])
+  starlight-toc
+  a[aria-current='true']:is(:hover, :focus-visible) {
+  border-inline-start-color: var(--docs-accent);
+  color: var(--sl-color-white);
+}
+
+html:not([data-has-hero]) mobile-starlight-toc nav {
+  border-color: var(--docs-border);
+  background-color: color-mix(in srgb, var(--docs-surface) 94%, transparent);
+}
+
+html:not([data-has-hero]) mobile-starlight-toc .toggle {
+  border-color: var(--docs-border);
+  border-radius: var(--docs-radius-md);
+  background-color: var(--docs-surface-raised);
+}
+
+html:not([data-has-hero]) mobile-starlight-toc details[open] .toggle {
+  border-color: var(--docs-accent);
+  background-color: var(--docs-accent-soft);
+}
+
+html:not([data-has-hero]) mobile-starlight-toc .dropdown {
+  border-color: var(--docs-border);
+  background-color: var(--docs-surface-raised);
+  box-shadow: var(--docs-shadow);
+}
+
+html:not([data-has-hero])
+  mobile-starlight-toc
+  .dropdown
+  a[aria-current='true'] {
+  color: var(--sl-color-white);
+  background-color: var(--docs-accent-soft);
+}
+
+html:not([data-has-hero])
+  :where(a, button, summary, [tabindex]):focus-visible {
+  outline: 3px solid
+    color-mix(in srgb, var(--docs-accent) 72%, var(--sl-color-white));
+  outline-offset: 3px;
+}
+
+html:not([data-has-hero]) .pagination-links > a {
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius-lg);
+  padding: 1rem;
+  background-color: var(--docs-surface-raised);
+  box-shadow: var(--docs-shadow);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+
+html:not([data-has-hero])
+  .pagination-links
+  > a:is(:hover, :focus-visible) {
+  border-color: var(--docs-accent);
+  background-color: var(--docs-accent-soft);
+  transform: translateY(-1px);
+}
+
+html:not([data-has-hero]) .pagination-links .link-title {
+  color: var(--sl-color-white);
+}

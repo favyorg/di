@@ -1,4 +1,7 @@
+declare const __hkt__: unique symbol;
+
 export interface HKT {
+  readonly [__hkt__]: true;
   readonly _NAME: PropertyKey;
   readonly _RESULT?: unknown;
   readonly _DEPS?: unknown;

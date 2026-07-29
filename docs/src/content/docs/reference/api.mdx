@@ -1,0 +1,532 @@
+---
+title: API Reference
+description: Exported values and TypeScript declarations for @favy/di.
+---
+
+import { Editor } from '../../../components/editor';
+
+The package root exports the default factory, the factory builder, module types,
+transform helpers, and the HKT encoding:
+
+```ts
+export {
+  Module,
+  makeModule,
+  withModuleName,
+  type DefaultModuleFactory,
+  type Live,
+  type TModule,
+  type ModuleLive,
+  type MakeOptions,
+  type transformInput,
+  type transformOutput,
+  type HKT,
+  type Kind,
+} from '@favy/di';
+```
+
+<nav class="api-index" aria-label="API symbols">
+  <strong>Common API</strong>
+  <a href="#module">Module</a>
+  <a href="#livet">Live</a>
+  <a href="#modulelive">ModuleLive</a>
+
+  <strong>Factory configuration</strong>
+  <a href="#makemodule">makeModule</a>
+  <a href="#makeoptionsd-m-p-i-o">MakeOptions</a>
+  <a href="#defaultmodulefactory">DefaultModuleFactory</a>
+  <a href="#withmodulename">withModuleName</a>
+  <a href="#transforminputd-p">transformInput</a>
+  <a href="#transformoutputi-d-o">transformOutput</a>
+
+  <strong>Advanced types</strong>
+  <a href="#tmodulek-d-r-c--d">TModule</a>
+  <a href="#hkt">HKT</a>
+  <a href="#kindh-name-result-deps-meta-meta2">Kind</a>
+</nav>
+
+## Common API
+
+### `Module`
+
+`Module` is the default module factory. It uses `withModuleName`, run-scoped
+caching, lazy provider resolution, and the identity output transform.
+
+```ts
+export declare const Module: DefaultModuleFactory;
+```
+
+Create a module in two calls: declare its callback dependencies, then provide a
+`PropertyKey` name and callback.
+
+<Editor client:load code={`import { Module, type ModuleLive } from '@favy/di';
+
+type GreetingDeps = {
+  subject: string;
+} & ModuleLive;
+
+const Greeting = Module<GreetingDeps>()(
+  'Greeting',
+  ({ subject, Module }) => Module.name.toString() + ': ' + subject,
+);
+
+console.log(Greeting({ subject: 'hello' })); // "Greeting: hello"
+console.log(Greeting.name); // "Greeting"`} />
+
+The dependency map passed to a call must be a non-null object. The runtime
+copies its own string and symbol keys into an invocation context; inherited
+prototype members are not dependency entries. Consequently, class instances
+and custom-prototype objects can be maps when the required dependencies are own
+fields.
+
+The default input transform writes the current `{ Module: { name } }` metadata.
+Include `ModuleLive` in the callback contract when the callback reads it. The
+caller does not supply that generated key.
+
+`Module.flushCache()` clears the factory-wide cache. The default factory uses
+`cache: 'run'`, so this normally matters only on a factory created with
+`makeModule({ cache: 'module' })`.
+
+### `Live<T>`
+
+Extracts a module's remaining requirements and adds its result under its
+declared key.
+
+```ts
+export type Live<T> = T extends {
+  name: infer K extends PropertyKey;
+  [__deps__]: Brand<infer D, infer R>;
+}
+  ? D & { [P in K]: R }
+  : never;
+```
+
+`Live` reads the module's existing private type marker directly, so it retains
+transitive requirements without recursively expanding the callable and its
+`.provide()` method.
+
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+const Database = Module<{ url: string }>()('Database', ({ url }) => ({ url }));
+type DatabaseLive = Live<typeof Database>;
+
+const Repository = Module<DatabaseLive>()(
+  'Repository',
+  ({ Database }) => Database.url,
+);
+type RepositoryLive = Live<typeof Repository>;
+
+const App = Module<RepositoryLive>()('App', ({ Repository }) => Repository);
+
+console.log(App({ url: 'memory://db', Database, Repository }));
+// "memory://db"`} />
+
+### `ModuleLive`
+
+Describes the metadata produced by the default input transform:
+
+```ts
+export type ModuleLive = {
+  Module: { name: PropertyKey };
+};
+```
+
+Intersect it into an explicit dependency contract when the callback needs both
+application dependencies and the current module name.
+
+## Factory configuration
+
+### `makeModule`
+
+Creates an independent factory. Pass an options object, omit it, or pass an
+input transform directly as shorthand.
+
+<details class="api-declaration">
+  <summary>Full declaration</summary>
+
+```ts
+type Lifecycle = {
+  cache?: 'run' | 'module' | 'none';
+  lazy?: boolean;
+};
+
+type InputFn = (deps: any, name: PropertyKey) => object;
+type OutputFn<D = any> = (result: any, deps: D, isRoot: boolean) => any;
+type Identity<I> = (<T>(result: T) => T) & ((result: I) => 0);
+
+export declare const makeModule: {
+  (
+    options?: Lifecycle & {
+      transformInput?: undefined | typeof withModuleName;
+      transformOutput?: undefined;
+    }
+  ): DefaultModuleFactory;
+
+  <O extends OutputFn>(
+    options: Lifecycle & {
+      transformInput?: undefined | typeof withModuleName;
+      transformOutput: O;
+    }
+  ): Factory<object, Named, O>;
+
+  <
+    I extends InputFn,
+    O extends OutputFn | undefined = undefined
+  >(
+    options: Lifecycle & {
+      transformInput: I & Valid<I>;
+      transformOutput?: O;
+    }
+  ): Factory<
+    Domain<I>,
+    Added<I>,
+    O extends OutputFn ? O : never
+  >;
+
+  <D, M, P, I, O>(
+    options: MakeOptions<D, M, P, I, O>
+  ): Factory<
+    D & object,
+    P & object,
+    transformOutput<I, D & P & object, O> | Identity<I>
+  >;
+
+  (transform: typeof withModuleName): DefaultModuleFactory;
+
+  <I extends InputFn>(
+    transform: I & Valid<I>
+  ): Factory<Domain<I>, Added<I>>;
+};
+```
+
+</details>
+
+`Factory`, `Named`, `Domain`, `Added`, `Valid`, and `Identity`
+above are internal declaration helpers. They infer the input transform's
+minimum domain, the fields it adds, and the resulting module call signature;
+they are not additional package exports.
+
+| Option            | Default          | Runtime effect                                         |
+| ----------------- | ---------------- | ------------------------------------------------------ |
+| `transformInput`  | `withModuleName` | Produces the value passed to the callback               |
+| `transformOutput` | identity         | Receives a successful callback result                   |
+| `cache`           | `'run'`          | Chooses run, factory-wide, or disabled provider caching |
+| `lazy`            | `true`           | Resolves providers only when their fields are read      |
+
+<Editor client:load code={`import { makeModule } from '@favy/di';
+
+const SingletonModule = makeModule({ cache: 'module' });
+
+let runs = 0;
+const Counter = SingletonModule()('Counter', () => ++runs);
+
+console.log(Counter()); // 1
+console.log(Counter()); // 1
+
+SingletonModule.flushCache();
+console.log(Counter()); // 2`} />
+
+#### Cache modes
+
+- `'run'` shares a provider result within one root resolution and starts a new
+  context for the next root call.
+- `'module'` stores results by module name in the factory until
+  `flushCache()`.
+- `'none'` evaluates a provider each time its dependency field is read.
+
+With `lazy: false`, providers present on the root map are read eagerly before
+the module callback. Raw dependency values are never invoked. With
+`lazy: true`, object rest/spread can still force reads because it enumerates the
+context.
+
+### `MakeOptions<D, M, P, I, O>`
+
+The exported compatibility type for an options object is:
+
+```ts
+export type MakeOptions<D, M, P, I, O> = {
+  transformInput?: transformInput<D & object, P & object>;
+  transformOutput?: transformOutput<I, D & P & object, O>;
+  cache?: 'run' | 'module' | 'none';
+  lazy?: boolean;
+};
+```
+
+`M` is retained for source compatibility and is not used by the current
+implementation. The actual `makeModule` value uses the overloads above so that
+omitted transforms receive their typed runtime defaults and HKT transforms can
+replace an ordinary callback or callable shape.
+
+### `DefaultModuleFactory`
+
+```ts
+type Named<N extends PropertyKey = PropertyKey> = {
+  Module: { name: N };
+};
+
+export type DefaultModuleFactory = Factory<object, Named>;
+```
+
+Its public usage is:
+
+```ts
+Factory<TransformDomain, AddedInput, OutputTransform?>
+  <Deps>()
+  (name, callback)
+  // => TModule<name, callerDependencies, callbackOrTransformedResult>
+```
+
+The first call may omit `Deps`. For the default factory this gives the callback
+the generated `Module` metadata and produces a zero-dependency callable.
+
+### `withModuleName`
+
+The default input transform:
+
+```ts
+type Generated<N extends PropertyKey = PropertyKey> = {
+  Module: { name: N };
+};
+
+type Each<D, K extends PropertyKey> = D extends unknown ? Omit<D, K> : never;
+
+export declare const withModuleName: <
+  D extends object,
+  const N extends PropertyKey
+>(
+  deps: D,
+  name: N
+) => Each<D, 'Module'> & Generated<N>;
+```
+
+It assigns `{ Module: { name } }` to `deps` and returns that same object. The
+type preserves every other input field, preserves union branches, replaces a
+previous `Module` field, and keeps a literal string, number, or symbol name for
+direct calls.
+
+A custom input transform replaces this behavior unless it explicitly calls
+`withModuleName`.
+
+### `transformInput<D, P>`
+
+```ts
+export type transformInput<D extends object, P extends object> = <X extends D>(
+  deps: X,
+  name: PropertyKey
+) => X & P;
+```
+
+`D` is the minimum input domain and `P` describes added fields. The generic
+`X & P` result makes an ordinary transform preserve later dependency fields.
+Constrained transforms can be written inline as `<X extends Base>` or assigned
+an explicit `transformInput<Base, Added>` annotation. The caller-supplied
+portion of a module contract must still satisfy `Base`.
+
+Required inferred additions are removed from the module's caller requirements.
+Keys already known on the transform domain remain caller-supplied, while a new
+field can still be inferred when the domain has an open index signature. The
+compact types intentionally leave unusually ambiguous overlap and union-return
+diagnostics to the declared callback contract.
+
+Return an `HKT` marker when a transform intentionally replaces or wraps the
+callback input instead of preserving it.
+
+### `transformOutput<I, D, O>`
+
+```ts
+export type transformOutput<I, D, O> = (
+  result: I,
+  deps: D,
+  isRoot: boolean
+) => O;
+```
+
+It receives a successful callback result, that invocation's transformed input,
+and whether the call is the root resolution. A custom ordinary output transform
+constrains the callback result to `I` and makes the callable return `O`. A
+generic identity transform preserves each callback's inferred result. Return an
+output `HKT` when the callable type must be computed from its name, callback
+result, or remaining dependencies.
+
+The callback runs before `transformOutput`; this hook cannot catch a synchronous
+exception that the callback already threw and does not automatically await a
+rejected promise.
+
+## Advanced types
+
+### `TModule<K, D, R, C = D>`
+
+`TModule` is the callable returned by an ordinary factory. `D` is the
+dependency map still required from the next caller. `C` retains the compatible
+full context while `.provide()` binds fields.
+
+The emitted declaration is based on these compact helper types:
+
+<details class="api-declaration">
+  <summary>Full declaration</summary>
+
+```ts
+declare const __deps__: unique symbol;
+
+type Brand<in D, out R> = {
+  result: R;
+  accepts: (deps: D) => 0;
+};
+
+type Flat<D> = 0 extends 1 & D
+  ? D
+  : D extends unknown
+  ? { [K in keyof D]: D[K] }
+  : never;
+
+type ProviderDeps<D> = Flat<D> extends D ? Flat<D> : D;
+
+type Provider<R, D> = ((deps: any) => R) & {
+  readonly [__deps__]: Brand<ProviderDeps<D>, R>;
+};
+
+type Keys<D> = D extends unknown ? keyof D : never;
+
+type KeylessDeps<D> = {} extends D ? {} : D;
+
+type ModuleDeps<D> = [D] extends [never]
+  ? never
+  : Keys<D> extends never
+  ? KeylessDeps<D>
+  : D;
+
+type Required<D> = {
+  [K in keyof D]-?: {} extends Pick<D, K> ? never : K;
+}[keyof D];
+
+type Value<V> = V extends object
+  ? V & { readonly [__deps__]?: never }
+  : V;
+
+type Deps<D, C = D> = D extends unknown
+  ? {
+      [K in keyof D]:
+        | Value<D[K]>
+        | Provider<D[K], C extends D ? C : never>;
+    }
+  : never;
+
+type Args<D, C> = Keys<D> extends never
+  ? []
+  : {} extends D
+  ? [deps?: Deps<D, C>]
+  : [deps: Deps<D, C>];
+
+type Rest<D, P, Keep = false> = D extends unknown
+  ? P extends Partial<Deps<D, Keep extends true ? D : any>>
+    ? Keep extends true
+      ? D
+      : Omit<D, Extract<Required<P>, keyof D>>
+    : never
+  : never;
+
+type Exact<D, P> = P & Record<Exclude<Keys<P>, Keys<D>>, never>;
+
+export type TModule<K extends PropertyKey, D, R, C = D> = {
+  (...args: Args<D, C>): R;
+  readonly name: K;
+  readonly [__deps__]: Brand<ModuleDeps<D>, R>;
+
+  provide<const P extends Partial<Deps<D, C>> = {}>(
+    ...args: {} extends D ? [deps?: Exact<D, P>] : [deps: Exact<D, P>]
+  ): TModule<K, Flat<Rest<D, P>>, R, Rest<C, P, true>>;
+};
+```
+
+</details>
+
+- A module with no remaining keys takes no argument. A contract compatible
+  with `{}` takes an optional dependency object; other contracts require it.
+- Every dependency field accepts a final value or a branded module created by
+  `Module`/`makeModule`. Ordinary functions stay raw function values. A branded
+  provider is resolved even when the field's declared type is broad such as
+  `unknown` or `any`.
+- A provider's remaining dependencies must fit a compatible branch of the
+  consumer context. `Live<typeof Provider>` is the usual way to carry those
+  transitive requirements.
+- `name` is the readonly declared string, number, or symbol key.
+- `.provide()` returns an isolated, still-provider-capable module. Required
+  keys present on the partial's type are removed from the next call signature;
+  optional keys do not prove that a required dependency was bound. Like the
+  module call itself, `.provide()` may omit its map when `D` is compatible with
+  `{}`; a contract with required fields still requires an argument.
+- Fresh object literals with unknown keys are rejected. Discriminated-union
+  calls retain branch-specific required fields, and binding a discriminant can
+  narrow the remaining branch. The types deliberately do not attempt exhaustive
+  diagnostics for every union-valued or structurally widened partial.
+- Bound values take precedence over the root map. A later `.provide()` call
+  overrides an earlier bound value without mutating the original module.
+
+At runtime, both direct dependency maps and `.provide()` maps may be any
+non-null object. Only their own keys are consumed.
+
+<Editor client:load code={`import { Module, type TModule } from '@favy/di';
+
+const Add: TModule<'Add', { left: number; right: number }, number> = Module<{
+  left: number;
+  right: number;
+}>()('Add', ({ left, right }) => left + right);
+
+const WithLeft = Add.provide({ left: 2 });
+const ReadyAdd = WithLeft.provide({ right: 3 });
+
+console.log(ReadyAdd()); // 5
+console.log(ReadyAdd.name); // "Add"`} />
+
+### `HKT`
+
+The nominal base interface for higher-kinded transformations:
+
+```ts
+declare const __hkt__: unique symbol;
+
+export interface HKT {
+  readonly [__hkt__]: true;
+  readonly _NAME: PropertyKey;
+  readonly _RESULT?: unknown;
+  readonly _DEPS?: unknown;
+  readonly _META?: unknown;
+  readonly _META2?: unknown;
+  readonly type?: unknown;
+}
+```
+
+Extend it and define `type` in terms of `this['_NAME']`,
+`this['_RESULT']`, or the other slots. For an input HKT, `makeModule` supplies
+the declared key as `_NAME` and the declared dependency map as `_RESULT` and
+`_DEPS`. For an output HKT it supplies the key, callback result, and remaining
+dependency map. The symbol marker prevents an ordinary `_NAME` field from being
+mistaken for an HKT.
+
+### `Kind<H, NAME, RESULT, DEPS, META, META2>`
+
+Applies concrete slots to an HKT:
+
+```ts
+export type Kind<H extends HKT, NAME, RESULT, DEPS, META, META2> = H extends {
+  readonly type: unknown;
+}
+  ? (H & {
+      readonly _NAME: NAME;
+      readonly _RESULT: RESULT;
+      readonly _DEPS: DEPS;
+      readonly _META: META;
+      readonly _META2: META2;
+    })['type']
+  : {
+      readonly _H: H;
+      readonly _NAME: (_: NAME) => void;
+      readonly _RESULT: () => RESULT;
+      readonly _DEPS: () => DEPS;
+      readonly _META: () => META;
+      readonly _META2: () => META2;
+    };
+```
+
+Most applications do not call `Kind` directly. Define an input or output HKT,
+return its marker from a transform, and let `makeModule` apply it.

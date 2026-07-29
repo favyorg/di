@@ -1,231 +1,123 @@
 ---
 title: Introduction
+description: Build and run an explicit, type-safe dependency graph with @favy/di.
 ---
 
 import { Editor } from '../../../components/editor';
 
-`@favy/di` is a lightweight, TypeScript-powered tool that makes dependency injection effortless. It lets you build modular, composable functionality with zero boilerplate—just write functions and focus on your logic while it handles the rest.
-Ideal for building streamlined, testable, and future-proof applications.
+`@favy/di` turns ordinary TypeScript functions into named, composable dependency providers. There are no decorators or containers: a module declares the dependency object it expects, and the application supplies the graph when it calls its top-level module.
 
----
-
-## Motivation
-
-Most dependency injection libraries are overly complex, requiring excessive boilerplate. With `@favy/di`, managing dependencies is as simple as writing a function.
-
-Powered by TypeScript, it automatically `infers dependencies` based on what your function uses—no explicit declarations needed. Dependencies are passed through an `ambient context`, so you can focus on business logic instead of infrastructure.
-
-Each module is `just a function` that takes an object, making it flexible, intuitive, and `easy` to use anywhere. Build clean, testable, and maintainable applications without unnecessary overhead.
-
-## Install:
+## Install
 
 ```sh frame="none"
 npm install @favy/di
 ```
 
-```sh frame="none"
-yarn add @favy/di
-```
+The package works with npm-compatible package managers, including Yarn, pnpm, and Bun. Its declarations require TypeScript 5.0 or newer.
 
-```sh frame="none"
-pnpm add @favy/di
-```
+## Your first module
 
-```sh frame="none"
-bun add @favy/di
-```
+`Module()` creates a named callable. The callback computes the callable's result.
 
-## Setting Up a Simple Module
+<Editor client:load code={`import { Module } from '@favy/di';
 
-A module is defined using the Module function:
+const Ready = Module()('Ready', () => 'Server ready!');
 
-<Editor client:only code={`import { Module } from '@favy/di';
+console.log(Ready()); // "Server ready!"
+console.log(Ready.name); // "Ready"`} />
 
-const Ready = Module()('Ready', () => console.log('Server ready!'));
+The callable's `name` is the exact key passed to the constructor. A module with no application dependencies can be called with no arguments.
 
-console.log(Ready()); // Output: "Server ready!"`}></Editor>
+## Declare dependencies explicitly
 
-## Defining Parameters
+Pass the dependency object type to `Module<Deps>()`. TypeScript checks both the callback and every root call against that declaration.
 
-You can define modules that accept parameters:
+<Editor client:load code={`import { Module } from '@favy/di';
 
-<Editor client:only code={`import { Module } from '@favy/di';
-
-interface AddOneCtx {
-\tnumber: number;
+interface AddOneDeps {
+  value: number;
 }
-const AddOne = Module<AddOneCtx>()('AddOne', ({ number }) => number + 1);
 
-console.log(AddOne({ number: 5 })); // Output: 6
-`}/>
+const AddOne = Module<AddOneDeps>()('AddOne', ({ value }) => value + 1);
 
-## Composing Modules
+console.log(AddOne({ value: 5 })); // 6`} />
 
-Modules can be composed to depend on other modules dynamically. Here’s an example:
+The library does not infer dependencies by inspecting a function body. You declare `AddOneDeps`; TypeScript then infers the callback result and reports missing or incorrectly typed inputs.
 
-<Editor client:only code={`import { Module, Live } from '@favy/di';
+## Compose modules with `Live`
 
-const A = Module()('A', () => 10);
-type ALive = Live<typeof A>;
+`Live<typeof SomeModule>` contains two parts:
 
-const B = Module()('B', () => 20);
-type BLive = Live<typeof B>;
+- every dependency required to run `SomeModule`, including requirements inherited from modules below it;
+- the result of `SomeModule`, under its declared name.
 
-const Sum = Module<ALive & BLive>()('Sum', ({ A, B }) => A + B);
+That makes dependencies transitive and keeps the complete graph visible at the composition root.
 
-console.log(Sum({ A, B })); // Output: 30
-`}/>
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
 
-## Dependency Injection
-
-Modules support dynamic dependency injection, allowing for highly composable functionality:
-
-<Editor client:only code={`import { Module, Live } from '@favy/di';
-
-const Random = Module()('Random', () => ({
-\tgenerate: () => Math.random(),
-}));
-type RandomLive = Live<typeof Random>;
-
-const App = Module<RandomLive>()('App', ({ Random }) => {
-\treturn 'Random value: ' + Random.generate();
-},
+const Config = Module<{ environment: 'dev' | 'prod' }>()(
+  'Config',
+  ({ environment }) => ({ apiUrl: 'https://' + environment + '.example.com' }),
 );
-
-console.log(App({ Random })); // Output: "Random value: 0.1234..."
-
-// You can override the dependency at any level
-console.log(App({
-\tRandom: {
-\t\tgenerate: () => 4,
-\t}
-})) // Output: "Random value: 4"
-`}/>
-
-# Deep Dependency Replacement in Module Architecture
-
-This example demonstrates how to replace dependencies at any depth level within a modular application structure. The implementation shows the flexibility of replacing deep-level dependencies without modifying the higher-level modules.
-
-## Module Structure
-
-The application consists of five hierarchical levels:
-
-1. Logger (Base level)
-2. Config
-3. UserRepository
-4. UserService
-5. App (Top level)
-
-## Demonstrated Capability
-
-The implementation shows how to:
-
-- Replace a deep-level dependency (UserRepository) while keeping all other modules intact
-- Maintain the full functionality of the application while using the replaced dependency
-- Preserve type safety when replacing modules
-
-The example specifically demonstrates replacing the UserRepository with a test implementation and the Logger with a no-op version, showing that dependencies can be replaced regardless of their position in the module hierarchy.
-
-The diagram visualizes both the standard module connections and how the system works with replaced dependencies, while the code shows the practical implementation.
-
-```mermaid
-graph TD
-    subgraph Default Behavior
-        App --> UserService
-        UserService --> UserRepository
-        UserRepository --> Config
-        Config --> Logger
-    end
-
-    subgraph Overridden Behavior
-        App_Override(App) --> UserService_Override(UserService)
-        UserService_Override --> UserRepository_Override(UserRepository - overridden)
-    end
-
-    classDef overridden fill:#f9f,stroke:#333,stroke-width:2px;
-    UserRepository_Override:::overridden
-```
-
-### Code
-
-```ts
-import { Module, Live } from '@favy/di';\
-
-// src/logger.ts Level 1: Logging
-const Logger = Module()('Logger', () => ({
-  log: (message: string) => console.log('[Log]: ' + message),
-}));
-type LoggerLive = Live<typeof Logger>;
-
-// src/config.ts Level 2: Configuration
-const Config = Module<LoggerLive>()('Config', ({ Logger }) => ({
-  get: (key: string) => {
-    Logger.log('Fetching config for key: ' + key);
-    return 'value-of-' + key;
-  },
-}));
 type ConfigLive = Live<typeof Config>;
 
-// src/user-repository.ts Level 3: Data repository
-const UserRepository = Module<ConfigLive>()('UserRepository', ({ Config }) => ({
-  findUser: (id: number) => {
-    const dbName = Config.get('dbName');
-    return { id, name: 'User-' + id, db: dbName };
-  },
+const Service = Module<ConfigLive>()('Service', ({ Config }) => ({
+  endpoint: Config.apiUrl + '/users',
 }));
-type UserRepositoryLive = Live<typeof UserRepository>;
+type ServiceLive = Live<typeof Service>;
 
-// src/user-service.ts Level 4: Service
-const UserService = Module<UserRepositoryLive>()(
-  'UserService',
-  ({ UserRepository }) => ({
-    getUserProfile: (id: number) => {
-      const user = UserRepository.findUser(id);
-      return { ...user, profile: 'Profile-of-' + user.name };
-    },
-  })
+const App = Module<ServiceLive>()('App', ({ Service }) => Service.endpoint);
+
+const result = App({
+  environment: 'dev',
+  Config,
+  Service,
+});
+
+console.log(result); // "https://dev.example.com/users"`} />
+
+Here `ConfigLive` is structurally equivalent to `{ environment: 'dev' | 'prod'; Config: { apiUrl: string } }`. `ServiceLive` carries those fields forward and adds the keyed `Service` output. Consequently, `App`'s root call supplies `environment`, `Config`, and `Service`.
+
+## The composition root
+
+The top-level call is the **composition root**: the one place where concrete values and provider callables are assembled. A dependency entry may be its final value or a module that produces that value. The complete dependency map may be any non-null object, including a class instance or an object with a custom prototype. Its own string and symbol keys participate in resolution; inherited properties do not.
+
+The default `Module` factory is lazy. At a root call, it installs the supplied providers into a shared dependency context and evaluates a provider only when a module reads that key. Its default `cache: 'run'` then reuses the resolved value for the rest of that root call. Calling the root module again starts a new run with a new run cache.
+
+This also makes replacement straightforward. The static dependency contract does not shrink just because a nested output is replaced: `Live<typeof Service>` still includes `Service`'s transitive `Config` requirements.
+
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+const Config = Module<{ environment: string }>()(
+  'Config',
+  ({ environment }) => ({ label: environment }),
 );
-type UserServiceLive = Live<typeof UserService>;
+type ConfigLive = Live<typeof Config>;
 
-// src/app.ts Level 5: App
-const App = Module<UserServiceLive>()('App', ({ UserService }) => ({
-  start: () => {
-    const profile = UserService.getUserProfile(1);
-    return 'App started with user profile: ' + profile.profile;
-  },
+const Service = Module<ConfigLive>()('Service', ({ Config }) => ({
+  describe: () => 'service:' + Config.label,
 }));
+type ServiceLive = Live<typeof Service>;
 
-// Usage with default dependencies
-console.log(
-  App({
-    Logger,
-    Config,
-    UserRepository,
-    UserService,
-  }).start()
-);
-// Output: "App started with user profile: Profile-of-User-1"
+const App = Module<ServiceLive>()('App', ({ Service }) => Service.describe());
 
-// Overriding dependencies
-console.log(
-  App({
-    // Override the logging module to do nothing
-    Logger: { log: (message: string) => ({}) },
-    Config,
-    // Override the data repository to return test data
-    UserRepository: {
-      findUser: (id: number) => ({
-        id,
-        name: 'Test-' + id,
-        db: 'Test-DB',
-      }),
-    },
-    UserService,
-  }).start()
-);
-// Output: "App started with user profile: Profile-of-Test-1"
-```
+const fakeService = {
+  describe: () => 'service:test',
+};
 
-## Discover More
+const result = App({
+  environment: 'test',
+  Config,
+  Service: fakeService,
+});
 
-Explore our comprehensive documentation to discover the full power of the module system, including advanced features, real-world examples, and best practices for building scalable applications.
+console.log(result); // "service:test"`} />
+
+Because `App` reads the supplied `Service` value directly, lazy resolution does not execute `Config` in this run. The `environment` and `Config` keys are nevertheless required by the declared `ServiceLive` type. Use `.provide()` when you want to bind some or all of those explicit requirements ahead of the root call.
+
+## Next steps
+
+- Learn the exact callable and `Live` model in [Module](/module/module/).
+- Compare lifecycle choices in [Caching](/module/cache/) and [Lazy initialization](/module/lazy/).
+- Bind dependencies incrementally with [Partial application](/module/partial/).
+- Look up exported declarations in the [API reference](/reference/api/).

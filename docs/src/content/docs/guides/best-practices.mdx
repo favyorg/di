@@ -1,0 +1,273 @@
+---
+title: Best Practices
+description: Organize typed modules, choose cache lifetimes, handle errors at boundaries, and preserve lazy initialization.
+---
+
+import { Editor } from '../../../components/editor';
+
+Use these practices after the [Introduction](/guides/introduction/) and [core Module model](/module/module/) are familiar.
+
+## Organize Around Focused Modules
+
+Prefer one exported module per file when it represents a meaningful application capability. Export its `Live` type beside it so consumers can declare the dependency without repeating its return type.
+
+<Editor client:load code={`// logger.ts
+import { Module, type Live } from '@favy/di';
+
+export interface LoggerService {
+  info: (message: string) => void;
+  error: (message: string) => void;
+}
+
+export const Logger = Module()(
+  'Logger',
+  (): LoggerService => ({
+    info: (message) => console.log('[INFO]', message),
+    error: (message) => console.error('[ERROR]', message),
+  }),
+);
+
+export type LoggerLive = Live<typeof Logger>;`} />
+
+Small modules are easier to replace, but avoid splitting code merely to increase the module count. A useful module owns one responsibility and exposes a stable return value.
+
+## Keep Dependency Boundaries Explicit
+
+Use an interface for a replaceable port:
+
+<Editor client:load code={`import { Module } from '@favy/di';
+
+interface ClockPort {
+  now: () => number;
+}
+
+const Timestamp = Module<{ Clock: ClockPort }>()(
+  'Timestamp',
+  ({ Clock }) => Clock.now(),
+);
+
+const fakeClock: ClockPort = { now: () => 123 };
+
+console.log(Timestamp({ Clock: fakeClock })); // 123`} />
+
+Use an interface when the dependency is an external or application boundary
+that callers should replace without knowing a concrete module.
+
+Use `Live<typeof Module>` when the dependency is a concrete provider in the
+application graph:
+
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+const Config = Module<{ environment: 'dev' | 'prod' }>()(
+  'Config',
+  ({ environment }) => ({ environment }),
+);
+type ConfigLive = Live<typeof Config>;
+
+const ApiUrl = Module<ConfigLive>()(
+  'ApiUrl',
+  ({ Config }) => 'https://' + Config.environment + '.example.com',
+);
+
+console.log(ApiUrl({ environment: 'dev', Config }));
+// "https://dev.example.com"`} />
+
+Keep dependency flow in one direction, for example infrastructure → repositories → services → entry points. A cycle makes initialization order and replacement boundaries difficult to reason about; extract the shared capability behind a lower-level interface instead. If resolution reads a provider key that is already being resolved, the runtime stops and throws `Circular dependency: <key>`.
+
+Root calls and `.provide()` accept any non-null object as a dependency map, including class instances and custom-prototype objects. Only own keys participate in resolution, so initialize dependency fields on the instance itself instead of relying on inherited properties.
+
+## Match Cache Lifetime to the Composition Root
+
+### `run`: One Top-Level Call
+
+The default `cache: 'run'` reuses dependencies during one top-level module call. It acts like request-scoped state only when the application invokes its composition root once per request:
+
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+let contextCreationCount = 0;
+const RequestContext = Module<{ requestId: string }>()(
+  'RequestContext',
+  ({ requestId }) => requestId + ':' + ++contextCreationCount,
+);
+type RequestContextLive = Live<typeof RequestContext>;
+
+const ReadContextTwice = Module<RequestContextLive>()(
+  'ReadContextTwice',
+  ($) => [$.RequestContext, $.RequestContext] as const,
+);
+
+console.log(ReadContextTwice({ requestId: 'a', RequestContext }));
+// ["a:1", "a:1"]
+console.log(ReadContextTwice({ requestId: 'b', RequestContext }));
+// ["b:2", "b:2"]
+console.log(contextCreationCount); // 2`} />
+
+The two reads in one root call share a provider result. The second root call
+creates a new run and a new context. With `cache: 'none'`, the two values inside
+each pair would differ.
+
+### `module`: One Factory-Wide Cache
+
+Use `cache: 'module'` for values that should survive top-level calls made through the same `makeModule` factory:
+
+<Editor client:load code={`import { makeModule } from '@favy/di';
+
+const InfrastructureModule = makeModule({ cache: 'module' });
+
+let poolCreationCount = 0;
+const DatabasePool = InfrastructureModule()('DatabasePool', () => {
+  poolCreationCount += 1;
+  return {
+    query: async (statement: string) => ({
+      statement,
+      rows: [] as string[],
+    }),
+  };
+});
+
+const firstPool = DatabasePool();
+const secondPool = DatabasePool();
+
+console.log(firstPool === secondPool); // true
+console.log(poolCreationCount); // 1
+
+InfrastructureModule.flushCache();`} />
+
+Own cleanup explicitly: `flushCache()` removes cached values but does not call resource-specific disposal methods.
+
+Use `cache: 'none'` when every dependency access must recompute. See [Caching](/module/cache/) for comparisons.
+
+## Handle Errors Where They Can Be Recovered
+
+Catch operational errors inside the async method or application boundary that can add context or convert them into a domain result:
+
+<Editor client:load code={`import { Module } from '@favy/di';
+
+interface User {
+  id: number;
+  name: string;
+}
+
+interface UserRepositoryPort {
+  findById: (id: number) => Promise<User | undefined>;
+}
+
+class RepositoryUnavailable extends Error {}
+
+type Result<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: 'not-found' | 'unavailable' };
+
+const GetUser = Module<{ UserRepository: UserRepositoryPort }>()(
+  'GetUser',
+  ({ UserRepository }) => async (id: number): Promise<Result<User>> => {
+    try {
+      const user = await UserRepository.findById(id);
+      return user ? { ok: true, value: user } : { ok: false, error: 'not-found' };
+    } catch (error: unknown) {
+      if (!(error instanceof RepositoryUnavailable)) throw error;
+      return { ok: false, error: 'unavailable' };
+    }
+  },
+);
+
+const getUser = GetUser({
+  UserRepository: {
+    findById: async () => {
+      throw new RepositoryUnavailable();
+    },
+  },
+});
+
+void getUser(1).then(console.log);
+// { ok: false, error: "unavailable" }`} />
+
+Only the declared infrastructure failure becomes a domain result. Unknown
+exceptions are rethrown because this boundary does not know how to recover from
+them. `transformOutput` receives a value after the module body returns; it
+cannot catch an exception already thrown by the module body and does not await
+a rejected promise automatically.
+
+## Build Test Helpers Around Instance State
+
+Keep observations in the object returned by a mock factory. Do not attach per-test arrays to the factory function itself:
+
+<Editor client:load code={`import { Module } from '@favy/di';
+
+type LoggerPort = { info: (message: string) => void };
+
+const Audit = Module<{ Logger: LoggerPort }>()('Audit', ({ Logger }) => Logger.info);
+
+const createMockLogger = () => {
+  const logs: string[] = [];
+  return {
+    logs,
+    info: (message: string) => logs.push(message),
+  };
+};
+
+const logger = createMockLogger();
+Audit({ Logger: logger })('login:7');
+
+console.log(logger.logs); // ['login:7']`} />
+
+For complete unit and integration examples, see [Testing](/guides/testing/).
+
+## Preserve Conditional Lazy Access
+
+Parameter destructuring reads a dependency before the function body can evaluate a condition. Keep the dependency object and access the property inside the branch:
+
+<Editor client:load code={`import { Module, type Live } from '@favy/di';
+
+let initializationCount = 0;
+const ExpensiveFeature = Module()('ExpensiveFeature', () => {
+  initializationCount += 1;
+  return {
+    run: () => 'expensive result',
+  };
+});
+type ExpensiveFeatureLive = Live<typeof ExpensiveFeature>;
+
+const App = Module<ExpensiveFeatureLive>()('App', ($) => ({
+  run: (enabled: boolean) => (enabled ? $.ExpensiveFeature.run() : 'fast path'),
+}));
+
+const app = App({ ExpensiveFeature });
+
+console.log(app.run(false)); // fast path
+console.log(initializationCount); // 0
+console.log(app.run(true)); // expensive result
+console.log(initializationCount); // 1`} />
+
+## Defer Work, Not Ownership
+
+If setup is expensive but only some callers need it, expose a method that performs the work on demand. Decide separately whether that method needs its own memoization:
+
+<Editor client:load code={`import { Module } from '@favy/di';
+
+interface Report {
+  generatedAt: number;
+  rows: string[];
+}
+
+const loadReport = (): Report => ({
+  generatedAt: Date.now(),
+  rows: ['summary'],
+});
+
+const Reports = Module()('Reports', () => ({
+  load: () => loadReport(),
+}));
+
+const reports = Reports();
+console.log(reports.load());`} />
+
+## Summary
+
+1. Keep modules focused and export their `Live` types.
+2. Draw a deliberate composition root and one-way dependency flow.
+3. Treat `run` as a call boundary, not an automatic web-request scope.
+4. Use factory-wide caching only with an explicit reset and cleanup policy.
+5. Catch errors at boundaries that can recover or add domain context.
+6. Keep test state inside each fixture instance.
+7. Access lazy dependencies inside the condition that needs them.

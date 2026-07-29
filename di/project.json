@@ -5,14 +5,24 @@
   "projectType": "library",
   "tags": [],
   "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc -p di/tsconfig.spec.json --noEmit"
+      }
+    },
     "build": {
       "executor": "@nx/js:swc",
       "outputs": ["{options.outputPath}"],
       "options": {
         "outputPath": "dist/di",
-        "main": "di/src/index.ts",
+        "main": "di/index.js",
         "tsConfig": "di/tsconfig.lib.json",
-        "assets": ["di/*.md"]
+        "assets": [
+          "di/*.md",
+          "di/index.js",
+          { "input": ".", "glob": "LICENSE", "output": "." }
+        ]
       }
     }
   }

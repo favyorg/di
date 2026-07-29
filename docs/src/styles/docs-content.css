@@ -1,0 +1,316 @@
+html:not([data-has-hero]) .sl-markdown-content > * + * {
+  margin-block-start: 1rem;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  :is(p, li):not(:where(.not-content *)) {
+  font-size: 1rem;
+  line-height: 1.75;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  h2:not(:where(.not-content *)) {
+  margin-block-start: 3rem;
+  border-block-start: 1px solid var(--docs-border);
+  padding-block-start: 1rem;
+  font-size: clamp(1.65rem, 4vw, 2rem);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  code:not(pre code):not(:where(.not-content *)) {
+  border: 1px solid var(--docs-border);
+  border-radius: 0.35rem;
+  padding: 0.12em 0.38em;
+  color: var(--sl-color-white);
+  background-color: var(--docs-accent-soft);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  table:not(:where(.not-content *)) {
+  display: block;
+  max-inline-size: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius-md);
+  background-color: var(--docs-surface-raised);
+  border-spacing: 0;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  :is(th, td):not(:where(.not-content *)) {
+  border-block-end: 1px solid var(--docs-border);
+  padding: 0.7rem 0.85rem;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  th:not(:where(.not-content *)) {
+  color: var(--sl-color-white);
+  background-color: var(--docs-accent-soft);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  blockquote:not(:where(.not-content *)) {
+  border: 1px solid var(--docs-border);
+  border-inline-start: 3px solid var(--docs-secondary);
+  border-radius: var(--docs-radius-md);
+  padding: 0.85rem 1rem;
+  color: var(--docs-muted);
+  background-color: color-mix(
+    in srgb,
+    var(--docs-secondary) 8%,
+    var(--docs-surface-raised)
+  );
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  details:not(:where(.not-content *)) {
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius-md);
+  padding: 0.85rem 1rem;
+  background-color: var(--docs-surface-raised);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  details
+  > summary:not(:where(.not-content *)) {
+  min-block-size: 2.75rem;
+  align-content: center;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  details:not([open]):hover:not(:where(.not-content *)),
+html:not([data-has-hero])
+  .sl-markdown-content
+  details:has(> summary:hover):not(:where(.not-content *)) {
+  border-color: var(--docs-accent);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  details[open]
+  > summary:not(:where(.not-content *)) {
+  border-block-end: 1px solid var(--docs-border);
+  padding-block-end: 0.75rem;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  pre:not(:where(.not-content *)) {
+  max-inline-size: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius-md);
+  background-color: var(--docs-surface-raised);
+  box-shadow: var(--docs-shadow);
+}
+
+html:not([data-has-hero]) .sl-markdown-content > .expressive-code {
+  max-inline-size: 100%;
+}
+
+html:not([data-has-hero]) .sl-markdown-content > .expressive-code figure {
+  overflow: hidden;
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius-md);
+  background-color: var(--docs-surface-raised);
+  box-shadow: var(--docs-shadow);
+}
+
+@media (max-width: 49.999rem) {
+  html:not([data-has-hero])
+    .expressive-code
+    button[title='Copy to clipboard'] {
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+  }
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  > astro-island[component-export='Editor'] {
+  display: block;
+  max-inline-size: 100%;
+  margin-block: 2rem;
+  overflow: hidden;
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius-lg);
+  background-color: var(--docs-surface-raised);
+  box-shadow: var(--docs-shadow);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  > astro-island[component-export='Editor']
+  :where(* + *) {
+  margin-block-start: 0;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  > astro-island[component-export='Editor']::before {
+  display: block;
+  content: 'TypeScript example · editable';
+  border-block-end: 1px solid var(--docs-border);
+  padding: 0.65rem 0.9rem;
+  color: var(--docs-muted);
+  background-color: color-mix(
+    in srgb,
+    var(--docs-accent) 8%,
+    var(--docs-surface-raised)
+  );
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  > astro-island[component-export='Editor']
+  .monaco-editor {
+  max-inline-size: 100%;
+  border: 0;
+  background-color: var(--docs-surface-raised);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  > astro-island[component-export='Editor']
+  > pre[aria-label='TypeScript example'] {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background-color: var(--docs-surface-raised);
+  box-shadow: none;
+}
+
+html:not([data-has-hero]) .sl-markdown-content .api-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius-lg);
+  padding: 1rem;
+  background-color: var(--docs-surface-raised);
+  box-shadow: var(--docs-shadow);
+}
+
+html:not([data-has-hero]) .sl-markdown-content .api-index strong {
+  flex-basis: 100%;
+  color: var(--docs-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  .api-index
+  strong:not(:first-child) {
+  margin-block-start: 0.45rem;
+  border-block-start: 1px solid var(--docs-border);
+  padding-block-start: 0.85rem;
+}
+
+html:not([data-has-hero]) .sl-markdown-content .api-index a {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 2.75rem;
+  border: 1px solid var(--docs-border);
+  border-radius: 999px;
+  padding: 0.4rem 0.7rem;
+  color: var(--sl-color-white);
+  background-color: var(--docs-accent-soft);
+  font-size: 0.875rem;
+  font-weight: 650;
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  .api-index
+  a:is(:hover, :focus-visible) {
+  border-color: var(--docs-accent);
+  background-color: color-mix(
+    in srgb,
+    var(--docs-accent) 22%,
+    transparent
+  );
+}
+
+html:not([data-has-hero]) .sl-markdown-content .api-declaration {
+  background-color: color-mix(
+    in srgb,
+    var(--docs-accent) 5%,
+    var(--docs-surface-raised)
+  );
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  .api-declaration
+  > summary {
+  color: var(--sl-color-white);
+  font-family: var(--__sl-font-mono);
+}
+
+html:not([data-has-hero]) .sl-markdown-content .example-contract {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius-md);
+  background-color: var(--docs-surface-raised);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  .example-contract
+  :is(dt, dd) {
+  margin: 0;
+  border-block-end: 1px solid var(--docs-border);
+  padding: 0.65rem 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+html:not([data-has-hero]) .sl-markdown-content .example-contract dt {
+  border-inline-end: 1px solid var(--docs-border);
+  color: var(--sl-color-white);
+  background-color: color-mix(
+    in srgb,
+    var(--docs-secondary) 8%,
+    var(--docs-surface-raised)
+  );
+  font-size: 0.75rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  .example-contract
+  :is(dt, dd):nth-last-child(-n + 2) {
+  border-block-end: 0;
+}
+
+@media (max-width: 44.999rem) {
+  html:not([data-has-hero])
+    .sl-markdown-content
+    > astro-island[component-export='Editor']::before {
+    content: 'TypeScript · swipe to inspect →';
+  }
+}

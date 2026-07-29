@@ -1,11 +1,13 @@
-import { makeModule, withModuleName } from './makeModule';
+import {
+  makeModule,
+  type DefaultModuleFactory,
+  withModuleName,
+} from './makeModule';
+
+export type ModuleLive = {
+  Module: { name: PropertyKey };
+};
 
 export const Module = makeModule({
   transformInput: withModuleName,
-});
-
-export type ModuleLive = {
-  Module: {
-    name: PropertyKey;
-  };
-};
+}) as DefaultModuleFactory;
