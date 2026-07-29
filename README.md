@@ -67,7 +67,7 @@ console.log(
 ); // "Good morning!"
 ```
 
-The replacement is a plain value with the same contract as `Clock`; no container mutation or special test API is required.
+The replacement is a plain value with the same contract as the value produced by `Clock`; no container mutation or special test API is required.
 
 ## Partial application
 
@@ -90,7 +90,7 @@ console.log(AddTen({ left: 5 })); // 15
 | Default | Behavior |
 | --- | --- |
 | `lazy: true` | A supplied provider runs only when its key is first read. |
-| `cache: 'run'` | Its resolved value is reused for the current top-level call, then recomputed in the next run. |
+| `cache: 'run'` | Its resolved value is reused for the current top-level call; if its key is read in a later run, the provider resolves again. |
 
 ## Documentation
 
