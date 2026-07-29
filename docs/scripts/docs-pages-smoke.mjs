@@ -337,6 +337,32 @@ try {
   assert.equal(await page.locator('h2#advanced-types').count(), 1);
   assert.equal(await page.locator('details.api-declaration').count(), 2);
 
+  await page.goto(`${origin}/module/lazy/`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await page.waitForSelector('.monaco-editor', { timeout: 15_000 });
+
+  const lazyExampleIndents = await page
+    .locator("astro-island[component-export='Editor']")
+    .evaluateAll((editors) =>
+      editors.map((editor) =>
+        [...editor.querySelectorAll('.view-line')]
+          .filter((line) =>
+            /^\s*(?:'(?:IgnoreResource|ReadTwice)'|\(\) =>|\(\w+\) =>)/.test(
+              (line.textContent ?? '').replaceAll('\u00a0', ' '),
+            ),
+          )
+          .map(
+            (line) =>
+              line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0,
+          ),
+      ),
+    );
+  assert.deepEqual(lazyExampleIndents, [
+    [2, 2, 2, 2],
+    [2, 2],
+  ]);
+
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('.docs-page-title').count(), 0);
   assert.equal(await page.locator('.home-workbench').count(), 1);

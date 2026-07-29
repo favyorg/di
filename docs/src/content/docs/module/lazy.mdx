@@ -5,13 +5,7 @@ description: Control whether supplied dependency providers run on demand or eage
 
 import { Editor } from '../../../components/editor';
 
-The `lazy` option controls when dependency providers supplied in a root dependency map or bound with `.provide()` are initialized. It does not change the explicit dependency type.
-
-## `lazy: true` (default)
-
-A provider runs on the first read of its key. If the root module never reads that key, the provider does not run. With the default `cache: 'run'`, later reads in the same root call reuse the first value.
-
-<Editor client:load code={`import { makeModule, type Live } from '@favy/di';
+export const lazyExample = `import { makeModule, type Live } from '@favy/di';
 
 const LazyModule = makeModule({ lazy: true });
 
@@ -35,15 +29,9 @@ const ReadTwice = LazyModule<ResourceLive>()(
 console.log(ReadTwice({ Resource })); // 2: 1 + 1 in one run
 console.log(resourceRuns); // 1
 console.log(ReadTwice({ Resource })); // 4: 2 + 2 in a new run
-console.log(resourceRuns); // 2`} />
+console.log(resourceRuns); // 2`;
 
-Access includes parameter destructuring. A callback parameter such as `({ Resource })` reads `Resource` before its body executes, even if the body never uses the local variable. Object rest/spread enumerates the dependency context and therefore reads every included provider key.
-
-## `lazy: false`
-
-When the root module itself is evaluated, the root call invokes every provider supplied at that root before running its own callback, including providers the callback never reads. With `cache: 'module'`, an already cached root returns before this eager pass. Nested module calls do not eagerly walk forwarded siblings again; only dependencies supplied locally to that invocation are added to its eager pass.
-
-<Editor client:load code={`import { makeModule, type Live } from '@favy/di';
+export const eagerExample = `import { makeModule, type Live } from '@favy/di';
 
 const EagerModule = makeModule({ lazy: false });
 
@@ -57,7 +45,23 @@ const IgnoreResource = EagerModule<ResourceLive>()(
 );
 
 console.log(IgnoreResource({ Resource })); // "unused"
-console.log(resourceRuns); // 1`} />
+console.log(resourceRuns); // 1`;
+
+The `lazy` option controls when dependency providers supplied in a root dependency map or bound with `.provide()` are initialized. It does not change the explicit dependency type.
+
+## `lazy: true` (default)
+
+A provider runs on the first read of its key. If the root module never reads that key, the provider does not run. With the default `cache: 'run'`, later reads in the same root call reuse the first value.
+
+<Editor client:load code={lazyExample} />
+
+Access includes parameter destructuring. A callback parameter such as `({ Resource })` reads `Resource` before its body executes, even if the body never uses the local variable. Object rest/spread enumerates the dependency context and therefore reads every included provider key.
+
+## `lazy: false`
+
+When the root module itself is evaluated, the root call invokes every provider supplied at that root before running its own callback, including providers the callback never reads. With `cache: 'module'`, an already cached root returns before this eager pass. Nested module calls do not eagerly walk forwarded siblings again; only dependencies supplied locally to that invocation are added to its eager pass.
+
+<Editor client:load code={eagerExample} />
 
 Plain dependency values pass through unchanged. With `cache: 'run'` or `cache: 'module'`, an eagerly initialized provider is reused when the callback reads it. With `cache: 'none'`, eager initialization runs the provider once and every later read invokes it again.
 
