@@ -363,6 +363,29 @@ try {
     [2, 2],
   ]);
 
+  await page.goto(`${origin}/module/partial/`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await page.waitForSelector('.monaco-editor', { timeout: 15_000 });
+
+  const partialExampleIndents = await page
+    .locator("astro-island[component-export='Editor']")
+    .first()
+    .locator('.view-line')
+    .evaluateAll((lines) =>
+      lines
+        .filter((line) =>
+          /^\s*(?:'Calculator'|\(\{ x, y \}\) =>)/.test(
+            (line.textContent ?? '').replaceAll('\u00a0', ' '),
+          ),
+        )
+        .map(
+          (line) =>
+            line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0,
+        ),
+    );
+  assert.deepEqual(partialExampleIndents, [2, 2]);
+
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('.docs-page-title').count(), 0);
   assert.equal(await page.locator('.home-workbench').count(), 1);

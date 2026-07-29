@@ -6,6 +6,7 @@ import tailwind from '@astrojs/tailwind';
 import react from '@astrojs/react';
 import rehypeMermaid from 'rehype-mermaid';
 import starlightThemeRapide from 'starlight-theme-rapide';
+import { preserveEditorCode } from './remark-preserve-editor-code.mjs';
 
 // https://astro.build/config
 export default defineConfig({
@@ -69,6 +70,7 @@ export default defineConfig({
     starlightThemeRapide(),
   ],
   markdown: {
+    remarkPlugins: [preserveEditorCode],
     rehypePlugins: [rehypeMermaid],
   },
   vite: {
