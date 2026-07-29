@@ -126,6 +126,15 @@ html:not([data-has-hero]) .sl-markdown-content > .expressive-code figure {
   box-shadow: var(--docs-shadow);
 }
 
+@media (max-width: 49.999rem) {
+  html:not([data-has-hero])
+    .expressive-code
+    button[title='Copy to clipboard'] {
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+  }
+}
+
 html:not([data-has-hero])
   .sl-markdown-content
   > astro-island[component-export='Editor'] {
@@ -137,6 +146,13 @@ html:not([data-has-hero])
   border-radius: var(--docs-radius-lg);
   background-color: var(--docs-surface-raised);
   box-shadow: var(--docs-shadow);
+}
+
+html:not([data-has-hero])
+  .sl-markdown-content
+  > astro-island[component-export='Editor']
+  :where(* + *) {
+  margin-block-start: 0;
 }
 
 html:not([data-has-hero])

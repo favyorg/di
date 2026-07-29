@@ -133,6 +133,29 @@ try {
 
   await page.waitForSelector('.monaco-editor', { timeout: 15_000 });
 
+  const editorLineRhythm = await page
+    .locator("astro-island[component-export='Editor']")
+    .first()
+    .locator('.monaco-editor .view-line')
+    .evaluateAll((lines) => {
+      const blankLineIndex = lines.findIndex(
+        (line, index) => index > 0 && !line.textContent?.trim(),
+      );
+      if (blankLineIndex < 1) return null;
+      const previousLine = lines[blankLineIndex - 1].getBoundingClientRect();
+      const blankLine = lines[blankLineIndex].getBoundingClientRect();
+      return {
+        lineHeight: previousLine.height,
+        blankLineDelta: blankLine.top - previousLine.top,
+      };
+    });
+  assert.ok(editorLineRhythm, 'Editor should render a real blank code line');
+  assert.ok(
+    Math.abs(editorLineRhythm.blankLineDelta - editorLineRhythm.lineHeight) <=
+      1,
+    `Editor blank-line delta was ${editorLineRhythm.blankLineDelta}px for a ${editorLineRhythm.lineHeight}px line`,
+  );
+
   const editorSurface = await page
     .locator("astro-island[component-export='Editor']")
     .first()
@@ -322,6 +345,17 @@ try {
   await page.goto(`${origin}/guides/introduction/`, {
     waitUntil: 'domcontentloaded',
   });
+
+  await assertMinimumTargetSize(
+    page.locator('site-search > button'),
+    'Mobile docs search button',
+  );
+  await assertMinimumTargetSize(
+    page
+      .locator('.expressive-code button[title="Copy to clipboard"]')
+      .first(),
+    'Mobile code copy button',
+  );
 
   const menuButton = page.locator('starlight-menu-button button');
   await assertMinimumTargetSize(menuButton, 'Mobile menu button');

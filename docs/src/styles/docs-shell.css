@@ -28,6 +28,11 @@ html:not([data-has-hero]) {
     --sl-menu-button-size: 2.75rem;
   }
 
+  html:not([data-has-hero]) site-search > button {
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+  }
+
   html:not([data-has-hero]) .sidebar-pane a {
     min-block-size: 2.75rem;
     align-content: center;
