@@ -48,6 +48,18 @@ const Greeting = Module<ClockLive>()('Greeting', ({ Clock }) => {
 ## Replace at the boundary
 
 ```typescript
+import { Module, type Live } from '@favy/di';
+
+const Clock = Module()('Clock', () => ({
+  now: () => new Date(),
+}));
+type ClockLive = Live<typeof Clock>;
+
+const Greeting = Module<ClockLive>()('Greeting', ({ Clock }) => {
+  const hour = Clock.now().getUTCHours();
+  return hour < 12 ? 'Good morning!' : 'Good evening!';
+});
+
 console.log(
   Greeting({
     Clock: { now: () => new Date('2025-01-01T09:00:00.000Z') },
@@ -62,6 +74,8 @@ The replacement is a plain value with the same contract as `Clock`; no container
 Use `.provide()` to bind part of a dependency object and get back a module that asks only for the remaining fields.
 
 ```typescript
+import { Module } from '@favy/di';
+
 const Add = Module<{ left: number; right: number }>()(
   'Add',
   ({ left, right }) => left + right,
