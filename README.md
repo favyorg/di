@@ -2,16 +2,18 @@
 
 [![codecov](https://codecov.io/gh/favyorg/di/branch/main/graph/badge.svg?token=P42D5R2C14)](https://codecov.io/gh/favyorg/di) [![npm version](https://badge.fury.io/js/@favy%2Fdi.svg)](https://badge.fury.io/js/@favy%2Fdi) ![npm bundle size](https://img.shields.io/bundlephobia/minzip/@favy/di) ![GitHub](https://img.shields.io/github/license/favyorg/di?style=flat)
 
-A lightweight dependency injection library for TypeScript. Modules are typed functions, dependencies stay explicit, and any implementation can be replaced at the application boundary.
+Dependency graphs, just typed functions.
+
+@favy/di v3 turns ordinary TypeScript functions into named, composable dependency providers. Dependency objects stay explicit, results stay inferred, and concrete implementations are selected at the composition root—without decorators or container configuration.
 
 ## Features
 
-- Create modules with ordinary functions—no decorators or container setup
-- Keep dependency contracts explicit while TypeScript infers module results
-- Replace direct or transitive dependencies in tests
-- Choose per-run, factory-wide, or disabled caching
-- Initialize dependencies lazily by default
-- Extend input and output types with higher-kinded types
+- Build named modules from ordinary functions
+- Carry transitive requirements through `Live<T>`
+- Replace dependencies at the application boundary
+- Bind known values incrementally with `.provide()`
+- Resolve lazily and cache within each run by default
+- Customize input and output types when a graph needs them
 
 ## Installation
 
@@ -19,81 +21,87 @@ A lightweight dependency injection library for TypeScript. Modules are typed fun
 npm install @favy/di
 ```
 
-The declarations require TypeScript 5.0 or newer.
+Requires TypeScript 5+.
 
 ## Quick Start
 
 ```typescript
 import { Module, type Live } from '@favy/di';
 
-const Logger = Module()('Logger', () => ({
-  log: (message: string) => console.log(message),
+const Clock = Module()('Clock', () => ({
+  now: () => new Date(),
 }));
-type LoggerLive = Live<typeof Logger>;
+type ClockLive = Live<typeof Clock>;
 
-const App = Module<LoggerLive>()('App', ({ Logger }) => ({
-  start: () => Logger.log('Application started'),
-}));
-
-App({ Logger }).start(); // Application started
+const Greeting = Module<ClockLive>()('Greeting', ({ Clock }) => {
+  const hour = Clock.now().getUTCHours();
+  return hour < 12 ? 'Good morning!' : 'Good evening!';
+});
 ```
 
-`Live<typeof Logger>` describes both the dependencies required by `Logger` and the value it provides under the `Logger` key. Pass module implementations to the top-level call; @favy/di resolves the graph from that boundary.
+## Mental model
 
-Dependency maps passed to module calls and `.provide()` may be any non-null object, including class instances and objects with custom prototypes. The library consumes their own string and symbol keys; inherited properties are ignored.
+- **`Module`** creates a named callable provider from a typed dependency object and an ordinary function.
+- **`Live<T>`** carries a module's transitive requirements plus its result under the module's declared name.
+- **The composition root** is the top-level call where the application assembles concrete values and providers.
 
-## Partial Application
-
-```typescript
-import { Module } from '@favy/di';
-
-const Calculator = Module<{ x: number; y: number }>()('Calculator', ({ x, y }) => x + y);
-
-const AddFive = Calculator.provide({ x: 5 });
-console.log(AddFive({ y: 3 })); // 8
-```
-
-## Lazy Initialization
-
-Dependencies are initialized when they are first accessed. Keep the dependency object intact when access needs to remain conditional.
+## Replace at the boundary
 
 ```typescript
 import { Module, type Live } from '@favy/di';
 
-const ExpensiveValue = Module()('ExpensiveValue', () => {
-  console.log('ExpensiveValue initialized');
-  return 42;
-});
-type ExpensiveValueLive = Live<typeof ExpensiveValue>;
-
-const Consumer = Module<ExpensiveValueLive>()('Consumer', ($) => ({
-  read: () => $.ExpensiveValue,
+const Clock = Module()('Clock', () => ({
+  now: () => new Date(),
 }));
+type ClockLive = Live<typeof Clock>;
 
-const consumer = Consumer({ ExpensiveValue }); // Nothing logged yet
-console.log(consumer.read()); // Initializes ExpensiveValue, then prints 42
+const Greeting = Module<ClockLive>()('Greeting', ({ Clock }) => {
+  const hour = Clock.now().getUTCHours();
+  return hour < 12 ? 'Good morning!' : 'Good evening!';
+});
+
+console.log(
+  Greeting({
+    Clock: { now: () => new Date('2025-01-01T09:00:00.000Z') },
+  }),
+); // "Good morning!"
 ```
 
-## Cache Management
+The replacement is a plain value with the same contract as the value produced by `Clock`; no container mutation or special test API is required.
+
+## Partial application
+
+Use `.provide()` to bind part of a dependency object and get back a module that asks only for the remaining fields.
 
 ```typescript
-import { makeModule } from '@favy/di';
+import { Module } from '@favy/di';
 
-const CachedModule = makeModule({ cache: 'module' });
-const RandomValue = CachedModule()('RandomValue', () => Math.random());
+const Add = Module<{ left: number; right: number }>()(
+  'Add',
+  ({ left, right }) => left + right,
+);
 
-console.log(RandomValue()); // New value
-console.log(RandomValue()); // Same cached value
-
-CachedModule.flushCache();
-console.log(RandomValue()); // New value
+const AddTen = Add.provide({ right: 10 });
+console.log(AddTen({ left: 5 })); // 15
 ```
 
-See [Caching](https://di.favy.dev/module/cache/), [Lazy Initialization](https://di.favy.dev/module/lazy/), and the [API Reference](https://di.favy.dev/reference/api/) for details.
+## Default lifecycle
+
+| Default | Behavior |
+| --- | --- |
+| `lazy: true` | A supplied provider runs only when its key is first read. |
+| `cache: 'run'` | Its resolved value is reused for the current top-level call; if its key is read in a later run, the provider resolves again. |
 
 ## Documentation
 
-Full documentation is available at [di.favy.dev](https://di.favy.dev/).
+- [Introduction](https://di.favy.dev/guides/introduction/)
+- [Testing](https://di.favy.dev/guides/testing/)
+- [Caching](https://di.favy.dev/module/cache/)
+- [Lazy initialization](https://di.favy.dev/module/lazy/)
+- [Partial application](https://di.favy.dev/module/partial/)
+- [Input transforms](https://di.favy.dev/module/transform-input/)
+- [Output transforms](https://di.favy.dev/module/transform-output/)
+- [API reference](https://di.favy.dev/reference/api/)
 
 ## Contributing
 
