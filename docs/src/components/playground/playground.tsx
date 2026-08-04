@@ -30,8 +30,9 @@ import {
   preparationLabel,
   runErrorRecord,
   runOutputRecord,
+  runtimeCommand,
+  runtimeSource,
   setupForRun,
-  warmupSource,
 } from './playground-runtime';
 import './playground.css';
 
@@ -57,6 +58,11 @@ type RunRequest = Readonly<{
   token: number;
   sandboxKey: string;
   code: string;
+}>;
+
+type PendingExecution = Readonly<{
+  token: number;
+  content: string;
 }>;
 
 type DeferredScan = Readonly<{
@@ -166,6 +172,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     const runtimeReady = useRef(false);
     const activeRun = useRef<RunRequest>();
     const runFailed = useRef(false);
+    const pendingExecution = useRef<PendingExecution>();
     const suppressedRun = useRef<number>();
     const visibleRunToken = useRef<number>();
     const failureTimer = useRef<number>();
@@ -218,6 +225,25 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       suppressionTimer.current = undefined;
     }, []);
 
+    const postRuntimeCommand = useCallback(
+      (action: 'prepare' | 'run', token: number): boolean => {
+        const runtime = iframe.current;
+        if (!runtime?.contentWindow) return false;
+        let targetOrigin = '*';
+        try {
+          if (runtime.src) targetOrigin = new URL(runtime.src).origin;
+        } catch {
+          // The runtime can briefly expose an opaque URL while it attaches.
+        }
+        runtime.contentWindow.postMessage(
+          runtimeCommand(action, token),
+          targetOrigin
+        );
+        return true;
+      },
+      [iframe]
+    );
+
     const releaseSuppressedRun = useCallback(
       (token: number): boolean => {
         if (suppressedRun.current !== token) return false;
@@ -236,6 +262,9 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         if (!isActive && !isQueued) return;
         clearFailureTimer();
         clearClientRetry();
+        if (pendingExecution.current?.token === request.token) {
+          pendingExecution.current = undefined;
+        }
         activeRun.current = undefined;
         runFailed.current = false;
         onStatusRef.current(nextStatus);
@@ -283,16 +312,42 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       clearConsole();
       onStatusRef.current('Running');
       try {
-        client.updateSandbox(
-          setupForRun(client.sandboxSetup, request.code, request.token)
+        const nextSetup = setupForRun(
+          client.sandboxSetup,
+          request.code,
+          request.token
         );
+        const content = nextSetup.files['/execution.ts'].code;
+        pendingExecution.current = { token: request.token, content };
+        if (!postRuntimeCommand('prepare', request.token)) {
+          finish(request, 'Failed');
+          return;
+        }
+        client.updateSandbox(nextSetup);
       } catch {
         finish(request, 'Failed');
       }
-    }, [clearClientRetry, clearConsole, finish]);
+    }, [clearClientRetry, clearConsole, finish, postRuntimeCommand]);
     tryLaunchRef.current = tryLaunch;
 
     handleMessageRef.current = (message) => {
+      if (message.type === 'fs/change') {
+        const pending = pendingExecution.current;
+        if (
+          !pending ||
+          message.path !== '/execution.ts' ||
+          message.content !== pending.content ||
+          activeRun.current?.token !== pending.token
+        ) {
+          return;
+        }
+        pendingExecution.current = undefined;
+        if (!postRuntimeCommand('run', pending.token)) {
+          finish(activeRun.current, 'Failed');
+        }
+        return;
+      }
+
       const progress = preparationLabel(message);
       if (
         progress &&
@@ -462,6 +517,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         clearFailureTimer();
         clearClientRetry();
         clearSuppressionTimer();
+        pendingExecution.current = undefined;
         activeRun.current = undefined;
       };
     }, [
@@ -476,13 +532,19 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       if (currentRun && runRequest?.token !== currentRun.token) {
         clearFailureTimer();
         clearSuppressionTimer();
-        suppressedRun.current = currentRun.token;
-        suppressionTimer.current = window.setTimeout(() => {
-          suppressionTimer.current = undefined;
-          if (suppressedRun.current !== currentRun.token) return;
-          suppressedRun.current = undefined;
-          tryLaunchRef.current();
-        }, 30_000);
+        const awaitingWrite =
+          pendingExecution.current?.token === currentRun.token;
+        if (awaitingWrite) {
+          pendingExecution.current = undefined;
+        } else {
+          suppressedRun.current = currentRun.token;
+          suppressionTimer.current = window.setTimeout(() => {
+            suppressionTimer.current = undefined;
+            if (suppressedRun.current !== currentRun.token) return;
+            suppressedRun.current = undefined;
+            tryLaunchRef.current();
+          }, 30_000);
+        }
         activeRun.current = undefined;
         runFailed.current = false;
       }
@@ -584,7 +646,11 @@ const SandboxSession = forwardRef<SandboxHandle, SandboxSessionProps>(
         '/index.ts': { code: initialCode, active: true },
         '/execution.ts': { code: '', hidden: true },
         '/runner.ts': {
-          code: warmupSource(Object.keys(dependencies)),
+          code: runtimeSource(Object.keys(dependencies)),
+          hidden: true,
+        },
+        '/vite.config.js': {
+          code: 'export default { server: { hmr: false } };',
           hidden: true,
         },
         '/index.html': {

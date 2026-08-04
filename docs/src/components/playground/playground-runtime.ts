@@ -13,6 +13,8 @@ const RUN_FRAME_KEY = '__favyPlaygroundExecutionFrame__';
 const RUN_FRAME_ATTRIBUTE = 'data-favy-playground-execution';
 const RUN_COMPLETE_METHOD = '__favyPlaygroundComplete__';
 const RUN_ERROR_METHOD = '__favyPlaygroundError__';
+const RUNTIME_MESSAGE_TYPE = '__FAVY_PLAYGROUND_RUNTIME__';
+const RUNTIME_TOKEN_PLACEHOLDER = '__FAVY_PLAYGROUND_RUNTIME_TOKEN__';
 
 type ConsoleRecord = Readonly<{
   method?: unknown;
@@ -57,7 +59,7 @@ export const warmupSource = (dependencies: readonly string[]): string =>
     })
     .join('\n');
 
-const childBootstrap = (token: number): string =>
+const childBootstrap = (token: number | string): string =>
   [
     "'use strict';",
     `const bridgeKey = ${JSON.stringify(RUN_BRIDGE_KEY)};`,
@@ -244,6 +246,89 @@ const childBootstrap = (token: number): string =>
     '',
   ].join('\n');
 
+export type RuntimeAction = 'prepare' | 'run';
+
+export const runtimeCommand = (action: RuntimeAction, token: number) => ({
+  type: RUNTIME_MESSAGE_TYPE,
+  action,
+  token,
+});
+
+export const runtimeSource = (dependencies: readonly string[]): string => {
+  const childTemplate = childBootstrap(RUNTIME_TOKEN_PLACEHOLDER);
+  return [
+    warmupSource(dependencies),
+    `const messageType = ${JSON.stringify(RUNTIME_MESSAGE_TYPE)};`,
+    `const frameKey = ${JSON.stringify(RUN_FRAME_KEY)};`,
+    `const frameAttribute = ${JSON.stringify(RUN_FRAME_ATTRIBUTE)};`,
+    `const bridgeKey = ${JSON.stringify(RUN_BRIDGE_KEY)};`,
+    `const completeMethod = ${JSON.stringify(RUN_COMPLETE_METHOD)};`,
+    `const errorMethod = ${JSON.stringify(RUN_ERROR_METHOD)};`,
+    `const childTemplate = ${JSON.stringify(childTemplate)};`,
+    `const tokenPlaceholder = ${JSON.stringify(RUNTIME_TOKEN_PLACEHOLDER)};`,
+    'let preparedToken = -1;',
+    'const removeExecution = () => {',
+    '  const previous = Reflect.get(globalThis, frameKey);',
+    "  if (previous && typeof previous.remove === 'function') previous.remove();",
+    '  Reflect.deleteProperty(globalThis, frameKey);',
+    '};',
+    'const launch = (token: number) => {',
+    '  removeExecution();',
+    "  const frame = document.createElement('iframe');",
+    '  frame.hidden = true;',
+    "  frame.setAttribute('aria-hidden', 'true');",
+    '  frame.setAttribute(frameAttribute, String(token));',
+    '  const parentConsole = globalThis.console;',
+    '  Object.defineProperty(globalThis, bridgeKey, {',
+    '    configurable: true,',
+    '    value: function () {',
+    '      const source = arguments[0];',
+    '      const method = arguments[1];',
+    '      const data = arguments[2];',
+    '      if (source !== frame.contentWindow || !Array.isArray(data)) return;',
+    '      if (method === completeMethod) {',
+    `        parentConsole.debug(${JSON.stringify(
+      RUN_COMPLETE_PREFIX
+    )} + token);`,
+    '        return;',
+    '      }',
+    '      if (method === errorMethod) {',
+    `        parentConsole.debug(${JSON.stringify(
+      RUN_ERROR_PREFIX
+    )} + token, data[0]);`,
+    '        return;',
+    '      }',
+    `      parentConsole.debug(${JSON.stringify(
+      RUN_OUTPUT_PREFIX
+    )} + token, method, ...data);`,
+    '    },',
+    '  });',
+    '  const child = childTemplate.replaceAll(tokenPlaceholder, String(token));',
+    `  frame.srcdoc = ${JSON.stringify(
+      '<!doctype html><script type="module">'
+    )} + child + ${JSON.stringify('</script>')};`,
+    '  document.body.append(frame);',
+    '  Reflect.set(globalThis, frameKey, frame);',
+    '};',
+    "globalThis.addEventListener('message', (event) => {",
+    '  if (event.source !== parent) return;',
+    '  const message = event.data;',
+    '  if (!message || message.type !== messageType || !Number.isSafeInteger(message.token) || message.token < 0) return;',
+    "  if (message.action === 'prepare') {",
+    '    preparedToken = message.token;',
+    '    removeExecution();',
+    '    return;',
+    '  }',
+    "  if (message.action !== 'run' || message.token !== preparedToken) return;",
+    '  preparedToken = -1;',
+    '  launch(message.token);',
+    '});',
+    '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+};
+
 export const runSource = (token: number): string => {
   const srcdoc = `<!doctype html><script type="module">${childBootstrap(
     token
@@ -301,26 +386,16 @@ export const setupForRun = (
   code: string,
   token: number
 ): SandboxSetup => {
-  const indexFile: SandpackBundlerFile = {
-    ...setup.files['/index.ts'],
-    code,
-  };
   const executionFile: SandpackBundlerFile = {
     ...setup.files['/execution.ts'],
     code: executionSource(code, token),
-  };
-  const runnerFile: SandpackBundlerFile = {
-    ...setup.files['/runner.ts'],
-    code: runSource(token),
   };
 
   return {
     ...setup,
     files: {
       ...setup.files,
-      '/index.ts': indexFile,
       '/execution.ts': executionFile,
-      '/runner.ts': runnerFile,
     },
   };
 };

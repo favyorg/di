@@ -9,6 +9,37 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 
+const checkPlaygroundFirstPaint = async (browser) => {
+  const noScript = await browser.newContext({
+    javaScriptEnabled: false,
+    colorScheme: 'dark',
+    viewport: { width: 390, height: 844 },
+  });
+  try {
+    const noScriptPage = await noScript.newPage();
+    await noScriptPage.goto(`${origin}/playground/`, {
+      waitUntil: 'domcontentloaded',
+    });
+    const [keyword, plain] = await Promise.all([
+      noScriptPage
+        .locator('.sp-syntax-keyword')
+        .first()
+        .evaluate((token) => getComputedStyle(token).color),
+      noScriptPage
+        .locator('.sp-syntax-plain')
+        .first()
+        .evaluate((token) => getComputedStyle(token).color),
+    ]);
+    assert.notEqual(
+      keyword,
+      plain,
+      `SSR keyword and plain tokens both rendered as ${keyword}`,
+    );
+  } finally {
+    await noScript.close();
+  }
+};
+
 const assertMinimumTargetSize = async (locator, label) => {
   const box = await locator.boundingBox();
   assert.ok(box, `${label} should be visible`);
@@ -23,8 +54,9 @@ const assertFocusContrast = async (
   theme,
   indicatorSelector,
 ) => {
-  await page.keyboard.press('Tab');
   await locator.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
   const focus = await locator.evaluate((element, selector) => {
     const indicator = selector ? element.closest(selector) : element;
     if (!indicator) throw new Error(`Missing focus indicator: ${selector}`);
@@ -185,15 +217,134 @@ const checkPlayground = async (page) => {
   }
 
   const consoleOutput = page.getByRole('region', { name: 'Console output' });
+  const status = page.getByRole('status');
+  await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
   assert.equal(
     (await consoleOutput.textContent())?.includes('Hello, Ada!'),
     false,
   );
-  await outerEditor.press('Control+Enter');
-  await consoleOutput
-    .getByText('Hello, Ada!', { exact: false })
-    .waitFor({ timeout: 60_000 });
-  await page.getByRole('status').getByText('Ready', { exact: true }).waitFor();
+
+  const runtime = page.locator('iframe.playground__runtime-client');
+  const initialRuntime = await runtime.elementHandle();
+  assert.ok(initialRuntime, 'Playground runtime iframe should be attached');
+  const registryRequests = [];
+  const previewReloadRequests = [];
+  const collectWarmRunRequest = (request) => {
+    const url = new URL(request.url());
+    const { hostname, pathname } = url;
+    if (hostname === 'registry.npmjs.org') {
+      registryRequests.push(request.url());
+    }
+    if (
+      hostname.endsWith('.nodebox.codesandbox.io') &&
+      (pathname === '/' ||
+        pathname === '/runner.ts' ||
+        pathname === '/@vite/client')
+    ) {
+      previewReloadRequests.push(request.url());
+    }
+  };
+  page.on('request', collectWarmRunRequest);
+
+  const warmDurations = [];
+  try {
+    for (let runIndex = 0; runIndex < 2; runIndex += 1) {
+      await page.evaluate(() => {
+        window.__playgroundSmokeRunObserver?.disconnect();
+        const button = document.querySelector('button[aria-label="Run code"]');
+        const status = document.querySelector(
+          '.playground__status[role="status"]',
+        );
+        const consoleOutput = document.querySelector(
+          '[aria-label="Console output"]',
+        );
+        const workspace = button?.closest('.playground__workspace');
+        if (!button || !status || !consoleOutput || !workspace) {
+          throw new Error('Missing playground run-cycle controls');
+        }
+        const cycle = {
+          startedAt: performance.now(),
+          completedAt: null,
+          busyLabel: null,
+          sawDisabled: false,
+          sawNonReady: false,
+        };
+        const inspect = () => {
+          const label = button.textContent?.trim() ?? '';
+          if (
+            button.disabled &&
+            (label.includes('Preparing') || label.includes('Running'))
+          ) {
+            cycle.busyLabel ??= label;
+            cycle.sawDisabled = true;
+          }
+          if (status.textContent?.trim() !== 'Ready') cycle.sawNonReady = true;
+          if (
+            cycle.sawDisabled &&
+            cycle.sawNonReady &&
+            !button.disabled &&
+            status.textContent?.trim() === 'Ready' &&
+            consoleOutput.textContent?.includes('Hello, Ada!')
+          ) {
+            cycle.completedAt ??= performance.now();
+            window.__playgroundSmokeRunObserver?.disconnect();
+          }
+        };
+        window.__playgroundSmokeRunCycle = cycle;
+        window.__playgroundSmokeRunObserver = new MutationObserver(inspect);
+        window.__playgroundSmokeRunObserver.observe(workspace, {
+          attributes: true,
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+        inspect();
+      });
+
+      await run.click();
+      await page.waitForFunction(
+        () => window.__playgroundSmokeRunCycle?.completedAt !== null,
+        undefined,
+        { timeout: 10_000 },
+      );
+      const cycle = await page.evaluate(() => {
+        const current = window.__playgroundSmokeRunCycle;
+        window.__playgroundSmokeRunObserver?.disconnect();
+        return current;
+      });
+      assert.equal(cycle.sawDisabled, true, 'Run should become disabled');
+      assert.match(cycle.busyLabel, /^(?:Preparing|Running)…$/);
+      assert.equal(cycle.sawNonReady, true, 'Run should leave Ready state');
+      warmDurations.push(cycle.completedAt - cycle.startedAt);
+      assert.equal(
+        await runtime.evaluate(
+          (currentRuntime, firstRuntime) =>
+            firstRuntime.isSameNode(currentRuntime),
+          initialRuntime,
+        ),
+        true,
+        `Run ${runIndex + 1} replaced the outer runtime iframe`,
+      );
+    }
+  } finally {
+    page.off('request', collectWarmRunRequest);
+    await initialRuntime.dispose();
+  }
+  assert.deepEqual(registryRequests, []);
+  assert.deepEqual(
+    previewReloadRequests,
+    [],
+    'Warm runs should not reload the outer Vite preview',
+  );
+  assert.ok(
+    warmDurations.every((duration) => duration < 1_000),
+    `Warm playground runs exceeded 1000ms: ${warmDurations.join('ms, ')}ms`,
+  );
+  console.log(
+    'Warm playground runs: ' +
+      warmDurations.map(Math.round).join('ms, ') +
+      'ms',
+  );
 
   await codeEditor.click();
   await page.keyboard.press(
@@ -229,7 +380,10 @@ const checkPlayground = async (page) => {
   );
 
   await reset.click();
-  await page.getByRole('status').getByText('Ready', { exact: true }).waitFor();
+  await consoleOutput
+    .getByText('Run code to see output.', { exact: true })
+    .waitFor();
+  await status.getByText('Ready', { exact: true }).waitFor();
   assert.equal(
     (await consoleOutput.textContent())?.includes('Hello, Ada!'),
     false,
@@ -699,6 +853,7 @@ const checkExistingDocumentationPages = async (page, browser) => {
 };
 
 try {
+  await checkPlaygroundFirstPaint(browser);
   await checkPlayground(page);
   if (process.env.PLAYGROUND_ONLY !== '1') {
     await checkExistingDocumentationPages(page, browser);

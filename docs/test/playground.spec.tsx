@@ -41,6 +41,7 @@ type MockSandpackMessage =
       type: 'shell/progress';
       data: { state: 'starting_command' | 'command_running' };
     }
+  | { type: 'fs/change'; path: string; content: string }
   | {
       type: 'console';
       codesandbox: true;
@@ -59,6 +60,7 @@ type MockSandpackContext = {
     updateSandbox(nextSetup: any): void;
   };
   listen(listener: (message: MockSandpackMessage) => void): () => void;
+  emit(message: MockSandpackMessage): void;
 };
 
 let mockEvents: string[] = [];
@@ -75,6 +77,7 @@ let mockUpdatedSetups: any[] = [];
 let mockEmitMessage: ((message: MockSandpackMessage) => void) | undefined;
 let mockChangeHookIdentities: (() => void) | undefined;
 let mockActiveListenerCount = 0;
+let mockRuntimeMessages: unknown[] = [];
 
 jest.mock('@codesandbox/sandpack-react', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -135,19 +138,14 @@ jest.mock('@codesandbox/sandpack-react', () => {
           const runner = codeFor(nextSetup.files['/runner.ts']);
           mockEvents.push(`update:${signature}:${runner}`);
           if (mockUpdateMode !== 'auto-done') return;
-          const token = /\/execution\.ts\?run=(\d+)/.exec(runner)?.[1];
+          const execution = codeFor(nextSetup.files['/execution.ts']);
+          const token = /\/\/ run:(\d+)/.exec(execution)?.[1];
           if (!token) return;
           setTimeout(() => {
             emit({
-              type: 'console',
-              codesandbox: true,
-              log: [
-                {
-                  method: 'debug',
-                  id: `complete:${token}`,
-                  data: [`__FAVY_PLAYGROUND_DONE__:${token}`],
-                },
-              ],
+              type: 'fs/change',
+              path: '/execution.ts',
+              content: execution,
             });
           }, 0);
         },
@@ -198,8 +196,8 @@ jest.mock('@codesandbox/sandpack-react', () => {
     }, [changeHookIdentities, emit, signature]);
 
     const value = React.useMemo(
-      () => ({ client, code, setCode, listen }),
-      [client, code, listen]
+      () => ({ client, code, setCode, listen, emit }),
+      [client, code, emit, listen]
     );
     return (
       <SandpackContext.Provider value={value}>
@@ -283,6 +281,41 @@ jest.mock('@codesandbox/sandpack-react', () => {
           mockMountedClients -= 1;
         };
       }, []);
+      React.useEffect(() => {
+        const runtime = iframe.current?.contentWindow;
+        if (!runtime) return;
+        const originalPostMessage = runtime.postMessage;
+        runtime.postMessage = (message: unknown): void => {
+          mockRuntimeMessages.push(message);
+          if (
+            mockUpdateMode !== 'auto-done' ||
+            typeof message !== 'object' ||
+            message === null ||
+            !('action' in message) ||
+            message.action !== 'run' ||
+            !('token' in message) ||
+            typeof message.token !== 'number'
+          ) {
+            return;
+          }
+          setTimeout(() => {
+            context.emit({
+              type: 'console',
+              codesandbox: true,
+              log: [
+                {
+                  method: 'debug',
+                  id: `complete:${message.token}`,
+                  data: [`__FAVY_PLAYGROUND_DONE__:${message.token}`],
+                },
+              ],
+            });
+          }, 0);
+        };
+        return () => {
+          runtime.postMessage = originalPostMessage;
+        };
+      }, [context.emit, iframe]);
       return {
         iframe,
         getClient: () => {
@@ -320,6 +353,16 @@ const emitSandpackMessage = (message: MockSandpackMessage): void => {
   act(() => {
     if (!mockEmitMessage) throw new Error('No mounted Sandpack provider');
     mockEmitMessage(message);
+  });
+};
+
+const acknowledgeLatestExecution = (): void => {
+  const setup = mockUpdatedSetups.at(-1);
+  if (!setup) throw new Error('No execution update to acknowledge');
+  emitSandpackMessage({
+    type: 'fs/change',
+    path: '/execution.ts',
+    content: setup.files['/execution.ts'].code,
   });
 };
 
@@ -379,12 +422,14 @@ beforeEach(() => {
   mockEmitMessage = undefined;
   mockChangeHookIdentities = undefined;
   mockActiveListenerCount = 0;
+  mockRuntimeMessages = [];
   document.documentElement.dataset.theme = 'light';
 });
 
 afterEach(() => {
   cleanup();
   jest.clearAllTimers();
+  jest.restoreAllMocks();
   jest.useRealTimers();
   delete document.documentElement.dataset.theme;
 });
@@ -498,14 +543,102 @@ it('prewarms dependencies through hidden runner files', () => {
     active: true,
   });
   expect(files['/execution.ts']).toEqual({ code: '', hidden: true });
-  expect(files['/runner.ts']).toEqual({
-    code: 'import "@favy/di";',
+  expect(files['/runner.ts'].hidden).toBe(true);
+  expect(files['/runner.ts'].code).toContain('import "@favy/di";');
+  expect(files['/runner.ts'].code).toContain(
+    "globalThis.addEventListener('message'"
+  );
+  expect(files['/vite.config.js']).toEqual({
+    code: 'export default { server: { hmr: false } };',
     hidden: true,
   });
   expect(files['/index.html']).toEqual({
     code: '<!doctype html><script type="module" src="/runner.ts"></script>',
     hidden: true,
   });
+});
+
+it('starts a run only after the exact execution write is acknowledged', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  const runtime = document.querySelector<HTMLIFrameElement>(
+    'iframe.playground__runtime-client'
+  );
+  if (!runtime?.contentWindow) throw new Error('Missing playground runtime');
+  const postMessage = jest.spyOn(runtime.contentWindow, 'postMessage');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+
+  expect(postMessage).toHaveBeenCalledTimes(1);
+  expect(postMessage.mock.calls[0]?.[0]).toEqual({
+    type: '__FAVY_PLAYGROUND_RUNTIME__',
+    action: 'prepare',
+    token: 1,
+  });
+  const execution = mockUpdatedSetups[0].files['/execution.ts'].code;
+  emitSandpackMessage({
+    type: 'fs/change',
+    path: '/runner.ts',
+    content: execution,
+  });
+  emitSandpackMessage({
+    type: 'fs/change',
+    path: '/execution.ts',
+    content: `${execution}// stale`,
+  });
+  expect(postMessage).toHaveBeenCalledTimes(1);
+
+  emitSandpackMessage({
+    type: 'fs/change',
+    path: '/execution.ts',
+    content: execution,
+  });
+  expect(postMessage).toHaveBeenCalledTimes(2);
+  expect(postMessage.mock.calls[1]?.[0]).toEqual({
+    type: '__FAVY_PLAYGROUND_RUNTIME__',
+    action: 'run',
+    token: 1,
+  });
+
+  emitSandpackMessage({
+    type: 'fs/change',
+    path: '/execution.ts',
+    content: execution,
+  });
+  expect(postMessage).toHaveBeenCalledTimes(2);
+});
+
+it('keeps the runner and outer iframe across acknowledged runs', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  const runtime = document.querySelector<HTMLIFrameElement>(
+    'iframe.playground__runtime-client'
+  );
+  if (!runtime?.contentWindow) throw new Error('Missing playground runtime');
+  const postMessage = jest.spyOn(runtime.contentWindow, 'postMessage');
+  const runner = mockProviderProps[0].files['/runner.ts'].code;
+
+  for (const token of [1, 2]) {
+    fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+    const setup = mockUpdatedSetups.at(-1);
+    expect(setup.files['/runner.ts'].code).toBe(runner);
+    emitSandpackMessage({
+      type: 'fs/change',
+      path: '/execution.ts',
+      content: setup.files['/execution.ts'].code,
+    });
+    emitConsole('debug', `__FAVY_PLAYGROUND_DONE__:${token}`);
+  }
+
+  expect(document.querySelector('iframe.playground__runtime-client')).toBe(
+    runtime
+  );
+  expect(postMessage.mock.calls.map(([message]) => message)).toEqual([
+    { type: '__FAVY_PLAYGROUND_RUNTIME__', action: 'prepare', token: 1 },
+    { type: '__FAVY_PLAYGROUND_RUNTIME__', action: 'run', token: 1 },
+    { type: '__FAVY_PLAYGROUND_RUNTIME__', action: 'prepare', token: 2 },
+    { type: '__FAVY_PLAYGROUND_RUNTIME__', action: 'run', token: 2 },
+  ]);
 });
 
 it('shows console messages from the active browser run', () => {
@@ -749,7 +882,9 @@ it('queues once during preparation and launches when ready', () => {
   mockClientReady = true;
   emitSandpackMessage({ type: 'done', compilatonError: false });
   expect(updateEvents()).toHaveLength(1);
-  expect(updateEvents()[0]).toContain('/execution.ts?run=1');
+  expect(mockUpdatedSetups[0].files['/execution.ts'].code).toContain(
+    '// run:1'
+  );
 });
 
 it('times out a queued run when the runtime never becomes ready', async () => {
@@ -1027,6 +1162,41 @@ it.each(['switch', 'reset'] as const)(
   }
 );
 
+it('launches a replacement immediately when the cancelled run was not acknowledged', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+
+  fireEvent.click(runButton);
+  const cancelledExecution = mockUpdatedSetups[0].files['/execution.ts'].code;
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  fireEvent.click(runButton);
+
+  expect(mockUpdatedSetups).toHaveLength(2);
+  expect(mockRuntimeMessages).toEqual([
+    { type: '__FAVY_PLAYGROUND_RUNTIME__', action: 'prepare', token: 1 },
+    { type: '__FAVY_PLAYGROUND_RUNTIME__', action: 'prepare', token: 2 },
+  ]);
+
+  emitSandpackMessage({
+    type: 'fs/change',
+    path: '/execution.ts',
+    content: cancelledExecution,
+  });
+  expect(mockRuntimeMessages).toHaveLength(2);
+
+  emitSandpackMessage({
+    type: 'fs/change',
+    path: '/execution.ts',
+    content: mockUpdatedSetups[1].files['/execution.ts'].code,
+  });
+  expect(mockRuntimeMessages.at(-1)).toEqual({
+    type: '__FAVY_PLAYGROUND_RUNTIME__',
+    action: 'run',
+    token: 2,
+  });
+});
+
 it('suppresses cancelled output until the displayed code launches', () => {
   mockUpdateMode = 'hold';
   renderReadyPlayground();
@@ -1076,6 +1246,7 @@ it('queues a new run until the cancelled run settles', () => {
   mockUpdateMode = 'hold';
   renderReadyPlayground();
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  acknowledgeLatestExecution();
   fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
 
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
@@ -1084,7 +1255,9 @@ it('queues a new run until the cancelled run settles', () => {
 
   emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
   expect(updateEvents()).toHaveLength(2);
-  expect(updateEvents()[1]).toContain('/execution.ts?run=2');
+  expect(mockUpdatedSetups[1].files['/execution.ts'].code).toContain(
+    '// run:2'
+  );
 });
 
 it('drops cancelled output batched after the marker that launches its replacement', () => {

@@ -12,6 +12,8 @@ import {
   preparationLabel,
   runOutputRecord,
   runSource,
+  runtimeCommand,
+  runtimeSource,
   setupForRun,
   warmupSource,
 } from '../src/components/playground/playground-runtime';
@@ -200,6 +202,73 @@ it('generates a tokenized child-realm import with one completion record', () => 
   ).toEqual([]);
 });
 
+it('generates a strict-valid static runtime receiver', () => {
+  const source = runtimeSource(['@favy/di']);
+  expect(source).toContain('import "@favy/di";');
+  expect(source).toContain("globalThis.addEventListener('message'");
+  expect(
+    diagnosticsForExecution('static-runner', source).map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+    )
+  ).toEqual([]);
+});
+
+it('prepares one token before launching its isolated child realm', () => {
+  let receive: ((event: MessageEvent) => void) | undefined;
+  const runtime = createTestRuntime();
+  const runtimeParent = {};
+  const runtimeGlobal = {
+    console: runtime.runtimeConsole,
+    addEventListener: (
+      _type: string,
+      listener: (event: MessageEvent) => void
+    ) => {
+      receive = listener;
+    },
+  };
+  const source = ts.transpile(runtimeSource([]), {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+  });
+  type RuntimeGlobal = typeof runtimeGlobal;
+  const execute = Function(
+    'globalThis',
+    'document',
+    'console',
+    'parent',
+    source
+  ) as (
+    runtimeEnvironment: RuntimeGlobal,
+    runtimeDocument: Document,
+    runtimeConsole: TestRuntime['runtimeConsole'],
+    runtimeParent: object
+  ) => void;
+  execute(runtimeGlobal, document, runtime.runtimeConsole, runtimeParent);
+  if (!receive) throw new Error('Static runner did not register a receiver.');
+  const dispatch = (action: 'prepare' | 'run', token: number): void =>
+    receive?.({
+      source: runtimeParent,
+      data: runtimeCommand(action, token),
+    } as unknown as MessageEvent);
+
+  dispatch('run', 7);
+  expect(document.querySelectorAll(RUN_FRAME_SELECTOR)).toHaveLength(0);
+  dispatch('prepare', 7);
+  dispatch('run', 7);
+  const first = document.querySelector<HTMLIFrameElement>(RUN_FRAME_SELECTOR);
+  expect(first?.dataset.favyPlaygroundExecution).toBe('7');
+
+  dispatch('prepare', 8);
+  expect(first?.isConnected).toBe(false);
+  dispatch('run', 7);
+  expect(document.querySelectorAll(RUN_FRAME_SELECTOR)).toHaveLength(0);
+  dispatch('run', 8);
+  expect(
+    document.querySelector<HTMLIFrameElement>(RUN_FRAME_SELECTOR)?.dataset
+      .favyPlaygroundExecution
+  ).toBe('8');
+});
+
 it('records completion after a failed execution import settles', async () => {
   const runtime = createTestRuntime();
   const events: string[] = [];
@@ -311,13 +380,27 @@ it('drops stale child errors after replacing its execution realm', async () => {
   ]);
 });
 
-it('tokenizes execution and does not mutate the previous setup', () => {
+it('tokenizes execution without mutating the previous setup', () => {
   const first = setupForRun(setup, 'console.log("new")', 7);
   const second = setupForRun(first, 'console.log("new")', 8);
   expect(first.files['/execution.ts'].code).toContain('// run:7');
   expect(second.files['/execution.ts'].code).toContain('// run:8');
-  expect(first.files['/runner.ts'].code).toContain('/execution.ts?run=7');
+  expect(first.files['/runner.ts']).toEqual(setup.files['/runner.ts']);
   expect(setup.files['/index.ts'].code).toBe('console.log("old")');
+});
+
+it('changes only the execution file for each run', () => {
+  const next = setupForRun(setup, 'console.log("new")', 7);
+  const changedFiles = Object.keys(next.files).filter(
+    (path) => next.files[path].code !== setup.files[path].code
+  );
+
+  expect(changedFiles).toEqual(['/execution.ts']);
+  expect(next.files['/index.ts']).toEqual(setup.files['/index.ts']);
+  expect(next.files['/runner.ts']).toEqual(setup.files['/runner.ts']);
+  expect(next.files['/execution.ts'].code).toBe(
+    'console.log("new")\n// run:7\n'
+  );
 });
 
 it('tokens globalThis, window, and imported-module console output', async () => {
