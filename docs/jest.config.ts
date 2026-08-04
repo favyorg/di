@@ -11,6 +11,14 @@ export default {
   },
   transformIgnorePatterns: ['node_modules/(?!(es-module-lexer)/)'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx'],
-  moduleNameMapper: { '\\.css$': '<rootDir>/test/style-mock.js' },
+  moduleNameMapper: {
+    '^react$': '<rootDir>/../node_modules/react',
+    '^react/jsx-runtime$': '<rootDir>/../node_modules/react/jsx-runtime.js',
+    '^react-dom$': '<rootDir>/../node_modules/react-dom',
+    '^react-dom/client$': '<rootDir>/../node_modules/react-dom/client.js',
+    '^react-dom/test-utils$':
+      '<rootDir>/../node_modules/react-dom/test-utils.js',
+    '\\.css$': '<rootDir>/test/style-mock.js',
+  },
   coverageDirectory: '../coverage/docs',
 };
