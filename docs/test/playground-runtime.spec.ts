@@ -41,6 +41,12 @@ it('warms dependencies with encoded static imports only', () => {
   expect(source).not.toContain('/index.ts');
 });
 
+it('warms valid package names whose segments begin with hyphens', () => {
+  expect(warmupSource(['-foo', '@scope/-foo', '@-scope/foo'])).toBe(
+    'import "-foo";\nimport "@scope/-foo";\nimport "@-scope/foo";'
+  );
+});
+
 it.each([
   "@favy/di';globalThis.__ran=true;//",
   './local',
@@ -48,6 +54,8 @@ it.each([
   'https://esm.sh/lodash',
   'node:fs',
   '@scope',
+  '.hidden',
+  '_hidden',
 ])('rejects unsafe warmup dependency %s', (dependency) => {
   expect(() => warmupSource([dependency])).toThrow();
 });
