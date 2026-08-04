@@ -12,12 +12,39 @@ import { playgroundExampleById } from '../src/components/playground/playground-e
 
 type MockSandpackMessage =
   | { type: 'done'; compilatonError: boolean }
-  | { type: 'action'; action: 'show-error' }
+  | {
+      type: 'action';
+      action: 'show-error';
+      title?: string;
+      message?: string;
+    }
+  | {
+      type: 'action';
+      action: 'notification';
+      notificationType: 'error';
+      title: string;
+    }
+  | {
+      type: 'dependencies';
+      data:
+        | { state: 'downloading_manifest' }
+        | { state: 'starting' }
+        | {
+            state: 'downloaded_module';
+            name: string;
+            total: number;
+            progress: number;
+          };
+    }
+  | {
+      type: 'shell/progress';
+      data: { state: 'starting_command' | 'command_running' };
+    }
   | {
       type: 'console';
       codesandbox: true;
       log: Array<{
-        method: 'log' | 'clear';
+        method: 'log' | 'debug' | 'clear';
         id: string;
         data: unknown[];
       }>;
@@ -25,18 +52,25 @@ type MockSandpackMessage =
 
 type MockSandpackContext = {
   code: string;
-  setCode(code: string): void;
-  runSandpack: jest.Mock<Promise<void>, []>;
+  setCode(code: string, shouldUpdatePreview?: boolean): void;
+  client: {
+    readonly sandboxSetup: any;
+    updateSandbox(nextSetup: any): void;
+  };
   listen(listener: (message: MockSandpackMessage) => void): () => void;
 };
 
 let mockEvents: string[] = [];
 let mockMountedProviders = 0;
 let mockMaximumMountedProviders = 0;
-let mockConsoleMountCounter = 0;
-let mockRunMode: 'auto-done' | 'hold' | 'reject' = 'auto-done';
+let mockMountedClients = 0;
+let mockMaximumMountedClients = 0;
+let mockClientReady = false;
+let mockClientNullReads = 0;
+let mockUpdateMode: 'auto-done' | 'hold' | 'reject' = 'auto-done';
+let mockProviderProps: any[] = [];
+let mockUpdatedSetups: any[] = [];
 let mockEmitMessage: ((message: MockSandpackMessage) => void) | undefined;
-let mockConsoleObserver: ((message: MockSandpackMessage) => void) | undefined;
 let mockChangeHookIdentities: (() => void) | undefined;
 let mockActiveListenerCount = 0;
 
@@ -56,27 +90,65 @@ jest.mock('@codesandbox/sandpack-react', () => {
       .map(([name, version]) => `${name}@${version}`)
       .join('|');
 
-  const SandpackProvider = ({ children, customSetup, files }: any) => {
+  const codeFor = (file: string | { code: string }): string =>
+    typeof file === 'string' ? file : file.code;
+
+  const SandpackProvider = ({
+    children,
+    customSetup,
+    files,
+    options,
+    template,
+  }: any) => {
     const signature = signatureFor(customSetup.dependencies);
-    const [code, setCode] = React.useState(files['/index.ts']);
+    const [code, setCode] = React.useState(codeFor(files['/index.ts']));
     const [hookIdentity, setHookIdentity] = React.useState(0);
     const listeners = React.useRef(new Set<(mockMessage: any) => void>());
-    const runSandpack = React.useMemo(
-      () =>
-        jest.fn(async () => {
-          mockEvents.push(`run:${signature}`);
-          if (mockRunMode === 'reject') {
-            throw new Error('Mock Sandpack launch failed');
+    const sandboxSetup = React.useRef({
+      ...customSetup,
+      files: Object.fromEntries(
+        Object.entries(files).map(([path, file]) => [
+          path,
+          typeof file === 'string' ? { code: file } : file,
+        ])
+      ),
+      template,
+    });
+    const emit = React.useCallback((mockMessage: MockSandpackMessage): void => {
+      listeners.current.forEach((listener) => listener(mockMessage));
+    }, []);
+    const client = React.useMemo(
+      () => ({
+        get sandboxSetup() {
+          return sandboxSetup.current;
+        },
+        updateSandbox(nextSetup: any): void {
+          if (mockUpdateMode === 'reject') {
+            throw new Error('Mock Sandpack update failed');
           }
-          if (mockRunMode === 'auto-done') {
-            setTimeout(() => {
-              listeners.current.forEach((listener) =>
-                listener({ type: 'done', compilatonError: false })
-              );
-            }, 0);
-          }
-        }),
-      [hookIdentity, signature]
+          sandboxSetup.current = nextSetup;
+          mockUpdatedSetups.push(nextSetup);
+          const runner = codeFor(nextSetup.files['/runner.ts']);
+          mockEvents.push(`update:${signature}:${runner}`);
+          if (mockUpdateMode !== 'auto-done') return;
+          const token = /\/execution\.ts\?run=(\d+)/.exec(runner)?.[1];
+          if (!token) return;
+          setTimeout(() => {
+            emit({
+              type: 'console',
+              codesandbox: true,
+              log: [
+                {
+                  method: 'debug',
+                  id: `complete:${token}`,
+                  data: [`__FAVY_PLAYGROUND_DONE__:${token}`],
+                },
+              ],
+            });
+          }, 0);
+        },
+      }),
+      [emit, signature]
     );
     const listen = React.useCallback(
       (mockListener: (mockMessage: any) => void) => {
@@ -98,8 +170,7 @@ jest.mock('@codesandbox/sandpack-react', () => {
 
     React.useEffect(() => {
       const emitMessage = (mockMessage: any): void => {
-        listeners.current.forEach((listener) => listener(mockMessage));
-        mockConsoleObserver?.(mockMessage);
+        emit(mockMessage);
       };
       mockMountedProviders += 1;
       mockMaximumMountedProviders = Math.max(
@@ -107,6 +178,7 @@ jest.mock('@codesandbox/sandpack-react', () => {
         mockMountedProviders
       );
       mockEvents.push(`mount:${signature}`);
+      mockProviderProps.push({ customSetup, files, options });
       mockEmitMessage = emitMessage;
       mockChangeHookIdentities = changeHookIdentities;
       return () => {
@@ -119,11 +191,11 @@ jest.mock('@codesandbox/sandpack-react', () => {
         mockEvents.push(`unmount:${signature}`);
         mockMountedProviders -= 1;
       };
-    }, [changeHookIdentities, signature]);
+    }, [changeHookIdentities, emit, signature]);
 
     const value = React.useMemo(
-      () => ({ code, setCode, runSandpack, listen }),
-      [code, listen, runSandpack]
+      () => ({ client, code, setCode, listen }),
+      [client, code, listen]
     );
     return (
       <SandpackContext.Provider value={value}>
@@ -183,29 +255,8 @@ jest.mock('@codesandbox/sandpack-react', () => {
     }
   );
 
-  const SandpackConsole = ({
-    onLogsChange,
-    resetOnPreviewRestart: _resetOnPreviewRestart,
-    standalone: _standalone,
-    ...props
-  }: any) => {
-    const [mountId] = React.useState(() => ++mockConsoleMountCounter);
-    React.useEffect(() => {
-      const observer = (message: MockSandpackMessage): void => {
-        if (message.type === 'console') onLogsChange?.(message.log);
-      };
-      mockConsoleObserver = observer;
-      onLogsChange?.([]);
-      return () => {
-        if (mockConsoleObserver === observer) mockConsoleObserver = undefined;
-      };
-    }, [onLogsChange]);
-    return <div {...props} data-mount-id={mountId.toString()} />;
-  };
-
   return {
     SandpackCodeEditor,
-    SandpackConsole,
     SandpackProvider,
     useActiveCode: () => {
       const context = useMockSandpack();
@@ -215,10 +266,29 @@ jest.mock('@codesandbox/sandpack-react', () => {
         updateCode: context.setCode,
       };
     },
-    useSandpack: () => {
+    useSandpackClient: () => {
       const context = useMockSandpack();
+      const iframe = React.useRef<HTMLIFrameElement | null>(null);
+      React.useEffect(() => {
+        mockMountedClients += 1;
+        mockMaximumMountedClients = Math.max(
+          mockMaximumMountedClients,
+          mockMountedClients
+        );
+        return () => {
+          mockMountedClients -= 1;
+        };
+      }, []);
       return {
-        sandpack: { runSandpack: context.runSandpack },
+        iframe,
+        getClient: () => {
+          if (!mockClientReady) return null;
+          if (mockClientNullReads > 0) {
+            mockClientNullReads -= 1;
+            return null;
+          }
+          return context.client;
+        },
         listen: context.listen,
       };
     },
@@ -236,15 +306,11 @@ const editor = (): HTMLTextAreaElement => {
   return textarea;
 };
 
-const consoleMountId = (): string | null =>
-  document.querySelector('[data-mount-id]')?.getAttribute('data-mount-id') ??
-  null;
-
 const mountEvents = (): string[] =>
   mockEvents.filter((event) => event.startsWith('mount:'));
 
-const runEvents = (): string[] =>
-  mockEvents.filter((event) => event.startsWith('run:'));
+const updateEvents = (): string[] =>
+  mockEvents.filter((event) => event.startsWith('update:'));
 
 const emitSandpackMessage = (message: MockSandpackMessage): void => {
   act(() => {
@@ -253,15 +319,32 @@ const emitSandpackMessage = (message: MockSandpackMessage): void => {
   });
 };
 
+const emitConsole = (method: 'log' | 'debug', value: unknown): void =>
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [{ method, id: `${method}:${String(value)}`, data: [value] }],
+  });
+
+const renderReadyPlayground = (): void => {
+  render(<Playground />);
+  mockClientReady = true;
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+};
+
 beforeEach(() => {
   jest.useFakeTimers();
   mockEvents = [];
   mockMountedProviders = 0;
   mockMaximumMountedProviders = 0;
-  mockConsoleMountCounter = 0;
-  mockRunMode = 'auto-done';
+  mockMountedClients = 0;
+  mockMaximumMountedClients = 0;
+  mockClientReady = false;
+  mockClientNullReads = 0;
+  mockUpdateMode = 'auto-done';
+  mockProviderProps = [];
+  mockUpdatedSetups = [];
   mockEmitMessage = undefined;
-  mockConsoleObserver = undefined;
   mockChangeHookIdentities = undefined;
   mockActiveListenerCount = 0;
   document.documentElement.dataset.theme = 'light';
@@ -275,7 +358,7 @@ afterEach(() => {
 });
 
 it('exposes the playground controls and regions with accessible semantics', () => {
-  render(<Playground />);
+  renderReadyPlayground();
 
   expect(
     screen.getByRole('navigation', { name: 'Playground examples' })
@@ -283,7 +366,7 @@ it('exposes the playground controls and regions with accessible semantics', () =
   expect(screen.getByRole('combobox', { name: 'Example' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Reset example' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Run code' })).toBeTruthy();
-  expect(screen.getByRole('status').textContent).toContain('Ready');
+  expect(screen.getByRole('status').textContent).toBe('Ready');
   expect(
     screen.getByRole('region', { name: 'TypeScript playground' })
   ).toBeTruthy();
@@ -309,25 +392,43 @@ it('exposes the playground controls and regions with accessible semantics', () =
   expect(toolbar.getAttribute('aria-busy')).toBe('false');
   expect(screen.getByRole('region', { name: 'Code' })).toBeTruthy();
   expect(screen.getByRole('region', { name: 'Console output' })).toBeTruthy();
+  expect(
+    document.querySelectorAll('iframe[title="Playground runtime"]')
+  ).toHaveLength(1);
+  expect(mockMaximumMountedClients).toBe(1);
+});
+
+it('prewarms dependencies through hidden runner files', () => {
+  render(<Playground />);
+
+  const { customSetup, files, options } = mockProviderProps[0];
+  expect(customSetup.entry).toBe('/runner.ts');
+  expect(options).toEqual({
+    activeFile: '/index.ts',
+    autorun: true,
+    autoReload: false,
+  });
+  expect(files['/index.ts']).toEqual({
+    code: playgroundExampleById.basic.source,
+    active: true,
+  });
+  expect(files['/execution.ts']).toEqual({ code: '', hidden: true });
+  expect(files['/runner.ts']).toEqual({
+    code: 'import "@favy/di";',
+    hidden: true,
+  });
+  expect(files['/index.html']).toEqual({
+    code: '<!doctype html><script type="module" src="/runner.ts"></script>',
+    hidden: true,
+  });
 });
 
 it('shows console messages from the active browser run', () => {
-  mockRunMode = 'hold';
-  render(<Playground />);
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
 
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
-  act(() => jest.advanceTimersByTime(0));
-  emitSandpackMessage({
-    type: 'console',
-    codesandbox: true,
-    log: [
-      {
-        method: 'log',
-        id: 'hello',
-        data: ['Hello, Ada!'],
-      },
-    ],
-  });
+  emitConsole('log', 'Hello, Ada!');
 
   expect(screen.getByRole('log').textContent).toContain('Hello, Ada!');
 });
@@ -335,7 +436,7 @@ it('shows console messages from the active browser run', () => {
 it('renders non-JSON console values without breaking the playground', () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;
-  render(<Playground />);
+  renderReadyPlayground();
 
   emitSandpackMessage({
     type: 'console',
@@ -353,8 +454,8 @@ it('renders non-JSON console values without breaking the playground', () => {
 });
 
 it('marks the controls busy while a run is active', () => {
-  mockRunMode = 'hold';
-  render(<Playground />);
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
 
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
 
@@ -377,44 +478,56 @@ it('gives both CodeMirror textboxes a stable accessible name', () => {
 });
 
 it('stays ready through StrictMode effect replay', () => {
+  mockClientReady = true;
   render(
     <React.StrictMode>
       <Playground />
     </React.StrictMode>
   );
+  emitSandpackMessage({ type: 'done', compilatonError: false });
 
   expect(screen.getByRole('status').textContent).toBe('Ready');
-  expect(mockEvents.filter((event) => event.startsWith('run:'))).toEqual([]);
+  expect(updateEvents()).toEqual([]);
+  expect(mockMaximumMountedClients).toBe(1);
+  expect(mockActiveListenerCount).toBe(1);
   expect(jest.getTimerCount()).toBe(0);
 });
 
-it('mounts one provider, restores drafts, and resets only the active example', () => {
+it('keeps one provider across same-dependency switch and reset', () => {
   render(<Playground />);
+  const mounts = mountEvents();
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  expect(editor().value).toBe(playgroundExampleById.composition.source);
+  fireEvent.click(screen.getByRole('button', { name: 'Reset example' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Basic module' }));
+  expect(editor().value).toBe(playgroundExampleById.basic.source);
+  expect(mountEvents()).toEqual(mounts);
+  expect(mockMaximumMountedProviders).toBe(1);
+});
+
+it('restores drafts and resets only the active example without running', () => {
+  renderReadyPlayground();
   const basicSource = playgroundExampleById.basic.source;
   const compositionSource = playgroundExampleById.composition.source;
   const basicDraft = `${basicSource}\n// Basic draft`;
   const compositionDraft = `${compositionSource}\n// Composition draft`;
-  const initialConsole = consoleMountId();
 
   fireEvent.change(editor(), { target: { value: basicDraft } });
+  emitConsole('log', 'old output');
   fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
   expect(editor().value).toBe(compositionSource);
-  expect(consoleMountId()).not.toBe(initialConsole);
+  expect(screen.getByRole('log').textContent).not.toContain('old output');
 
   fireEvent.change(editor(), { target: { value: compositionDraft } });
   fireEvent.click(screen.getByRole('button', { name: 'Basic module' }));
   expect(editor().value).toBe(basicDraft);
-  const consoleBeforeReset = consoleMountId();
 
   fireEvent.click(screen.getByRole('button', { name: 'Reset example' }));
   expect(editor().value).toBe(basicSource);
-  expect(consoleMountId()).not.toBe(consoleBeforeReset);
 
   fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
   expect(editor().value).toBe(compositionDraft);
-  expect(mockMountedProviders).toBe(1);
-  expect(mockMaximumMountedProviders).toBe(1);
-  expect(mockEvents.filter((event) => event.startsWith('run:'))).toEqual([]);
+  expect(updateEvents()).toEqual([]);
 });
 
 it('waits 1000 ms before remounting for a valid new import', () => {
@@ -434,11 +547,11 @@ it('waits 1000 ms before remounting for a valid new import', () => {
     'mount:@favy/di@3.0.0|lodash@latest',
   ]);
   expect(mockMaximumMountedProviders).toBe(1);
+  expect(mockMaximumMountedClients).toBe(1);
 });
 
 it('keeps the last valid dependency generation for an incomplete import', () => {
   render(<Playground />);
-  const initialConsole = consoleMountId();
 
   fireEvent.change(editor(), {
     target: {
@@ -448,15 +561,15 @@ it('keeps the last valid dependency generation for an incomplete import', () => 
   act(() => jest.advanceTimersByTime(1000));
 
   expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
-  expect(consoleMountId()).toBe(initialConsole);
   expect(mockMountedProviders).toBe(1);
+  expect(mockMountedClients).toBe(1);
 });
 
 it.each([
   ['incomplete', "import value from '"],
   ['malformed', "import { value as } from 'lodash';"],
 ])('does not run when the immediate import scan is %s', async (_, source) => {
-  render(<Playground />);
+  renderReadyPlayground();
   fireEvent.change(editor(), {
     target: {
       value: `${playgroundExampleById.basic.source}\n${source}`,
@@ -466,13 +579,109 @@ it.each([
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
   await act(async () => jest.runAllTimersAsync());
 
-  expect(runEvents()).toEqual([]);
+  expect(updateEvents()).toEqual([]);
   expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
   expect(screen.getByRole('status').textContent).toBe('Checking imports');
 });
 
-it('lets Sandpack report syntax errors outside import declarations', async () => {
+it('queues once during preparation and launches when ready', () => {
   render(<Playground />);
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  expect(screen.getByRole('status').textContent).toBe('Preparing runtime');
+  expect(updateEvents()).toEqual([]);
+  mockClientReady = true;
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+  expect(updateEvents()).toHaveLength(1);
+  expect(updateEvents()[0]).toContain('/execution.ts?run=1');
+});
+
+it('launches the source snapshot captured by an early run', () => {
+  mockUpdateMode = 'hold';
+  render(<Playground />);
+  const queuedSource = `${playgroundExampleById.basic.source}\n// queued`;
+  const laterSource = `${playgroundExampleById.basic.source}\n// later edit`;
+  fireEvent.change(editor(), { target: { value: queuedSource } });
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  fireEvent.change(editor(), { target: { value: laterSource } });
+
+  mockClientReady = true;
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+
+  expect(mockUpdatedSetups[0].files['/execution.ts'].code).toContain(
+    queuedSource
+  );
+  expect(mockUpdatedSetups[0].files['/execution.ts'].code).not.toContain(
+    '// later edit'
+  );
+});
+
+it('retries once when readiness precedes client registration', () => {
+  render(<Playground />);
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  mockClientReady = true;
+  mockClientNullReads = 1;
+
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+  expect(updateEvents()).toEqual([]);
+  expect(screen.getByRole('status').textContent).toBe('Preparing runtime');
+
+  act(() => jest.advanceTimersByTime(0));
+  expect(updateEvents()).toHaveLength(1);
+  expect(screen.getByRole('status').textContent).toBe('Running');
+});
+
+it('ignores stale markers and hides the matching marker', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:999');
+  expect(screen.getByRole('status').textContent).toBe('Running');
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
+  expect(screen.getByRole('status').textContent).toBe('Ready');
+  expect(screen.getByRole('log').textContent).not.toContain(
+    '__FAVY_PLAYGROUND_DONE__'
+  );
+});
+
+it.each([
+  [
+    { type: 'dependencies', data: { state: 'downloading_manifest' } },
+    'Downloading packages',
+  ],
+  [
+    { type: 'dependencies', data: { state: 'starting' } },
+    'Installing packages',
+  ],
+  [
+    { type: 'shell/progress', data: { state: 'starting_command' } },
+    'Starting Vite',
+  ],
+] as const)('reports runtime preparation progress', (message, label) => {
+  render(<Playground />);
+
+  emitSandpackMessage(message);
+
+  expect(screen.getByRole('status').textContent).toBe(label);
+});
+
+it('shows runtime preparation errors', () => {
+  render(<Playground />);
+
+  emitSandpackMessage({
+    type: 'action',
+    action: 'notification',
+    notificationType: 'error',
+    title: 'Dependency installation failed',
+  });
+
+  expect(screen.getByRole('status').textContent).toBe('Failed');
+  expect(screen.getByRole('log').textContent).toContain(
+    'Dependency installation failed'
+  );
+});
+
+it('lets Sandpack report syntax errors outside import declarations', async () => {
+  renderReadyPlayground();
   fireEvent.change(editor(), {
     target: {
       value: `${playgroundExampleById.basic.source}\nconst broken = ;`,
@@ -482,33 +691,37 @@ it('lets Sandpack report syntax errors outside import declarations', async () =>
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
   await act(async () => jest.runAllTimersAsync());
 
-  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(updateEvents()).toHaveLength(1);
 });
 
 it('keeps Run busy after show-error and an edit until that run settles', () => {
-  mockRunMode = 'hold';
-  render(<Playground />);
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
   const runButton = screen.getByRole('button', { name: 'Run code' });
 
   fireEvent.click(runButton);
-  act(() => jest.advanceTimersByTime(0));
-  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(updateEvents()).toHaveLength(1);
   expect((runButton as HTMLButtonElement).disabled).toBe(true);
 
-  emitSandpackMessage({ type: 'action', action: 'show-error' });
+  emitSandpackMessage({
+    type: 'action',
+    action: 'show-error',
+    title: 'Runtime error',
+    message: 'Broken execution',
+  });
   expect(screen.getByRole('status').textContent).toBe('Failed');
+  expect(screen.getByRole('log').textContent).toContain('Broken execution');
   expect((runButton as HTMLButtonElement).disabled).toBe(true);
 
   fireEvent.change(editor(), {
     target: { value: `${playgroundExampleById.basic.source}\n// Edited` },
   });
   fireEvent.keyDown(editor(), { key: 'Enter', ctrlKey: true });
-  act(() => jest.advanceTimersByTime(0));
   expect(screen.getByRole('status').textContent).toBe('Checking imports');
   expect((runButton as HTMLButtonElement).disabled).toBe(true);
-  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(updateEvents()).toHaveLength(1);
 
-  emitSandpackMessage({ type: 'done', compilatonError: false });
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
   expect((runButton as HTMLButtonElement).disabled).toBe(false);
   expect(screen.getByRole('status').textContent).toBe('Checking imports');
 
@@ -517,11 +730,10 @@ it('keeps Run busy after show-error and an edit until that run settles', () => {
 });
 
 it('defers a matured dependency remount until the active run settles', () => {
-  mockRunMode = 'hold';
-  render(<Playground />);
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
 
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
-  act(() => jest.advanceTimersByTime(0));
   fireEvent.change(editor(), {
     target: {
       value: `${playgroundExampleById.basic.source}\nimport 'lodash/fp';`,
@@ -530,26 +742,25 @@ it('defers a matured dependency remount until the active run settles', () => {
   act(() => jest.advanceTimersByTime(1_000));
 
   expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
-  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(updateEvents()).toHaveLength(1);
   expect(screen.getByRole('status').textContent).toBe('Checking imports');
 
-  emitSandpackMessage({ type: 'done', compilatonError: false });
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
 
   expect(mountEvents()).toEqual([
     'mount:@favy/di@3.0.0',
     'mount:@favy/di@3.0.0|lodash@latest',
   ]);
-  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(updateEvents()).toHaveLength(1);
   expect(mockMaximumMountedProviders).toBe(1);
 });
 
-it('keeps the active listener when useSandpack callback identities change', () => {
-  mockRunMode = 'hold';
-  render(<Playground />);
+it('keeps the scoped listener when hook callback identities change', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
   const runButton = screen.getByRole('button', { name: 'Run code' });
 
   fireEvent.click(runButton);
-  act(() => jest.advanceTimersByTime(0));
   expect(mockActiveListenerCount).toBe(1);
 
   act(() => {
@@ -560,54 +771,63 @@ it('keeps the active listener when useSandpack callback identities change', () =
   });
 
   expect(mockActiveListenerCount).toBe(1);
-  emitSandpackMessage({ type: 'done', compilatonError: false });
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
   expect(screen.getByRole('status').textContent).toBe('Ready');
   expect((runButton as HTMLButtonElement).disabled).toBe(false);
-  expect(mockActiveListenerCount).toBe(0);
+  expect(mockActiveListenerCount).toBe(1);
 });
 
-it('settles a compilation failure and disposes its listener', () => {
-  mockRunMode = 'hold';
-  render(<Playground />);
+it('settles a compilation failure and clears its timeout', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
   const runButton = screen.getByRole('button', { name: 'Run code' });
 
   fireEvent.click(runButton);
-  act(() => jest.advanceTimersByTime(0));
   expect(mockActiveListenerCount).toBe(1);
 
   emitSandpackMessage({ type: 'done', compilatonError: true });
 
   expect(screen.getByRole('status').textContent).toBe('Failed');
   expect((runButton as HTMLButtonElement).disabled).toBe(false);
-  expect(mockActiveListenerCount).toBe(0);
+  expect(mockActiveListenerCount).toBe(1);
   expect(jest.getTimerCount()).toBe(0);
 });
 
 it.each([
-  { outcome: 'launch rejection', mode: 'reject' as const, elapsed: 0 },
-  { outcome: '30-second timeout', mode: 'hold' as const, elapsed: 30_000 },
+  {
+    outcome: 'synchronous update failure',
+    mode: 'reject' as const,
+    elapsed: 0,
+    updates: 0,
+  },
+  {
+    outcome: '30-second timeout',
+    mode: 'hold' as const,
+    elapsed: 30_000,
+    updates: 1,
+  },
 ])(
-  'settles a $outcome and disposes its listener',
-  async ({ mode, elapsed }) => {
-    mockRunMode = mode;
-    render(<Playground />);
+  'settles a $outcome and clears its timeout',
+  async ({ mode, elapsed, updates }) => {
+    mockUpdateMode = mode;
+    renderReadyPlayground();
     const runButton = screen.getByRole('button', { name: 'Run code' });
 
     fireEvent.click(runButton);
     await act(async () => jest.advanceTimersByTimeAsync(elapsed));
 
-    expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+    expect(updateEvents()).toHaveLength(updates);
     expect(screen.getByRole('status').textContent).toBe('Failed');
     expect((runButton as HTMLButtonElement).disabled).toBe(false);
-    expect(mockActiveListenerCount).toBe(0);
+    expect(mockActiveListenerCount).toBe(1);
     expect(jest.getTimerCount()).toBe(0);
   }
 );
 
 it.each(['switch', 'reset'] as const)(
-  'cancels a pending launch on %s',
+  'cancels a queued run on %s',
   (testCase) => {
-    mockRunMode = 'hold';
+    mockUpdateMode = 'hold';
     render(<Playground />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
@@ -616,10 +836,11 @@ it.each(['switch', 'reset'] as const)(
     } else {
       fireEvent.click(screen.getByRole('button', { name: 'Reset example' }));
     }
-    act(() => jest.advanceTimersByTime(0));
+    mockClientReady = true;
+    emitSandpackMessage({ type: 'done', compilatonError: false });
 
-    expect(runEvents()).toEqual([]);
-    expect(mockActiveListenerCount).toBe(0);
+    expect(updateEvents()).toEqual([]);
+    expect(mockActiveListenerCount).toBe(1);
     expect(
       (
         screen.getByRole('button', {
@@ -630,21 +851,69 @@ it.each(['switch', 'reset'] as const)(
   }
 );
 
-it('launches once and cleans up under StrictMode effect replay', () => {
-  mockRunMode = 'hold';
+it('suppresses late output from a cancelled active run', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  emitConsole('log', 'late basic output');
+  expect(screen.getByRole('log').textContent).not.toContain(
+    'late basic output'
+  );
+
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
+  expect(screen.getByRole('status').textContent).toBe('Ready');
+  emitConsole('log', 'composition output');
+  expect(screen.getByRole('log').textContent).toContain('composition output');
+});
+
+it('queues a new run until the cancelled run settles', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  expect(updateEvents()).toHaveLength(1);
+  expect(screen.getByRole('status').textContent).toBe('Preparing runtime');
+
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
+  expect(updateEvents()).toHaveLength(2);
+  expect(updateEvents()[1]).toContain('/execution.ts?run=2');
+});
+
+it('preserves import scanning when a cancelled run settles', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  fireEvent.change(editor(), {
+    target: { value: `${playgroundExampleById.composition.source}\n// edit` },
+  });
+  expect(screen.getByRole('status').textContent).toBe('Checking imports');
+
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
+
+  expect(screen.getByRole('status').textContent).toBe('Checking imports');
+});
+
+it('launches once under StrictMode effect replay', () => {
+  mockUpdateMode = 'hold';
+  mockClientReady = true;
   render(
     <React.StrictMode>
       <Playground />
     </React.StrictMode>
   );
+  emitSandpackMessage({ type: 'done', compilatonError: false });
 
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
-  act(() => jest.advanceTimersByTime(0));
 
-  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(updateEvents()).toHaveLength(1);
   expect(mockActiveListenerCount).toBe(1);
-  emitSandpackMessage({ type: 'done', compilatonError: false });
-  expect(mockActiveListenerCount).toBe(0);
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
+  expect(mockActiveListenerCount).toBe(1);
 });
 
 it('restores selection and focus after a dependency remount', () => {
@@ -666,30 +935,32 @@ it('restores selection and focus after a dependency remount', () => {
 });
 
 it('flushes a pending scan, remounts, and runs exactly once', async () => {
-  render(<Playground />);
+  renderReadyPlayground();
   fireEvent.change(editor(), {
     target: {
       value: `${playgroundExampleById.basic.source}\nimport 'lodash/fp';`,
     },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+
+  expect(updateEvents()).toEqual([]);
+  mockClientReady = true;
+  emitSandpackMessage({ type: 'done', compilatonError: false });
   await act(async () => jest.runAllTimersAsync());
 
   const dependencyMount = 'mount:@favy/di@3.0.0|lodash@latest';
-  const run = 'run:@favy/di@3.0.0|lodash@latest';
   expect(mockEvents.indexOf(dependencyMount)).toBeLessThan(
-    mockEvents.indexOf(run)
+    mockEvents.findIndex((event) => event.startsWith('update:'))
   );
-  expect(mockEvents.filter((event) => event.startsWith('run:'))).toEqual([
-    'run:@favy/di@3.0.0|lodash@latest',
-  ]);
+  expect(updateEvents()).toHaveLength(1);
+  expect(updateEvents()[0]).toContain('@favy/di@3.0.0|lodash@latest');
   expect(mockMaximumMountedProviders).toBe(1);
 });
 
 it.each([{ key: 'Control' }, { key: 'Meta' }])(
   'runs with $key+Enter',
   async ({ key }) => {
-    render(<Playground />);
+    renderReadyPlayground();
     const shortcut = {
       key: 'Enter',
       ctrlKey: key === 'Control',
@@ -700,8 +971,6 @@ it.each([{ key: 'Control' }, { key: 'Meta' }])(
     fireEvent.keyDown(editor(), shortcut);
     await act(async () => jest.runAllTimersAsync());
 
-    expect(mockEvents.filter((event) => event.startsWith('run:'))).toEqual([
-      'run:@favy/di@3.0.0',
-    ]);
+    expect(updateEvents()).toHaveLength(1);
   }
 );

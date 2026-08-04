@@ -3,7 +3,6 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -11,10 +10,9 @@ import {
 } from 'react';
 import {
   SandpackCodeEditor,
-  SandpackConsole,
   SandpackProvider,
   useActiveCode,
-  useSandpack,
+  useSandpackClient,
   type CodeEditorRef,
 } from '@codesandbox/sandpack-react';
 import {
@@ -27,12 +25,22 @@ import {
   playgroundExamples,
   type PlaygroundExampleId,
 } from './playground-examples';
+import {
+  completionToken,
+  preparationLabel,
+  setupForRun,
+  warmupSource,
+} from './playground-runtime';
 import './playground.css';
 
 type PlaygroundStatus =
   | 'Ready'
   | 'Checking imports'
   | 'Preparing dependencies'
+  | 'Preparing runtime'
+  | 'Downloading packages'
+  | 'Installing packages'
+  | 'Starting Vite'
   | 'Running'
   | 'Failed';
 
@@ -45,6 +53,7 @@ type EditorSnapshot = Readonly<{
 type RunRequest = Readonly<{
   token: number;
   sandboxKey: string;
+  code: string;
 }>;
 
 type DeferredScan = Readonly<{
@@ -63,13 +72,14 @@ type DependencyMap = Record<PlaygroundExampleId, PlaygroundDependencies>;
 type ResetGenerations = Record<PlaygroundExampleId, number>;
 type PlaygroundTheme = 'light' | 'dark';
 type ConsoleLog = Readonly<{
+  id?: string;
   method: string;
   data?: readonly unknown[];
 }>;
 
 const SANDBOX_OPTIONS = Object.freeze({
   activeFile: '/index.ts',
-  autorun: false,
+  autorun: true,
   autoReload: false,
 });
 
@@ -111,14 +121,12 @@ const formatConsoleValue = (value: unknown): string => {
   }
 };
 
-const keyFor = (
-  selectedId: PlaygroundExampleId,
-  resetGeneration: number,
-  dependencies: PlaygroundDependencies
-): string =>
-  [selectedId, resetGeneration, dependencySignature(dependencies)].join(':');
+const keyFor = (dependencies: PlaygroundDependencies): string =>
+  dependencySignature(dependencies);
 
 type SandboxContentsProps = Readonly<{
+  activeCode: string;
+  codeIdentity: string;
   sandboxKey: string;
   runRequest: RunRequest | null;
   restoreSnapshot: EditorSnapshot | undefined;
@@ -131,6 +139,8 @@ type SandboxContentsProps = Readonly<{
 const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
   function SandboxContents(
     {
+      activeCode,
+      codeIdentity,
       sandboxKey,
       runRequest,
       restoreSnapshot,
@@ -141,30 +151,244 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     },
     forwardedRef
   ) {
-    const { code } = useActiveCode();
-    const { sandpack, listen } = useSandpack();
+    const { code, updateCode } = useActiveCode();
+    const { iframe, getClient, listen } = useSandpackClient();
     const editorRef = useRef<CodeEditorRef>(null);
     const [consoleLines, setConsoleLines] = useState<readonly string[]>([]);
     const liveCode = useRef(code);
     const previousCode = useRef(code);
+    const previousCodeIdentity = useRef(codeIdentity);
+    const expectedProgrammaticCode = useRef<string>();
     const handledRun = useRef(0);
+    const runtimeReady = useRef(false);
+    const activeRun = useRef<RunRequest>();
+    const runFailed = useRef(false);
+    const suppressedRun = useRef<number>();
+    const failureTimer = useRef<number>();
+    const clientRetryTimer = useRef<number>();
+    const clientRetryToken = useRef<number>();
+    const suppressionTimer = useRef<number>();
+    const seenConsoleIds = useRef(new Set<string>());
     const listenRef = useRef(listen);
-    const runSandpackRef = useRef(sandpack.runSandpack);
+    const getClientRef = useRef(getClient);
+    const runRequestRef = useRef(runRequest);
+    const sandboxKeyRef = useRef(sandboxKey);
+    const onCodeChangeRef = useRef(onCodeChange);
+    const onReadyRef = useRef(onReady);
+    const onRunSettledRef = useRef(onRunSettled);
+    const onStatusRef = useRef(onStatus);
+    const handleMessageRef = useRef<Parameters<typeof listen>[0]>(() => {});
+    const tryLaunchRef = useRef<() => void>(() => {});
     liveCode.current = code;
     listenRef.current = listen;
-    runSandpackRef.current = sandpack.runSandpack;
+    getClientRef.current = getClient;
+    runRequestRef.current = runRequest;
+    sandboxKeyRef.current = sandboxKey;
+    onCodeChangeRef.current = onCodeChange;
+    onReadyRef.current = onReady;
+    onRunSettledRef.current = onRunSettled;
+    onStatusRef.current = onStatus;
 
-    const handleConsoleLogs = useCallback((logs: readonly ConsoleLog[]) => {
-      setConsoleLines(
-        logs.flatMap(({ data, method }) => {
-          if (method === 'clear') return [];
-          const line = data?.map(formatConsoleValue).join(' ');
-          return !line || (method === 'debug' && line.startsWith('[vite]'))
-            ? []
-            : [line];
-        })
-      );
+    const clearConsole = useCallback(() => {
+      seenConsoleIds.current.clear();
+      setConsoleLines([]);
     }, []);
+
+    const clearFailureTimer = useCallback(() => {
+      if (failureTimer.current === undefined) return;
+      window.clearTimeout(failureTimer.current);
+      failureTimer.current = undefined;
+    }, []);
+
+    const clearClientRetry = useCallback(() => {
+      if (clientRetryTimer.current !== undefined) {
+        window.clearTimeout(clientRetryTimer.current);
+        clientRetryTimer.current = undefined;
+      }
+      clientRetryToken.current = undefined;
+    }, []);
+
+    const clearSuppressionTimer = useCallback(() => {
+      if (suppressionTimer.current === undefined) return;
+      window.clearTimeout(suppressionTimer.current);
+      suppressionTimer.current = undefined;
+    }, []);
+
+    const releaseSuppressedRun = useCallback(
+      (token: number): boolean => {
+        if (suppressedRun.current !== token) return false;
+        clearSuppressionTimer();
+        suppressedRun.current = undefined;
+        tryLaunchRef.current();
+        return true;
+      },
+      [clearSuppressionTimer]
+    );
+
+    const finish = useCallback(
+      (request: RunRequest, nextStatus: PlaygroundStatus): void => {
+        const isActive = activeRun.current?.token === request.token;
+        const isQueued = runRequestRef.current?.token === request.token;
+        if (!isActive && !isQueued) return;
+        clearFailureTimer();
+        clearClientRetry();
+        activeRun.current = undefined;
+        runFailed.current = false;
+        onStatusRef.current(nextStatus);
+        onRunSettledRef.current(request.token);
+      },
+      [clearClientRetry, clearFailureTimer]
+    );
+
+    const tryLaunch = useCallback((): void => {
+      const request = runRequestRef.current;
+      if (
+        !request ||
+        request.sandboxKey !== sandboxKeyRef.current ||
+        !runtimeReady.current ||
+        request.token <= handledRun.current ||
+        activeRun.current
+      ) {
+        return;
+      }
+      if (suppressedRun.current !== undefined) {
+        onStatusRef.current('Preparing runtime');
+        return;
+      }
+
+      const client = getClientRef.current();
+      if (!client) {
+        onStatusRef.current('Preparing runtime');
+        if (clientRetryToken.current === request.token) {
+          finish(request, 'Failed');
+          return;
+        }
+        clientRetryToken.current = request.token;
+        clientRetryTimer.current = window.setTimeout(() => {
+          clientRetryTimer.current = undefined;
+          tryLaunchRef.current();
+        }, 0);
+        return;
+      }
+
+      clearClientRetry();
+      handledRun.current = request.token;
+      activeRun.current = request;
+      runFailed.current = false;
+      clearConsole();
+      onStatusRef.current('Running');
+      failureTimer.current = window.setTimeout(
+        () => finish(request, 'Failed'),
+        30_000
+      );
+      try {
+        client.updateSandbox(
+          setupForRun(client.sandboxSetup, request.code, request.token)
+        );
+      } catch {
+        finish(request, 'Failed');
+      }
+    }, [clearClientRetry, clearConsole, finish]);
+    tryLaunchRef.current = tryLaunch;
+
+    handleMessageRef.current = (message) => {
+      const progress = preparationLabel(message);
+      if (
+        progress &&
+        !activeRun.current &&
+        suppressedRun.current === undefined
+      ) {
+        onStatusRef.current(progress as PlaygroundStatus);
+      }
+
+      if (message.type === 'done') {
+        if (message.compilatonError) {
+          if (suppressedRun.current !== undefined && !activeRun.current) {
+            releaseSuppressedRun(suppressedRun.current);
+            return;
+          }
+          const request = activeRun.current ?? runRequestRef.current;
+          if (request) finish(request, 'Failed');
+          else onStatusRef.current('Failed');
+          return;
+        }
+        if (!runtimeReady.current) {
+          runtimeReady.current = true;
+          onReadyRef.current(sandboxKeyRef.current);
+          tryLaunchRef.current();
+        }
+        return;
+      }
+
+      if (
+        message.type === 'action' &&
+        (message.action === 'show-error' ||
+          (message.action === 'notification' &&
+            message.notificationType === 'error'))
+      ) {
+        if (suppressedRun.current !== undefined && !activeRun.current) return;
+        const errorText =
+          message.action === 'show-error'
+            ? message.message || message.title
+            : message.title;
+        if (errorText) {
+          const id = `runtime-error:${errorText}`;
+          if (!seenConsoleIds.current.has(id)) {
+            seenConsoleIds.current.add(id);
+            setConsoleLines((current) => [...current, errorText]);
+          }
+        }
+        const request = activeRun.current;
+        if (request) {
+          runFailed.current = true;
+          onStatusRef.current('Failed');
+        } else if (runRequestRef.current) {
+          finish(runRequestRef.current, 'Failed');
+        } else {
+          onStatusRef.current('Failed');
+        }
+        return;
+      }
+
+      if (message.type !== 'console' || !message.codesandbox) return;
+      const logs = (
+        Array.isArray(message.log) ? message.log : [message.log]
+      ) as readonly ConsoleLog[];
+      const additions: string[] = [];
+      let completedRequest: RunRequest | undefined;
+
+      for (const log of logs) {
+        const token = completionToken(log);
+        if (token !== undefined) {
+          releaseSuppressedRun(token);
+          if (activeRun.current?.token === token) {
+            completedRequest = activeRun.current;
+          }
+          continue;
+        }
+        if (suppressedRun.current !== undefined) continue;
+        if (log.method === 'clear') {
+          additions.length = 0;
+          clearConsole();
+          continue;
+        }
+        const line = log.data?.map(formatConsoleValue).join(' ');
+        if (!line || (log.method === 'debug' && line.startsWith('[vite]'))) {
+          continue;
+        }
+        const id = log.id ?? `${log.method}:${line}`;
+        if (seenConsoleIds.current.has(id)) continue;
+        seenConsoleIds.current.add(id);
+        additions.push(line);
+      }
+
+      if (additions.length > 0) {
+        setConsoleLines((current) => [...current, ...additions]);
+      }
+      if (completedRequest) {
+        finish(completedRequest, runFailed.current ? 'Failed' : 'Ready');
+      }
+    };
 
     useImperativeHandle(
       forwardedRef,
@@ -183,8 +407,12 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     useEffect(() => {
       if (code === previousCode.current) return;
       previousCode.current = code;
-      onCodeChange(code);
-    }, [code, onCodeChange]);
+      if (expectedProgrammaticCode.current === code) {
+        expectedProgrammaticCode.current = undefined;
+        return;
+      }
+      onCodeChangeRef.current(code);
+    }, [code]);
 
     useEffect(() => {
       const view = editorRef.current?.getCodemirror();
@@ -193,7 +421,6 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         view.dom.parentElement?.setAttribute('aria-label', editorLabel);
         view.contentDOM.setAttribute('aria-label', editorLabel);
       }
-      onReady(sandboxKey);
       if (!restoreSnapshot) return;
       const timer = window.setTimeout(() => {
         const view = editorRef.current?.getCodemirror();
@@ -207,45 +434,64 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         if (restoreSnapshot.hadFocus) view.focus();
       }, 0);
       return () => window.clearTimeout(timer);
-    }, [onReady, restoreSnapshot, sandboxKey]);
+    }, [restoreSnapshot]);
 
     useEffect(() => {
-      if (!runRequest || runRequest.sandboxKey !== sandboxKey) return;
-      let stop: (() => void) | undefined;
-      let failureTimer: number | undefined;
-      let settled = false;
-      const finish = (nextStatus: PlaygroundStatus): void => {
-        if (settled) return;
-        settled = true;
-        if (failureTimer !== undefined) window.clearTimeout(failureTimer);
-        stop?.();
-        stop = undefined;
-        onStatus(nextStatus);
-        onRunSettled(runRequest.token);
-      };
-      const launchTimer = window.setTimeout(() => {
-        if (runRequest.token <= handledRun.current) return;
-        handledRun.current = runRequest.token;
-        setConsoleLines([]);
-        onStatus('Running');
-        stop = listenRef.current((message) => {
-          if (message.type === 'done') {
-            finish(message.compilatonError ? 'Failed' : 'Ready');
-          }
-          if (message.type === 'action' && message.action === 'show-error') {
-            onStatus('Failed');
-          }
-        });
-        failureTimer = window.setTimeout(() => finish('Failed'), 30_000);
-        void runSandpackRef.current().catch(() => finish('Failed'));
-      }, 0);
+      runtimeReady.current = false;
+      onStatusRef.current('Preparing runtime');
+      const stop = listenRef.current((message) =>
+        handleMessageRef.current(message)
+      );
       return () => {
-        settled = true;
-        window.clearTimeout(launchTimer);
-        if (failureTimer !== undefined) window.clearTimeout(failureTimer);
-        stop?.();
+        stop();
+        clearFailureTimer();
+        clearClientRetry();
+        clearSuppressionTimer();
+        activeRun.current = undefined;
       };
-    }, [onRunSettled, onStatus, runRequest, sandboxKey]);
+    }, [
+      clearClientRetry,
+      clearFailureTimer,
+      clearSuppressionTimer,
+      sandboxKey,
+    ]);
+
+    useEffect(() => {
+      const currentRun = activeRun.current;
+      if (currentRun && runRequest?.token !== currentRun.token) {
+        clearFailureTimer();
+        clearSuppressionTimer();
+        suppressedRun.current = currentRun.token;
+        suppressionTimer.current = window.setTimeout(() => {
+          suppressionTimer.current = undefined;
+          if (suppressedRun.current !== currentRun.token) return;
+          suppressedRun.current = undefined;
+          tryLaunchRef.current();
+        }, 30_000);
+        activeRun.current = undefined;
+        runFailed.current = false;
+      }
+      if (!runRequest) clearClientRetry();
+      tryLaunchRef.current();
+    }, [
+      clearClientRetry,
+      clearFailureTimer,
+      clearSuppressionTimer,
+      runRequest,
+    ]);
+
+    useEffect(() => {
+      if (previousCodeIdentity.current === codeIdentity) return;
+      previousCodeIdentity.current = codeIdentity;
+      clearConsole();
+      if (code !== activeCode) {
+        expectedProgrammaticCode.current = activeCode;
+        updateCode(activeCode, false);
+      } else {
+        expectedProgrammaticCode.current = undefined;
+      }
+      onStatusRef.current(runtimeReady.current ? 'Ready' : 'Preparing runtime');
+    }, [activeCode, clearConsole, code, codeIdentity, updateCode]);
 
     return (
       <>
@@ -281,13 +527,12 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
                 ))
               )}
             </div>
-            <div className="playground__runtime-client" aria-hidden="true">
-              <SandpackConsole
-                onLogsChange={handleConsoleLogs}
-                resetOnPreviewRestart
-                standalone
-              />
-            </div>
+            <iframe
+              ref={iframe}
+              className="playground__runtime-client"
+              title="Playground runtime"
+              aria-hidden="true"
+            />
           </div>
         </section>
       </>
@@ -307,15 +552,21 @@ const SandboxSession = forwardRef<SandboxHandle, SandboxSessionProps>(
     { dependencies, initialCode, theme, ...contentsProps },
     forwardedRef
   ) {
-    const [files] = useState(() => ({
-      '/index.ts': initialCode,
-      '/index.html':
-        '<!doctype html><script type="module" src="/index.ts"></script>',
+    const [{ customSetup, files }] = useState(() => ({
+      customSetup: { entry: '/runner.ts', dependencies },
+      files: {
+        '/index.ts': { code: initialCode, active: true },
+        '/execution.ts': { code: '', hidden: true },
+        '/runner.ts': {
+          code: warmupSource(Object.keys(dependencies)),
+          hidden: true,
+        },
+        '/index.html': {
+          code: '<!doctype html><script type="module" src="/runner.ts"></script>',
+          hidden: true,
+        },
+      },
     }));
-    const customSetup = useMemo(
-      () => ({ entry: '/index.ts', dependencies }),
-      [dependencies]
-    );
 
     return (
       <SandpackProvider
@@ -346,7 +597,7 @@ export function Playground(): JSX.Element {
   const [resetGeneration, setResetGeneration] = useState<ResetGenerations>(
     initialResetGenerations
   );
-  const [status, setStatus] = useState<PlaygroundStatus>('Ready');
+  const [status, setStatus] = useState<PlaygroundStatus>('Preparing runtime');
   const [runRequest, setRunRequest] = useState<RunRequest | null>(null);
   const [theme, setTheme] = useState<PlaygroundTheme>(documentTheme);
   const sandboxRef = useRef<SandboxHandle>(null);
@@ -357,15 +608,18 @@ export function Playground(): JSX.Element {
   const runRequestRef = useRef(runRequest);
   const selectedIdRef = useRef(selectedId);
   const dependenciesRef = useRef(dependencies);
+  const readySandboxKeyRef = useRef<string>();
   runRequestRef.current = runRequest;
   selectedIdRef.current = selectedId;
   dependenciesRef.current = dependencies;
 
-  const sandboxKey = keyFor(
-    selectedId,
-    resetGeneration[selectedId],
-    dependencies[selectedId]
-  );
+  const sandboxKey = keyFor(dependencies[selectedId]);
+  const sandboxKeyRef = useRef(sandboxKey);
+  if (sandboxKeyRef.current !== sandboxKey) {
+    sandboxKeyRef.current = sandboxKey;
+    readySandboxKeyRef.current = undefined;
+  }
+  const codeIdentity = `${selectedId}:${resetGeneration[selectedId]}`;
   const runDisabled =
     runRequest !== null ||
     status === 'Preparing dependencies' ||
@@ -392,6 +646,8 @@ export function Playground(): JSX.Element {
   }, []);
 
   const handleSandboxReady = useCallback((readyKey: string) => {
+    if (sandboxKeyRef.current !== readyKey) return;
+    readySandboxKeyRef.current = readyKey;
     if (runRequestRef.current?.sandboxKey !== readyKey) setStatus('Ready');
   }, []);
 
@@ -422,7 +678,11 @@ export function Playground(): JSX.Element {
         dependencySignature(resolution.dependencies) ===
         dependencySignature(dependenciesRef.current[scanSelectedId])
       ) {
-        setStatus('Ready');
+        setStatus(
+          readySandboxKeyRef.current === sandboxKeyRef.current
+            ? 'Ready'
+            : 'Preparing runtime'
+        );
         return;
       }
       restoreSnapshot.current = sandboxRef.current?.captureEditor();
@@ -482,7 +742,11 @@ export function Playground(): JSX.Element {
       setRunRequest(null);
       selectedIdRef.current = nextId;
       setSelectedId(nextId);
-      setStatus('Ready');
+      setStatus(
+        readySandboxKeyRef.current === keyFor(dependenciesRef.current[nextId])
+          ? 'Ready'
+          : 'Preparing runtime'
+      );
     },
     [cancelScan, selectedId]
   );
@@ -502,7 +766,11 @@ export function Playground(): JSX.Element {
       ...current,
       [selectedId]: current[selectedId] + 1,
     }));
-    setStatus('Ready');
+    setStatus(
+      readySandboxKeyRef.current === keyFor(detectedDependencies[selectedId])
+        ? 'Ready'
+        : 'Preparing runtime'
+    );
   }, [cancelScan, detectedDependencies, selectedId, updateDependencies]);
 
   const run = useCallback(() => {
@@ -525,18 +793,25 @@ export function Playground(): JSX.Element {
       restoreSnapshot.current = sandboxRef.current?.captureEditor();
       updateDependencies(selectedId, nextDependencies);
     }
-    const targetKey = changed
-      ? keyFor(selectedId, resetGeneration[selectedId], nextDependencies)
-      : sandboxKey;
+    const targetKey = changed ? keyFor(nextDependencies) : sandboxKey;
     runCounter.current += 1;
-    const request = { token: runCounter.current, sandboxKey: targetKey };
+    const request = {
+      token: runCounter.current,
+      sandboxKey: targetKey,
+      code,
+    };
     runRequestRef.current = request;
     setRunRequest(request);
-    setStatus(changed ? 'Preparing dependencies' : 'Running');
+    setStatus(
+      changed
+        ? 'Preparing dependencies'
+        : readySandboxKeyRef.current === targetKey
+        ? 'Running'
+        : 'Preparing runtime'
+    );
   }, [
     cancelScan,
     drafts,
-    resetGeneration,
     runDisabled,
     sandboxKey,
     selectedId,
@@ -644,6 +919,8 @@ export function Playground(): JSX.Element {
           <SandboxSession
             key={sandboxKey}
             ref={sandboxRef}
+            activeCode={drafts[selectedId]}
+            codeIdentity={codeIdentity}
             sandboxKey={sandboxKey}
             dependencies={dependencies[selectedId]}
             initialCode={drafts[selectedId]}
