@@ -5,11 +5,32 @@ import type {
 } from '@codesandbox/sandpack-client';
 
 export const RUN_COMPLETE_PREFIX = '__FAVY_PLAYGROUND_DONE__:';
+export const RUN_OUTPUT_PREFIX = '__FAVY_PLAYGROUND_OUTPUT__:';
 
 type ConsoleRecord = Readonly<{
   method?: unknown;
   data?: readonly unknown[];
 }>;
+
+export type RunOutputRecord = Readonly<{
+  token: number;
+  method: string;
+  data: readonly unknown[];
+}>;
+
+const CONSOLE_METHODS = new Set([
+  'assert',
+  'clear',
+  'count',
+  'debug',
+  'error',
+  'info',
+  'log',
+  'table',
+  'time',
+  'timeEnd',
+  'warn',
+]);
 
 const PACKAGE_NAME =
   /^(?:@[-A-Za-z\d][A-Za-z\d._~-]*\/)?[-A-Za-z\d][A-Za-z\d._~-]*$/;
@@ -32,6 +53,23 @@ export const runSource = (token: number): string =>
     '',
   ].join('\n');
 
+const executionSource = (code: string, token: number): string =>
+  [
+    'const __favyPlaygroundNativeConsole = globalThis.console;',
+    'const console = new Proxy(__favyPlaygroundNativeConsole, {',
+    '  get(target, property, receiver) {',
+    '    const value = Reflect.get(target, property, receiver);',
+    "    if (typeof value !== 'function') return value;",
+    '    return (...data) => {',
+    `      target.debug('${RUN_OUTPUT_PREFIX}${token}', String(property), ...data);`,
+    '    };',
+    '  },',
+    '});',
+    code,
+    `// run:${token}`,
+    '',
+  ].join('\n');
+
 export const setupForRun = (
   setup: SandboxSetup,
   code: string,
@@ -43,7 +81,7 @@ export const setupForRun = (
   };
   const executionFile: SandpackBundlerFile = {
     ...setup.files['/execution.ts'],
-    code: code + '\n// run:' + token + '\n',
+    code: executionSource(code, token),
   };
   const runnerFile: SandpackBundlerFile = {
     ...setup.files['/runner.ts'],
@@ -75,6 +113,29 @@ export const completionToken = ({
   if (!/^\d+$/.test(suffix)) return undefined;
   const token = Number(suffix);
   return Number.isSafeInteger(token) ? token : undefined;
+};
+
+export const runOutputRecord = ({
+  method,
+  data,
+}: ConsoleRecord): RunOutputRecord | undefined => {
+  if (method !== 'debug' || !data || data.length < 2) return undefined;
+  const marker = data[0];
+  const outputMethod = data[1];
+  if (
+    typeof marker !== 'string' ||
+    !marker.startsWith(RUN_OUTPUT_PREFIX) ||
+    typeof outputMethod !== 'string' ||
+    !CONSOLE_METHODS.has(outputMethod)
+  ) {
+    return undefined;
+  }
+
+  const suffix = marker.slice(RUN_OUTPUT_PREFIX.length);
+  if (!/^\d+$/.test(suffix)) return undefined;
+  const token = Number(suffix);
+  if (!Number.isSafeInteger(token)) return undefined;
+  return { token, method: outputMethod, data: data.slice(2) };
 };
 
 export const preparationLabel = (

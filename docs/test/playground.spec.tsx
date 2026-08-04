@@ -326,6 +326,23 @@ const emitConsole = (method: 'log' | 'debug', value: unknown): void =>
     log: [{ method, id: `${method}:${String(value)}`, data: [value] }],
   });
 
+const runOutputLog = (
+  token: number,
+  value: unknown,
+  id: string
+): Extract<MockSandpackMessage, { type: 'console' }>['log'][number] => ({
+  method: 'debug',
+  id,
+  data: [`__FAVY_PLAYGROUND_OUTPUT__:${token}`, 'log', value],
+});
+
+const emitRunOutput = (token: number, value: unknown, id: string): void =>
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [runOutputLog(token, value, id)],
+  });
+
 const renderReadyPlayground = (): void => {
   render(<Playground />);
   mockClientReady = true;
@@ -428,7 +445,7 @@ it('shows console messages from the active browser run', () => {
   renderReadyPlayground();
 
   fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
-  emitConsole('log', 'Hello, Ada!');
+  emitRunOutput(1, 'Hello, Ada!', 'hello');
 
   expect(screen.getByRole('log').textContent).toContain('Hello, Ada!');
 });
@@ -436,16 +453,18 @@ it('shows console messages from the active browser run', () => {
 it('renders non-JSON console values without breaking the playground', () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;
+  mockUpdateMode = 'hold';
   renderReadyPlayground();
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
 
   emitSandpackMessage({
     type: 'console',
     codesandbox: true,
     log: [
       {
-        method: 'log',
+        method: 'debug',
         id: 'complex',
-        data: [1n, circular],
+        data: ['__FAVY_PLAYGROUND_OUTPUT__:1', 'log', 1n, circular],
       },
     ],
   });
@@ -513,10 +532,8 @@ it('restores drafts and resets only the active example without running', () => {
   const compositionDraft = `${compositionSource}\n// Composition draft`;
 
   fireEvent.change(editor(), { target: { value: basicDraft } });
-  emitConsole('log', 'old output');
   fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
   expect(editor().value).toBe(compositionSource);
-  expect(screen.getByRole('log').textContent).not.toContain('old output');
 
   fireEvent.change(editor(), { target: { value: compositionDraft } });
   fireEvent.click(screen.getByRole('button', { name: 'Basic module' }));
@@ -877,20 +894,20 @@ it('suppresses cancelled output until the displayed code launches', () => {
   fireEvent.click(runButton);
 
   fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
-  emitConsole('log', 'late basic output');
+  emitRunOutput(1, 'late basic output', 'late:before');
   expect(screen.getByRole('log').textContent).not.toContain(
     'late basic output'
   );
 
   emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
   expect(screen.getByRole('status').textContent).toBe('Ready');
-  emitConsole('log', 'late basic output after marker');
+  emitRunOutput(1, 'late basic output after marker', 'late:marker');
   expect(screen.getByRole('log').textContent).not.toContain(
     'late basic output after marker'
   );
 
   fireEvent.click(runButton);
-  emitConsole('log', 'composition output');
+  emitRunOutput(2, 'composition output', 'composition');
   expect(screen.getByRole('log').textContent).toContain('composition output');
 });
 
@@ -907,7 +924,7 @@ it.each(['switch', 'reset'] as const)(
       fireEvent.click(screen.getByRole('button', { name: 'Reset example' }));
     }
     emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
-    emitConsole('log', `late output after ${testCase}`);
+    emitRunOutput(1, `late output after ${testCase}`, `late:${testCase}`);
 
     expect(screen.getByRole('log').textContent).not.toContain(
       `late output after ${testCase}`
@@ -928,6 +945,60 @@ it('queues a new run until the cancelled run settles', () => {
   emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
   expect(updateEvents()).toHaveLength(2);
   expect(updateEvents()[1]).toContain('/execution.ts?run=2');
+});
+
+it('drops cancelled output batched after the marker that launches its replacement', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+  fireEvent.click(runButton);
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  fireEvent.click(runButton);
+
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [
+      {
+        method: 'debug',
+        id: 'complete:1',
+        data: ['__FAVY_PLAYGROUND_DONE__:1'],
+      },
+      runOutputLog(1, 'stale output in completion batch', 'stale:batch'),
+    ],
+  });
+
+  expect(updateEvents()).toHaveLength(2);
+  expect(screen.getByRole('log').textContent).not.toContain(
+    'stale output in completion batch'
+  );
+});
+
+it('partitions late output from a cancelled run after its replacement launches', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+  fireEvent.click(runButton);
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  fireEvent.click(runButton);
+
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
+  expect(updateEvents()).toHaveLength(2);
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [
+      runOutputLog(1, 'stale output after replacement', 'stale:after'),
+      runOutputLog(2, 'replacement output', 'replacement'),
+    ],
+  });
+
+  expect(screen.getByRole('log').textContent).not.toContain(
+    'stale output after replacement'
+  );
+  expect(screen.getByRole('log').textContent).toContain('replacement output');
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:2');
+  expect(screen.getByRole('status').textContent).toBe('Ready');
 });
 
 it('preserves import scanning when a cancelled run settles', () => {

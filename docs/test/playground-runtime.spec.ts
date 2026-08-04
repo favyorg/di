@@ -4,8 +4,10 @@ import type {
 } from '@codesandbox/sandpack-client';
 import {
   RUN_COMPLETE_PREFIX,
+  RUN_OUTPUT_PREFIX,
   completionToken,
   preparationLabel,
+  runOutputRecord,
   runSource,
   setupForRun,
   warmupSource,
@@ -100,6 +102,45 @@ it('tokenizes execution and does not mutate the previous setup', () => {
   expect(setup.files['/index.ts'].code).toBe('console.log("old")');
 });
 
+it('binds delayed console output to the run that created its callback', () => {
+  const callbacks: Array<() => void> = [];
+  const records: unknown[][] = [];
+  const runtimeGlobal = {
+    console: {
+      debug: (...data: unknown[]) => records.push(data),
+      log: (...data: unknown[]) => records.push(['untagged', ...data]),
+    },
+  };
+  const execute = (source: string): void => {
+    const run = Function(
+      'globalThis',
+      'setTimeout',
+      `with (globalThis) {${source}}`
+    ) as (
+      runtime: typeof runtimeGlobal,
+      schedule: (callback: () => void) => void
+    ) => void;
+    run(runtimeGlobal, (callback) => callbacks.push(callback));
+  };
+
+  execute(
+    setupForRun(setup, `setTimeout(() => console.log('first'), 0);`, 7).files[
+      '/execution.ts'
+    ].code
+  );
+  execute(
+    setupForRun(setup, `setTimeout(() => console.log('second'), 0);`, 8).files[
+      '/execution.ts'
+    ].code
+  );
+  callbacks.forEach((callback) => callback());
+
+  expect(records).toEqual([
+    ['__FAVY_PLAYGROUND_OUTPUT__:7', 'log', 'first'],
+    ['__FAVY_PLAYGROUND_OUTPUT__:8', 'log', 'second'],
+  ]);
+});
+
 it('recognizes only private debug completion records', () => {
   expect(
     completionToken({
@@ -113,6 +154,37 @@ it('recognizes only private debug completion records', () => {
       data: [RUN_COMPLETE_PREFIX + '12'],
     })
   ).toBeUndefined();
+});
+
+it('decodes tokenized run output without changing its values', () => {
+  const value = { circular: true };
+  expect(
+    runOutputRecord({
+      method: 'debug',
+      data: [RUN_OUTPUT_PREFIX + '12', 'log', 'hello', value],
+    })
+  ).toEqual({ token: 12, method: 'log', data: ['hello', value] });
+  expect(
+    runOutputRecord({
+      method: 'log',
+      data: [RUN_OUTPUT_PREFIX + '12', 'log', 'hello'],
+    })
+  ).toBeUndefined();
+});
+
+it.each([
+  [{ method: 'debug', data: [RUN_OUTPUT_PREFIX + '', 'log'] }],
+  [{ method: 'debug', data: [RUN_OUTPUT_PREFIX + '12.5', 'log'] }],
+  [
+    {
+      method: 'debug',
+      data: [RUN_OUTPUT_PREFIX + '9007199254740992', 'log'],
+    },
+  ],
+  [{ method: 'debug', data: [RUN_OUTPUT_PREFIX + '12', 'unknown'] }],
+  [{ method: 'debug', data: [RUN_COMPLETE_PREFIX + '12'] }],
+])('rejects malformed run output records', (record) => {
+  expect(runOutputRecord(record)).toBeUndefined();
 });
 
 it.each([

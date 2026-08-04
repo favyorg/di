@@ -28,6 +28,7 @@ import {
 import {
   completionToken,
   preparationLabel,
+  runOutputRecord,
   setupForRun,
   warmupSource,
 } from './playground-runtime';
@@ -164,7 +165,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     const activeRun = useRef<RunRequest>();
     const runFailed = useRef(false);
     const suppressedRun = useRef<number>();
-    const acceptConsoleOutput = useRef(true);
+    const visibleRunToken = useRef<number>();
     const failureTimer = useRef<number>();
     const clientRetryTimer = useRef<number>();
     const clientRetryToken = useRef<number>();
@@ -276,7 +277,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       handledRun.current = request.token;
       activeRun.current = request;
       runFailed.current = false;
-      acceptConsoleOutput.current = true;
+      visibleRunToken.current = request.token;
       clearConsole();
       onStatusRef.current('Running');
       try {
@@ -364,22 +365,18 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
           }
           continue;
         }
-        if (
-          suppressedRun.current !== undefined ||
-          !acceptConsoleOutput.current
-        ) {
-          continue;
-        }
-        if (log.method === 'clear') {
+        const output = runOutputRecord(log);
+        if (!output || output.token !== visibleRunToken.current) continue;
+        if (output.method === 'clear') {
           additions.length = 0;
           clearConsole();
           continue;
         }
-        const line = log.data?.map(formatConsoleValue).join(' ');
-        if (!line || (log.method === 'debug' && line.startsWith('[vite]'))) {
+        const line = output.data.map(formatConsoleValue).join(' ');
+        if (!line || (output.method === 'debug' && line.startsWith('[vite]'))) {
           continue;
         }
-        const id = log.id ?? `${log.method}:${line}`;
+        const id = log.id ?? `${output.token}:${output.method}:${line}`;
         if (seenConsoleIds.current.has(id)) continue;
         seenConsoleIds.current.add(id);
         additions.push(line);
@@ -496,7 +493,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     useEffect(() => {
       if (previousCodeIdentity.current === codeIdentity) return;
       previousCodeIdentity.current = codeIdentity;
-      acceptConsoleOutput.current = false;
+      visibleRunToken.current = undefined;
       clearConsole();
       if (code !== activeCode) {
         expectedProgrammaticCode.current = activeCode;
