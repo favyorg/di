@@ -161,6 +161,10 @@ const checkPlayground = async (page) => {
   }
 
   const consoleOutput = page.getByRole('region', { name: 'Console output' });
+  assert.equal(
+    (await consoleOutput.textContent())?.includes('Hello, Ada!'),
+    false,
+  );
   await outerEditor.press('Control+Enter');
   await consoleOutput
     .getByText('Hello, Ada!', { exact: false })
@@ -230,6 +234,10 @@ const checkPlayground = async (page) => {
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
     true,
+  );
+  assert.equal(
+    (await consoleOutput.textContent())?.includes('Greeting: hello'),
+    false,
   );
   await outerEditor.press('Meta+Enter');
   await consoleOutput
