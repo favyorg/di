@@ -1260,6 +1260,33 @@ it('queues a new run until the cancelled run settles', () => {
   );
 });
 
+it('gives a suppressed replacement a full timeout after it launches', async () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+
+  fireEvent.click(runButton);
+  acknowledgeLatestExecution();
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  fireEvent.click(runButton);
+  expect(updateEvents()).toHaveLength(1);
+
+  await act(async () => jest.advanceTimersByTimeAsync(30_000));
+  expect(updateEvents()).toHaveLength(2);
+  expect(screen.getByRole('status').textContent).toBe('Running');
+  expect((runButton as HTMLButtonElement).disabled).toBe(true);
+
+  await act(async () => jest.advanceTimersByTimeAsync(29_999));
+  expect(screen.getByRole('status').textContent).toBe('Running');
+  acknowledgeLatestExecution();
+  emitRunOutput(2, 'replacement output', 'replacement:timeout');
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:2');
+
+  expect(screen.getByRole('status').textContent).toBe('Ready');
+  expect(screen.getByRole('log').textContent).toContain('replacement output');
+  expect((runButton as HTMLButtonElement).disabled).toBe(false);
+});
+
 it('drops cancelled output batched after the marker that launches its replacement', () => {
   mockUpdateMode = 'hold';
   renderReadyPlayground();

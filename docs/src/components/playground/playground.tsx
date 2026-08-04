@@ -305,6 +305,11 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       }
 
       clearClientRetry();
+      clearFailureTimer();
+      failureTimer.current = window.setTimeout(
+        () => finish(request, 'Failed'),
+        30_000
+      );
       handledRun.current = request.token;
       activeRun.current = request;
       runFailed.current = false;
@@ -327,7 +332,13 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       } catch {
         finish(request, 'Failed');
       }
-    }, [clearClientRetry, clearConsole, finish, postRuntimeCommand]);
+    }, [
+      clearClientRetry,
+      clearConsole,
+      clearFailureTimer,
+      finish,
+      postRuntimeCommand,
+    ]);
     tryLaunchRef.current = tryLaunch;
 
     handleMessageRef.current = (message) => {
@@ -548,7 +559,11 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         activeRun.current = undefined;
         runFailed.current = false;
       }
-      if (runRequest && failureTimer.current === undefined) {
+      if (
+        runRequest &&
+        failureTimer.current === undefined &&
+        suppressedRun.current === undefined
+      ) {
         failureTimer.current = window.setTimeout(
           () => finish(runRequest, 'Failed'),
           30_000
