@@ -155,9 +155,12 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     }, [code, onCodeChange]);
 
     useEffect(() => {
-      editorRef.current
-        ?.getCodemirror()
-        ?.contentDOM.setAttribute('aria-label', 'TypeScript playground editor');
+      const view = editorRef.current?.getCodemirror();
+      if (view) {
+        const editorLabel = 'TypeScript playground editor';
+        view.dom.parentElement?.setAttribute('aria-label', editorLabel);
+        view.contentDOM.setAttribute('aria-label', editorLabel);
+      }
       onReady(sandboxKey);
       if (!restoreSnapshot) return;
       const timer = window.setTimeout(() => {
@@ -215,9 +218,9 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       <>
         <section
           className="playground__region playground__editor-region"
-          aria-labelledby="playground-editor-heading"
+          aria-labelledby="playground-code-heading"
         >
-          <h2 id="playground-editor-heading">Editor</h2>
+          <h2 id="playground-code-heading">Code</h2>
           <div className="playground__editor">
             <SandpackCodeEditor
               ref={editorRef}

@@ -268,7 +268,8 @@ html:not([data-has-hero]):has(.playground-page) {
 }
 
 .playground :is(button, select):focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--docs-accent) 72%, white);
+  outline: 3px solid
+    color-mix(in srgb, var(--docs-accent) 72%, var(--sl-color-white));
   outline-offset: 2px;
 }
 

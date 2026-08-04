@@ -124,14 +124,17 @@ jest.mock('@codesandbox/sandpack-react', () => {
   const SandpackCodeEditor = React.forwardRef<any, any>(
     function MockSandpackCodeEditor(_props, ref) {
       const { code, setCode } = useMockSandpack();
+      const editorDomRef = React.useRef<any>(null);
       const textareaRef = React.useRef<any>(null);
 
       React.useImperativeHandle(ref, () => ({
         getCodemirror: () => {
+          const editorDom = editorDomRef.current;
           const textarea = textareaRef.current;
-          if (!textarea) return undefined;
+          if (!editorDom || !textarea) return undefined;
           return {
             contentDOM: textarea,
+            dom: editorDom,
             get hasFocus() {
               return globalThis.document.activeElement === textarea;
             },
@@ -154,12 +157,17 @@ jest.mock('@codesandbox/sandpack-react', () => {
       }));
 
       return (
-        <textarea
-          ref={textareaRef}
-          aria-label="Code Editor for index.ts"
-          value={code}
-          onChange={(event) => setCode(event.currentTarget.value)}
-        />
+        <div aria-label="Code Editor for index.ts" role="textbox" tabIndex={0}>
+          <div ref={editorDomRef}>
+            <textarea
+              ref={textareaRef}
+              aria-label="Code Editor for index.ts"
+              tabIndex={-1}
+              value={code}
+              onChange={(event) => setCode(event.currentTarget.value)}
+            />
+          </div>
+        </div>
       );
     }
   );
@@ -193,7 +201,16 @@ jest.mock('@codesandbox/sandpack-react', () => {
   };
 });
 
-const editor = (): HTMLTextAreaElement => screen.getByRole('textbox');
+const editor = (): HTMLTextAreaElement => {
+  const textarea = screen
+    .getAllByRole('textbox')
+    .find(
+      (element): element is HTMLTextAreaElement =>
+        element instanceof HTMLTextAreaElement
+    );
+  if (!textarea) throw new Error('Missing mocked CodeMirror content editor');
+  return textarea;
+};
 
 const consoleMountId = (): string | null =>
   screen.getByLabelText('Console output').getAttribute('data-mount-id');
@@ -264,7 +281,7 @@ it('exposes the playground controls and regions with accessible semantics', () =
   ).toEqual(['Reset example', 'Run code']);
   expect(within(toolbar).getByText('Ctrl/⌘ + Enter')).toBeTruthy();
   expect(toolbar.getAttribute('aria-busy')).toBe('false');
-  expect(screen.getByRole('region', { name: 'Editor' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Code' })).toBeTruthy();
   expect(screen.getByRole('region', { name: 'Console' })).toBeTruthy();
 });
 
@@ -281,12 +298,15 @@ it('marks the controls busy while a run is active', () => {
   ).toBe('true');
 });
 
-it('gives the focusable CodeMirror editor a stable accessible name', () => {
+it('gives both CodeMirror textboxes a stable accessible name', () => {
   render(<Playground />);
 
   expect(
-    screen.getByRole('textbox', { name: 'TypeScript playground editor' })
-  ).toBe(editor());
+    screen.queryByRole('textbox', { name: 'Code Editor for index.ts' })
+  ).toBeNull();
+  expect(
+    screen.getAllByRole('textbox', { name: 'TypeScript playground editor' })
+  ).toHaveLength(2);
 });
 
 it('stays ready through StrictMode effect replay', () => {
