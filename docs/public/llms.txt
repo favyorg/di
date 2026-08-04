@@ -20,6 +20,7 @@ The standard `Module` is lazy and run-cached; `Live<T>` carries transitive requi
 
 ## Optional
 
+- [Playground](https://di.favy.dev/playground/): Edit and run six focused @favy/di examples in an isolated browser sandbox.
 - [Transform Input](https://di.favy.dev/module/transform-input/): Customize dependency inputs, including HKT-based transforms.
 - [Transform Output](https://di.favy.dev/module/transform-output/): Customize callable outputs, including HKT-based transforms.
 - [Source Repository](https://github.com/favyorg/di): Inspect the implementation, report issues, and contribute.

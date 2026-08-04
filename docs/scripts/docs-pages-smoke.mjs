@@ -16,7 +16,240 @@ const assertMinimumTargetSize = async (locator, label) => {
   assert.ok(box.height >= 44, `${label} height was ${box.height}px`);
 };
 
-try {
+const assertFocusContrast = async (page, locator, label, theme) => {
+  await page.keyboard.press('Tab');
+  await locator.focus();
+  const focus = await locator.evaluate((element) => {
+    const parseColor = (value) => {
+      const channels = value.match(/[\d.]+/g)?.map(Number);
+      if (!channels || channels.length < 3) {
+        throw new Error(`Unsupported color: ${value}`);
+      }
+      const rgb = value.startsWith('color(srgb')
+        ? channels.slice(0, 3)
+        : channels.slice(0, 3).map((channel) => channel / 255);
+      return [...rgb, channels[3] ?? 1];
+    };
+    const over = (foreground, background) => {
+      const alpha = foreground[3] + background[3] * (1 - foreground[3]);
+      return [
+        ...foreground
+          .slice(0, 3)
+          .map(
+            (channel, index) =>
+              (channel * foreground[3] +
+                background[index] * background[3] * (1 - foreground[3])) /
+              alpha,
+          ),
+        alpha,
+      ];
+    };
+    const layers = [];
+    let parent = element.parentElement;
+    while (parent) {
+      const color = parseColor(getComputedStyle(parent).backgroundColor);
+      layers.push(color);
+      if (color[3] === 1) break;
+      parent = parent.parentElement;
+    }
+    let background = layers.pop() ?? [1, 1, 1, 1];
+    while (layers.length) background = over(layers.pop(), background);
+    const luminance = ([red, green, blue]) =>
+      [red, green, blue]
+        .map((channel) =>
+          channel <= 0.04045
+            ? channel / 12.92
+            : ((channel + 0.055) / 1.055) ** 2.4,
+        )
+        .reduce(
+          (sum, channel, index) =>
+            sum + channel * [0.2126, 0.7152, 0.0722][index],
+          0,
+        );
+    const style = getComputedStyle(element);
+    const foreground = luminance(parseColor(style.outlineColor));
+    const adjacent = luminance(background);
+    return {
+      contrast:
+        (Math.max(foreground, adjacent) + 0.05) /
+        (Math.min(foreground, adjacent) + 0.05),
+      focusVisible: element.matches(':focus-visible'),
+      outlineWidth: Number.parseFloat(style.outlineWidth),
+    };
+  });
+  assert.equal(focus.focusVisible, true, `${label} should be focus-visible`);
+  assert.ok(
+    focus.outlineWidth >= 2,
+    `${label} outline was ${focus.outlineWidth}px`,
+  );
+  assert.ok(
+    focus.contrast >= 3,
+    `${label} ${theme} focus contrast was ${focus.contrast.toFixed(2)}:1`,
+  );
+};
+
+const checkPlayground = async (page) => {
+  await page.goto(`${origin}/playground/`, { waitUntil: 'domcontentloaded' });
+  assert.equal(
+    (await page.locator('.docs-page-label').textContent())?.trim(),
+    'Playground',
+  );
+  assert.equal(
+    (await page.locator('.docs-page-title h1').textContent())?.trim(),
+    'Playground',
+  );
+
+  const exampleNames = [
+    'Basic module',
+    'Composition',
+    'Replace a boundary',
+    'Partial application',
+    'Lazy and cache',
+    'HKT transform',
+  ];
+  const exampleNavigation = page.getByRole('navigation', {
+    name: 'Playground examples',
+  });
+  const exampleButtons = exampleNavigation.getByRole('button');
+  assert.equal(await exampleButtons.count(), exampleNames.length);
+  assert.deepEqual(
+    await exampleButtons.evaluateAll((buttons) =>
+      buttons.map((button) => button.getAttribute('aria-label')),
+    ),
+    exampleNames,
+  );
+  const provider = page.locator('.playground__sandbox .sp-wrapper');
+  await provider.waitFor({ timeout: 30_000 });
+  assert.equal(await provider.count(), 1);
+  assert.equal(
+    await page.locator('.playground__editor .sp-code-editor').count(),
+    1,
+  );
+
+  const outerEditor = page.locator(
+    '[aria-label="TypeScript playground editor"][role="textbox"][tabindex="0"]',
+  );
+  const codeEditor = page.locator(
+    '.cm-content[aria-label="TypeScript playground editor"][contenteditable="true"]',
+  );
+  await outerEditor.waitFor({ timeout: 30_000 });
+  await codeEditor.waitFor({ timeout: 30_000 });
+  assert.equal(await outerEditor.count(), 1);
+  assert.equal(await codeEditor.count(), 1);
+
+  for (const [index, name] of exampleNames.entries()) {
+    await assertMinimumTargetSize(exampleButtons.nth(index), name);
+  }
+  const reset = page.getByRole('button', { name: 'Reset example' });
+  const run = page.getByRole('button', { name: 'Run code' });
+  await assertMinimumTargetSize(reset, 'Reset example');
+  await assertMinimumTargetSize(run, 'Run code');
+
+  const originalTheme = await page.locator('html').getAttribute('data-theme');
+  for (const theme of ['light', 'dark']) {
+    await page.locator('html').evaluate((element, value) => {
+      element.setAttribute('data-theme', value);
+    }, theme);
+    await assertFocusContrast(
+      page,
+      exampleButtons.first(),
+      'Basic module',
+      theme,
+    );
+    await assertFocusContrast(page, reset, 'Reset example', theme);
+    await assertFocusContrast(page, run, 'Run code', theme);
+  }
+
+  const consoleOutput = page.getByRole('region', { name: 'Console output' });
+  await outerEditor.press('Control+Enter');
+  await consoleOutput
+    .getByText('Hello, Ada!', { exact: false })
+    .waitFor({ timeout: 60_000 });
+  await page.getByRole('status').getByText('Ready', { exact: true }).waitFor();
+
+  await codeEditor.click();
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+A' : 'Control+A',
+  );
+  await page.keyboard.insertText(
+    "import { Module } from '@favy/di\nconsole.log('SHOULD NOT RUN')",
+  );
+  await page
+    .getByRole('status')
+    .getByText('Checking imports', { exact: true })
+    .waitFor();
+  await page.waitForTimeout(1_100);
+  assert.equal(
+    (await page.getByRole('status').textContent())?.trim(),
+    'Checking imports',
+  );
+  await run.click();
+  assert.equal(await run.isDisabled(), false);
+  assert.equal(
+    await page
+      .getByRole('toolbar', { name: 'Playground controls' })
+      .getAttribute('aria-busy'),
+    'false',
+  );
+  assert.equal(
+    (await page.getByRole('status').textContent())?.trim(),
+    'Checking imports',
+  );
+  assert.equal(
+    (await consoleOutput.textContent())?.includes('SHOULD NOT RUN'),
+    false,
+  );
+
+  await reset.click();
+  await page.getByRole('status').getByText('Ready', { exact: true }).waitFor();
+  assert.equal(
+    (await consoleOutput.textContent())?.includes('Hello, Ada!'),
+    false,
+  );
+  await outerEditor.press('Control+Enter');
+  await consoleOutput
+    .getByText('Hello, Ada!', { exact: false })
+    .waitFor({ timeout: 60_000 });
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  const exampleSelect = page.getByRole('combobox', { name: 'Example' });
+  assert.equal(await exampleSelect.isVisible(), true);
+  await assertMinimumTargetSize(exampleSelect, 'Example select');
+  for (const theme of ['light', 'dark']) {
+    await page.locator('html').evaluate((element, value) => {
+      element.setAttribute('data-theme', value);
+    }, theme);
+    await assertFocusContrast(page, exampleSelect, 'Example select', theme);
+  }
+  await exampleSelect.selectOption({ label: 'HKT transform' });
+  await page.waitForFunction(() =>
+    document.querySelector('.cm-content')?.textContent?.includes('BoxHKT'),
+  );
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    true,
+  );
+  await outerEditor.press('Meta+Enter');
+  await consoleOutput
+    .getByText('Greeting: hello', { exact: false })
+    .waitFor({ timeout: 60_000 });
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    true,
+  );
+
+  await page.locator('html').evaluate((element, theme) => {
+    if (theme) element.setAttribute('data-theme', theme);
+    else element.removeAttribute('data-theme');
+  }, originalTheme);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+};
+
+const checkExistingDocumentationPages = async (page, browser) => {
   await page.goto(`${origin}/guides/introduction/`, {
     waitUntil: 'domcontentloaded',
   });
@@ -431,8 +664,19 @@ try {
     page.locator('mobile-starlight-toc .dropdown a').first(),
     'Mobile table of contents link',
   );
+};
+
+try {
+  await checkPlayground(page);
+  if (process.env.PLAYGROUND_ONLY !== '1') {
+    await checkExistingDocumentationPages(page, browser);
+  }
 } finally {
   await browser.close();
 }
 
-console.log('Documentation page contract passed');
+console.log(
+  process.env.PLAYGROUND_ONLY === '1'
+    ? 'Playground page contract passed'
+    : 'Documentation page contract passed',
+);
