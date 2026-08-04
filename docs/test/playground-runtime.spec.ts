@@ -407,6 +407,88 @@ it('serializes cycles without invoking object getters', async () => {
   ]);
 });
 
+it('bounds wide console values and still completes the run', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+  const keys = Array.from({ length: 2_000 }, (_, index) => `key${index}`);
+  let descriptorReads = 0;
+  const wide = new Proxy(Object.create(null) as Record<string, unknown>, {
+    ownKeys: () => keys,
+    getOwnPropertyDescriptor: (_target, key) => {
+      descriptorReads += 1;
+      if (typeof key !== 'string' || !key.startsWith('key')) return undefined;
+      return {
+        configurable: true,
+        enumerable: true,
+        value: `${String(key)}:${'🙂'.repeat(200)}`,
+      };
+    },
+  });
+
+  run.executeChild((_specifier, child) => {
+    child.console.log(wide);
+    return Promise.resolve();
+  });
+  await flushChildTasks();
+
+  const value = runtime.records.find(
+    (record) => record[0] === RUN_OUTPUT_PREFIX + '7'
+  )?.[2];
+  expect(typeof value).toBe('string');
+  expect((value as string).length).toBeLessThanOrEqual(4_096);
+  expect(Buffer.byteLength(value as string, 'utf8')).toBeLessThanOrEqual(4_096);
+  expect(value).toEqual(expect.stringContaining('key0'));
+  expect(value).toEqual(expect.stringContaining('[Truncated]'));
+  expect(descriptorReads).toBeLessThan(256);
+  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
+});
+
+it('marks the depth boundary without discarding the useful prefix', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+  const deep: Record<string, unknown> = { leaf: true };
+  for (let depth = 0; depth < 100; depth += 1) {
+    deep.next = { depth, previous: deep.next };
+  }
+
+  run.executeChild((_specifier, child) => {
+    child.console.log({ label: 'deep', value: deep.next });
+    return Promise.resolve();
+  });
+  await flushChildTasks();
+
+  const value = runtime.records.find(
+    (record) => record[0] === RUN_OUTPUT_PREFIX + '7'
+  )?.[2];
+  expect(value).toEqual(expect.stringContaining('{"label":"deep"'));
+  expect(value).toEqual(expect.stringContaining('[Truncated]'));
+  expect((value as string).length).toBeLessThanOrEqual(4_096);
+  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
+});
+
+it('renders a safe placeholder when proxy reflection throws', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+  const throwing = new Proxy(Object.create(null) as Record<string, unknown>, {
+    ownKeys: () => {
+      throw new Error('reflection failed');
+    },
+  });
+
+  run.executeChild((_specifier, child) => {
+    child.console.log({ safe: 1, throwing });
+    return Promise.resolve();
+  });
+  await flushChildTasks();
+
+  expect(runtime.records).toContainEqual([
+    RUN_OUTPUT_PREFIX + '7',
+    'log',
+    '{"safe":1,"throwing":"[Unserializable value]"}',
+  ]);
+  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
+});
+
 it('drops qualified output from a replaced child realm', async () => {
   const runtime = createTestRuntime();
   const first = startTestRun(runtime, 7);
