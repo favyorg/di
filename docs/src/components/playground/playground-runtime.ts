@@ -11,8 +11,18 @@ type ConsoleRecord = Readonly<{
   data?: readonly unknown[];
 }>;
 
+const PACKAGE_NAME =
+  /^(?:@[A-Za-z\d][A-Za-z\d._~-]*\/)?[A-Za-z\d][A-Za-z\d._~-]*$/;
+
 export const warmupSource = (dependencies: readonly string[]): string =>
-  dependencies.map((dependency) => `import '${dependency}';`).join('\n');
+  dependencies
+    .map((dependency) => {
+      if (dependency.length > 214 || !PACKAGE_NAME.test(dependency)) {
+        throw new TypeError('Warmup dependencies must be npm package names.');
+      }
+      return `import ${JSON.stringify(dependency)};`;
+    })
+    .join('\n');
 
 export const runSource = (token: number): string =>
   [

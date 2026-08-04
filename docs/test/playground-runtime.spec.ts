@@ -22,11 +22,34 @@ const setup: SandboxSetup = {
   },
 };
 
-it('warms dependencies without importing editable code', () => {
+const executeRunSource = (
+  source: string,
+  load: (specifier: string) => Promise<unknown>,
+  debug: (value: unknown) => void
+): Promise<unknown> => {
+  const executableSource = source.replace('void import(', 'return load(');
+  const execute = Function('load', 'console', executableSource) as (
+    loadModule: (specifier: string) => Promise<unknown>,
+    runtimeConsole: { debug(value: unknown): void }
+  ) => Promise<unknown>;
+  return execute(load, { debug });
+};
+
+it('warms dependencies with encoded static imports only', () => {
   const source = warmupSource(['@favy/di', 'lodash']);
-  expect(source).toContain("import '@favy/di';");
-  expect(source).toContain("import 'lodash';");
+  expect(source).toBe('import "@favy/di";\nimport "lodash";');
   expect(source).not.toContain('/index.ts');
+});
+
+it.each([
+  "@favy/di';globalThis.__ran=true;//",
+  './local',
+  '/absolute',
+  'https://esm.sh/lodash',
+  'node:fs',
+  '@scope',
+])('rejects unsafe warmup dependency %s', (dependency) => {
+  expect(() => warmupSource([dependency])).toThrow();
 });
 
 it('generates a tokenized execution import with one completion record', () => {
@@ -34,6 +57,30 @@ it('generates a tokenized execution import with one completion record', () => {
   expect(source).toContain("import('/execution.ts?run=7')");
   expect(source.match(/console\.debug/g)).toHaveLength(1);
   expect(source).toContain(RUN_COMPLETE_PREFIX + '7');
+});
+
+it('records completion after a failed execution import settles', async () => {
+  const events: string[] = [];
+  let rejectExecution: (error: Error) => void = () => undefined;
+  const executionImport = new Promise<never>((_resolve, reject) => {
+    rejectExecution = reject;
+  });
+  const execution = executeRunSource(
+    runSource(7),
+    (specifier) => {
+      events.push(`import:${specifier}`);
+      return executionImport;
+    },
+    (value) => events.push(`debug:${String(value)}`)
+  );
+
+  expect(events).toEqual(['import:/execution.ts?run=7']);
+  rejectExecution(new Error('execution failed'));
+  await expect(execution).rejects.toThrow('execution failed');
+  expect(events).toEqual([
+    'import:/execution.ts?run=7',
+    `debug:${RUN_COMPLETE_PREFIX}7`,
+  ]);
 });
 
 it('tokenizes execution and does not mutate the previous setup', () => {
