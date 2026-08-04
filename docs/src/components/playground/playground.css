@@ -247,6 +247,25 @@ html:not([data-has-hero]):has(.playground-page) {
   overflow: hidden;
 }
 
+.playground__console-output {
+  block-size: 100%;
+  overflow: auto;
+  padding: 0.875rem 1rem;
+  color: var(--sl-color-white);
+  font-family: var(--__sl-font-mono);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.playground__console-empty {
+  color: var(--docs-muted);
+}
+
+.playground__runtime-client {
+  display: none;
+}
+
 .playground__editor > .sp-stack,
 .playground__console > .sp-stack {
   block-size: 100%;

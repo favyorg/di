@@ -12,7 +12,16 @@ import { playgroundExampleById } from '../src/components/playground/playground-e
 
 type MockSandpackMessage =
   | { type: 'done'; compilatonError: boolean }
-  | { type: 'action'; action: 'show-error' };
+  | { type: 'action'; action: 'show-error' }
+  | {
+      type: 'console';
+      codesandbox: true;
+      log: Array<{
+        method: 'log' | 'clear';
+        id: string;
+        data: string[];
+      }>;
+    };
 
 type MockSandpackContext = {
   code: string;
@@ -27,6 +36,7 @@ let mockMaximumMountedProviders = 0;
 let mockConsoleMountCounter = 0;
 let mockRunMode: 'auto-done' | 'hold' | 'reject' = 'auto-done';
 let mockEmitMessage: ((message: MockSandpackMessage) => void) | undefined;
+let mockConsoleObserver: ((message: MockSandpackMessage) => void) | undefined;
 let mockChangeHookIdentities: (() => void) | undefined;
 let mockActiveListenerCount = 0;
 
@@ -89,6 +99,7 @@ jest.mock('@codesandbox/sandpack-react', () => {
     React.useEffect(() => {
       const emitMessage = (mockMessage: any): void => {
         listeners.current.forEach((listener) => listener(mockMessage));
+        mockConsoleObserver?.(mockMessage);
       };
       mockMountedProviders += 1;
       mockMaximumMountedProviders = Math.max(
@@ -172,11 +183,24 @@ jest.mock('@codesandbox/sandpack-react', () => {
     }
   );
 
-  const SandpackConsole = () => {
+  const SandpackConsole = ({
+    onLogsChange,
+    resetOnPreviewRestart: _resetOnPreviewRestart,
+    standalone: _standalone,
+    ...props
+  }: any) => {
     const [mountId] = React.useState(() => ++mockConsoleMountCounter);
-    return (
-      <div aria-label="Console output" data-mount-id={mountId.toString()} />
-    );
+    React.useEffect(() => {
+      const observer = (message: MockSandpackMessage): void => {
+        if (message.type === 'console') onLogsChange?.(message.log);
+      };
+      mockConsoleObserver = observer;
+      onLogsChange?.([]);
+      return () => {
+        if (mockConsoleObserver === observer) mockConsoleObserver = undefined;
+      };
+    }, [onLogsChange]);
+    return <div {...props} data-mount-id={mountId.toString()} />;
   };
 
   return {
@@ -213,7 +237,8 @@ const editor = (): HTMLTextAreaElement => {
 };
 
 const consoleMountId = (): string | null =>
-  screen.getByLabelText('Console output').getAttribute('data-mount-id');
+  document.querySelector('[data-mount-id]')?.getAttribute('data-mount-id') ??
+  null;
 
 const mountEvents = (): string[] =>
   mockEvents.filter((event) => event.startsWith('mount:'));
@@ -236,6 +261,7 @@ beforeEach(() => {
   mockConsoleMountCounter = 0;
   mockRunMode = 'auto-done';
   mockEmitMessage = undefined;
+  mockConsoleObserver = undefined;
   mockChangeHookIdentities = undefined;
   mockActiveListenerCount = 0;
   document.documentElement.dataset.theme = 'light';
@@ -282,7 +308,28 @@ it('exposes the playground controls and regions with accessible semantics', () =
   expect(within(toolbar).getByText('Ctrl/⌘ + Enter')).toBeTruthy();
   expect(toolbar.getAttribute('aria-busy')).toBe('false');
   expect(screen.getByRole('region', { name: 'Code' })).toBeTruthy();
-  expect(screen.getByRole('region', { name: 'Console' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Console output' })).toBeTruthy();
+});
+
+it('shows console messages from the active browser run', () => {
+  mockRunMode = 'hold';
+  render(<Playground />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  act(() => jest.advanceTimersByTime(0));
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [
+      {
+        method: 'log',
+        id: 'hello',
+        data: ['Hello, Ada!'],
+      },
+    ],
+  });
+
+  expect(screen.getByRole('log').textContent).toContain('Hello, Ada!');
 });
 
 it('marks the controls busy while a run is active', () => {

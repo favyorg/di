@@ -62,6 +62,11 @@ type Drafts = Record<PlaygroundExampleId, string>;
 type DependencyMap = Record<PlaygroundExampleId, PlaygroundDependencies>;
 type ResetGenerations = Record<PlaygroundExampleId, number>;
 type PlaygroundTheme = 'light' | 'dark';
+type ConsoleValue = string | Record<string, string>;
+type ConsoleLog = Readonly<{
+  method: string;
+  data?: readonly ConsoleValue[];
+}>;
 
 const SANDBOX_OPTIONS = Object.freeze({
   activeFile: '/index.ts',
@@ -125,6 +130,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     const { code } = useActiveCode();
     const { sandpack, listen } = useSandpack();
     const editorRef = useRef<CodeEditorRef>(null);
+    const [consoleLines, setConsoleLines] = useState<readonly string[]>([]);
     const liveCode = useRef(code);
     const previousCode = useRef(code);
     const handledRun = useRef(0);
@@ -133,6 +139,22 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     liveCode.current = code;
     listenRef.current = listen;
     runSandpackRef.current = sandpack.runSandpack;
+
+    const handleConsoleLogs = useCallback((logs: readonly ConsoleLog[]) => {
+      setConsoleLines(
+        logs.flatMap(({ data, method }) => {
+          if (method === 'clear') return [];
+          const line = data
+            ?.map((value) =>
+              typeof value === 'string' ? value : JSON.stringify(value)
+            )
+            .join(' ');
+          return !line || (method === 'debug' && line.startsWith('[vite]'))
+            ? []
+            : [line];
+        })
+      );
+    }, []);
 
     useImperativeHandle(
       forwardedRef,
@@ -194,6 +216,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       const launchTimer = window.setTimeout(() => {
         if (runRequest.token <= handledRun.current) return;
         handledRun.current = runRequest.token;
+        setConsoleLines([]);
         onStatus('Running');
         stop = listenRef.current((message) => {
           if (message.type === 'done') {
@@ -233,11 +256,28 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         </section>
         <section
           className="playground__region playground__console-region"
-          aria-labelledby="playground-console-heading"
+          aria-label="Console output"
         >
           <h2 id="playground-console-heading">Console</h2>
           <div className="playground__console">
-            <SandpackConsole standalone />
+            <div className="playground__console-output" role="log">
+              {consoleLines.length === 0 ? (
+                <span className="playground__console-empty">
+                  Run code to see output.
+                </span>
+              ) : (
+                consoleLines.map((line, index) => (
+                  <div key={`${index}:${line}`}>{line}</div>
+                ))
+              )}
+            </div>
+            <div className="playground__runtime-client" aria-hidden="true">
+              <SandpackConsole
+                onLogsChange={handleConsoleLogs}
+                resetOnPreviewRestart
+                standalone
+              />
+            </div>
           </div>
         </section>
       </>
@@ -257,7 +297,11 @@ const SandboxSession = forwardRef<SandboxHandle, SandboxSessionProps>(
     { dependencies, initialCode, theme, ...contentsProps },
     forwardedRef
   ) {
-    const [files] = useState(() => ({ '/index.ts': initialCode }));
+    const [files] = useState(() => ({
+      '/index.ts': initialCode,
+      '/index.html':
+        '<!doctype html><script type="module" src="/index.ts"></script>',
+    }));
     const customSetup = useMemo(
       () => ({ entry: '/index.ts', dependencies }),
       [dependencies]
@@ -265,7 +309,7 @@ const SandboxSession = forwardRef<SandboxHandle, SandboxSessionProps>(
 
     return (
       <SandpackProvider
-        template="vanilla-ts"
+        template="vite"
         files={files}
         customSetup={customSetup}
         options={SANDBOX_OPTIONS}
