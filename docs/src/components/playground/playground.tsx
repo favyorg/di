@@ -164,6 +164,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     const activeRun = useRef<RunRequest>();
     const runFailed = useRef(false);
     const suppressedRun = useRef<number>();
+    const acceptConsoleOutput = useRef(true);
     const failureTimer = useRef<number>();
     const clientRetryTimer = useRef<number>();
     const clientRetryToken = useRef<number>();
@@ -275,12 +276,9 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       handledRun.current = request.token;
       activeRun.current = request;
       runFailed.current = false;
+      acceptConsoleOutput.current = true;
       clearConsole();
       onStatusRef.current('Running');
-      failureTimer.current = window.setTimeout(
-        () => finish(request, 'Failed'),
-        30_000
-      );
       try {
         client.updateSandbox(
           setupForRun(client.sandboxSetup, request.code, request.token)
@@ -366,7 +364,12 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
           }
           continue;
         }
-        if (suppressedRun.current !== undefined) continue;
+        if (
+          suppressedRun.current !== undefined ||
+          !acceptConsoleOutput.current
+        ) {
+          continue;
+        }
         if (log.method === 'clear') {
           additions.length = 0;
           clearConsole();
@@ -471,18 +474,29 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         activeRun.current = undefined;
         runFailed.current = false;
       }
-      if (!runRequest) clearClientRetry();
+      if (runRequest && failureTimer.current === undefined) {
+        failureTimer.current = window.setTimeout(
+          () => finish(runRequest, 'Failed'),
+          30_000
+        );
+      }
+      if (!runRequest) {
+        clearFailureTimer();
+        clearClientRetry();
+      }
       tryLaunchRef.current();
     }, [
       clearClientRetry,
       clearFailureTimer,
       clearSuppressionTimer,
+      finish,
       runRequest,
     ]);
 
     useEffect(() => {
       if (previousCodeIdentity.current === codeIdentity) return;
       previousCodeIdentity.current = codeIdentity;
+      acceptConsoleOutput.current = false;
       clearConsole();
       if (code !== activeCode) {
         expectedProgrammaticCode.current = activeCode;

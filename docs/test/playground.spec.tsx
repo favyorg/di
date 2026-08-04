@@ -595,6 +595,25 @@ it('queues once during preparation and launches when ready', () => {
   expect(updateEvents()[0]).toContain('/execution.ts?run=1');
 });
 
+it('times out a queued run when the runtime never becomes ready', async () => {
+  render(<Playground />);
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+
+  fireEvent.click(runButton);
+  await act(async () => jest.advanceTimersByTimeAsync(30_000));
+
+  expect(updateEvents()).toEqual([]);
+  expect(screen.getByRole('status').textContent).toBe('Failed');
+  expect((runButton as HTMLButtonElement).disabled).toBe(false);
+  expect(mockActiveListenerCount).toBe(1);
+  expect(jest.getTimerCount()).toBe(0);
+
+  mockClientReady = true;
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+  expect(updateEvents()).toEqual([]);
+  expect((runButton as HTMLButtonElement).disabled).toBe(false);
+});
+
 it('launches the source snapshot captured by an early run', () => {
   mockUpdateMode = 'hold';
   render(<Playground />);
@@ -851,10 +870,11 @@ it.each(['switch', 'reset'] as const)(
   }
 );
 
-it('suppresses late output from a cancelled active run', () => {
+it('suppresses cancelled output until the displayed code launches', () => {
   mockUpdateMode = 'hold';
   renderReadyPlayground();
-  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+  fireEvent.click(runButton);
 
   fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
   emitConsole('log', 'late basic output');
@@ -864,9 +884,36 @@ it('suppresses late output from a cancelled active run', () => {
 
   emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
   expect(screen.getByRole('status').textContent).toBe('Ready');
+  emitConsole('log', 'late basic output after marker');
+  expect(screen.getByRole('log').textContent).not.toContain(
+    'late basic output after marker'
+  );
+
+  fireEvent.click(runButton);
   emitConsole('log', 'composition output');
   expect(screen.getByRole('log').textContent).toContain('composition output');
 });
+
+it.each(['switch', 'reset'] as const)(
+  'keeps old output hidden after the cancelled marker on %s',
+  (testCase) => {
+    mockUpdateMode = 'hold';
+    renderReadyPlayground();
+    fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+
+    if (testCase === 'switch') {
+      fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'Reset example' }));
+    }
+    emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
+    emitConsole('log', `late output after ${testCase}`);
+
+    expect(screen.getByRole('log').textContent).not.toContain(
+      `late output after ${testCase}`
+    );
+  }
+);
 
 it('queues a new run until the cancelled run settles', () => {
   mockUpdateMode = 'hold';
