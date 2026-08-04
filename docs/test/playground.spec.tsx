@@ -343,6 +343,16 @@ const emitRunOutput = (token: number, value: unknown, id: string): void =>
     log: [runOutputLog(token, value, id)],
   });
 
+const runErrorLog = (
+  token: number,
+  value: string,
+  id: string
+): Extract<MockSandpackMessage, { type: 'console' }>['log'][number] => ({
+  method: 'debug',
+  id,
+  data: [`__FAVY_PLAYGROUND_ERROR__:${token}`, value],
+});
+
 const renderReadyPlayground = (): void => {
   render(<Playground />);
   mockClientReady = true;
@@ -468,6 +478,58 @@ it('shows qualified and imported-module output from the active run', () => {
   expect(screen.getByRole('log').textContent).toContain('globalThis output');
   expect(screen.getByRole('log').textContent).toContain('window output');
   expect(screen.getByRole('log').textContent).toContain('imported output');
+});
+
+it('shows an active child error and settles the run as failed', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+  fireEvent.click(runButton);
+
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [
+      runErrorLog(1, 'Error: child boom', 'child-error:1'),
+      {
+        method: 'debug',
+        id: 'complete:1',
+        data: ['__FAVY_PLAYGROUND_DONE__:1'],
+      },
+    ],
+  });
+
+  expect(screen.getByRole('log').textContent).toContain('Error: child boom');
+  expect(screen.getByRole('status').textContent).toBe('Failed');
+  expect((runButton as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('ignores stale child errors after a replacement run launches', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+  fireEvent.click(runButton);
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  fireEvent.click(runButton);
+  emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
+
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [
+      runErrorLog(1, 'Error: stale boom', 'child-error:stale'),
+      runErrorLog(2, 'Error: active boom', 'child-error:active'),
+      {
+        method: 'debug',
+        id: 'complete:2',
+        data: ['__FAVY_PLAYGROUND_DONE__:2'],
+      },
+    ],
+  });
+
+  expect(screen.getByRole('log').textContent).not.toContain('stale boom');
+  expect(screen.getByRole('log').textContent).toContain('active boom');
+  expect(screen.getByRole('status').textContent).toBe('Failed');
 });
 
 it('renders non-JSON console values without breaking the playground', () => {

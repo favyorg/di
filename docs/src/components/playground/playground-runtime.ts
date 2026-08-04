@@ -5,12 +5,14 @@ import type {
 } from '@codesandbox/sandpack-client';
 
 export const RUN_COMPLETE_PREFIX = '__FAVY_PLAYGROUND_DONE__:';
+export const RUN_ERROR_PREFIX = '__FAVY_PLAYGROUND_ERROR__:';
 export const RUN_OUTPUT_PREFIX = '__FAVY_PLAYGROUND_OUTPUT__:';
 
 const RUN_BRIDGE_KEY = '__favyPlaygroundRunBridge__';
 const RUN_FRAME_KEY = '__favyPlaygroundExecutionFrame__';
 const RUN_FRAME_ATTRIBUTE = 'data-favy-playground-execution';
 const RUN_COMPLETE_METHOD = '__favyPlaygroundComplete__';
+const RUN_ERROR_METHOD = '__favyPlaygroundError__';
 
 type ConsoleRecord = Readonly<{
   method?: unknown;
@@ -21,6 +23,11 @@ export type RunOutputRecord = Readonly<{
   token: number;
   method: string;
   data: readonly unknown[];
+}>;
+
+export type RunErrorRecord = Readonly<{
+  token: number;
+  error: unknown;
 }>;
 
 const CONSOLE_METHODS = new Set([
@@ -54,11 +61,107 @@ const childBootstrap = (token: number): string =>
   [
     "'use strict';",
     `const bridgeKey = ${JSON.stringify(RUN_BRIDGE_KEY)};`,
+    `const completeMethod = ${JSON.stringify(RUN_COMPLETE_METHOD)};`,
+    `const errorMethod = ${JSON.stringify(RUN_ERROR_METHOD)};`,
+    'const ownData = (value, key) => {',
+    '  try {',
+    '    const descriptor = Object.getOwnPropertyDescriptor(value, key);',
+    "    return descriptor && 'value' in descriptor ? descriptor.value : undefined;",
+    '  } catch {',
+    '    return undefined;',
+    '  }',
+    '};',
+    'const specialObject = (value) => {',
+    '  try {',
+    "    const stack = Object.getOwnPropertyDescriptor(value, 'stack');",
+    '    if (stack) {',
+    "      if ('value' in stack && typeof stack.value === 'string') return stack.value;",
+    "      const message = ownData(value, 'message');",
+    "      const ownName = ownData(value, 'name');",
+    '      const prototype = Object.getPrototypeOf(value);',
+    "      const inheritedName = prototype && ownData(prototype, 'name');",
+    "      const name = typeof ownName === 'string' ? ownName : typeof inheritedName === 'string' ? inheritedName : 'Error';",
+    "      return typeof message === 'string' && message ? `${name}: ${message}` : name;",
+    '    }',
+    '  } catch {}',
+    '  try {',
+    '    const time = Date.prototype.getTime.call(value);',
+    "    return Number.isNaN(time) ? 'Invalid Date' : new Date(time).toISOString();",
+    '  } catch {}',
+    '  try {',
+    "    const source = Object.getOwnPropertyDescriptor(RegExp.prototype, 'source').get.call(value);",
+    '    const flags = [',
+    "      ['d', 'hasIndices'], ['g', 'global'], ['i', 'ignoreCase'],",
+    "      ['m', 'multiline'], ['s', 'dotAll'], ['u', 'unicode'],",
+    "      ['v', 'unicodeSets'], ['y', 'sticky'],",
+    '    ].flatMap(([flag, key]) => {',
+    '      const descriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, key);',
+    '      return descriptor && descriptor.get && descriptor.get.call(value) ? [flag] : [];',
+    "    }).join('');",
+    '    return `/${source}/${flags}`;',
+    '  } catch {',
+    '    return undefined;',
+    '  }',
+    '};',
+    'const snapshot = (value, seen) => {',
+    '  if (value === null) return null;',
+    '  const type = typeof value;',
+    "  if (type === 'string' || type === 'number' || type === 'boolean') return value;",
+    "  if (type === 'undefined') return '[undefined]';",
+    "  if (type === 'bigint') return `${value}n`;",
+    "  if (type === 'symbol') return String(value);",
+    "  if (type === 'function') return '[Function]';",
+    '  const special = specialObject(value);',
+    '  if (special !== undefined) return special;',
+    "  if (seen.has(value)) return '[Circular]';",
+    '  seen.add(value);',
+    '  let descriptors;',
+    '  try {',
+    '    descriptors = Object.getOwnPropertyDescriptors(value);',
+    '  } catch {',
+    "    return '[Unserializable value]';",
+    '  }',
+    '  const result = Array.isArray(value) ? [] : Object.create(null);',
+    '  for (const key of Object.keys(descriptors)) {',
+    '    const descriptor = descriptors[key];',
+    '    if (!descriptor.enumerable) continue;',
+    "    const item = 'value' in descriptor ? snapshot(descriptor.value, seen) : '[Getter]';",
+    '    Object.defineProperty(result, key, { enumerable: true, value: item });',
+    '  }',
+    '  return result;',
+    '};',
+    'const normalize = (value) => {',
+    '  if (value === null) return null;',
+    '  const type = typeof value;',
+    "  if (type === 'string' || type === 'number' || type === 'boolean' || type === 'undefined') return value;",
+    '  try {',
+    '    const valueSnapshot = snapshot(value, new WeakSet());',
+    "    return typeof valueSnapshot === 'string' ? valueSnapshot : JSON.stringify(valueSnapshot);",
+    '  } catch {',
+    "    return '[Unserializable value]';",
+    '  }',
+    '};',
     'const send = function () {',
     '  const bridge = Reflect.get(parent, bridgeKey);',
     "  if (typeof bridge !== 'function') return;",
-    '  bridge(window, arguments[0], Array.from(arguments).slice(1));',
+    '  bridge(window, arguments[0], Array.from(arguments).slice(1).map(normalize));',
     '};',
+    'const reportedErrors = new Set();',
+    'const reportError = (error) => {',
+    '  const normalized = normalize(error);',
+    '  const key = `${typeof normalized}:${String(normalized)}`;',
+    '  if (reportedErrors.has(key)) return;',
+    '  reportedErrors.add(key);',
+    '  send(errorMethod, normalized);',
+    '};',
+    "globalThis.addEventListener('error', (event) => {",
+    '  reportError(event.error === undefined ? event.message : event.error);',
+    '  event.preventDefault();',
+    '});',
+    "globalThis.addEventListener('unhandledrejection', (event) => {",
+    '  reportError(event.reason);',
+    '  event.preventDefault();',
+    '});',
     'const counts = new Map();',
     'const timers = new Map();',
     'const nativeConsole = globalThis.console;',
@@ -101,9 +204,13 @@ const childBootstrap = (token: number): string =>
     '  writable: true,',
     '  value: runConsole,',
     '});',
-    `void import('/execution.ts?run=${token}').finally(() => {`,
-    `  send(${JSON.stringify(RUN_COMPLETE_METHOD)});`,
-    '});',
+    `void import('/execution.ts?run=${token}').then(`,
+    '  () => globalThis.setTimeout(() => send(completeMethod), 0),',
+    '  (error) => {',
+    '    reportError(error);',
+    '    send(completeMethod);',
+    '  }',
+    ');',
     '',
   ].join('\n');
 
@@ -136,6 +243,12 @@ export const runSource = (token: number): string => {
     `      parentConsole.debug(${JSON.stringify(
       RUN_COMPLETE_PREFIX + token
     )});`,
+    '      return;',
+    '    }',
+    `    if (method === ${JSON.stringify(RUN_ERROR_METHOD)}) {`,
+    `      parentConsole.debug(${JSON.stringify(
+      RUN_ERROR_PREFIX + token
+    )}, data[0]);`,
     '      return;',
     '    }',
     `    parentConsole.debug(${JSON.stringify(
@@ -219,6 +332,22 @@ export const runOutputRecord = ({
   const token = Number(suffix);
   if (!Number.isSafeInteger(token)) return undefined;
   return { token, method: outputMethod, data: data.slice(2) };
+};
+
+export const runErrorRecord = ({
+  method,
+  data,
+}: ConsoleRecord): RunErrorRecord | undefined => {
+  if (method !== 'debug' || data?.length !== 2) return undefined;
+  const marker = data[0];
+  if (typeof marker !== 'string' || !marker.startsWith(RUN_ERROR_PREFIX)) {
+    return undefined;
+  }
+
+  const suffix = marker.slice(RUN_ERROR_PREFIX.length);
+  if (!/^\d+$/.test(suffix)) return undefined;
+  const token = Number(suffix);
+  return Number.isSafeInteger(token) ? { token, error: data[1] } : undefined;
 };
 
 export const preparationLabel = (

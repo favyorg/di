@@ -28,6 +28,7 @@ import {
 import {
   completionToken,
   preparationLabel,
+  runErrorRecord,
   runOutputRecord,
   setupForRun,
   warmupSource,
@@ -363,6 +364,19 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
           if (activeRun.current?.token === token) {
             completedRequest = activeRun.current;
           }
+          continue;
+        }
+        const error = runErrorRecord(log);
+        if (error) {
+          if (error.token !== visibleRunToken.current) continue;
+          const line = formatConsoleValue(error.error);
+          const id = `run-error:${error.token}:${line}`;
+          if (!seenConsoleIds.current.has(id)) {
+            seenConsoleIds.current.add(id);
+            additions.push(line);
+          }
+          runFailed.current = true;
+          onStatusRef.current('Failed');
           continue;
         }
         const output = runOutputRecord(log);

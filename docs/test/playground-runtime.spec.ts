@@ -36,15 +36,24 @@ type TestRuntime = Readonly<{
   runtimeConsole: { debug(...data: unknown[]): void };
 }>;
 
-type TestChild = Window & Readonly<{ console: Console }>;
+type TestChild = Window & typeof globalThis & Readonly<{ console: Console }>;
 
 type TestRun = Readonly<{
   frame: HTMLIFrameElement;
   executeChild(
     load: (specifier: string, child: TestChild) => Promise<unknown>,
     now?: () => number
-  ): void;
+  ): TestChild;
 }>;
+
+const errorMarker = (token: number): string =>
+  `__FAVY_PLAYGROUND_ERROR__:${token}`;
+
+const flushChildTasks = async (): Promise<void> => {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 const createTestRuntime = (): TestRuntime => {
   const records: unknown[][] = [];
@@ -107,6 +116,7 @@ const startTestRun = (runtime: TestRuntime, token: number): TestRun => {
       executeBootstrap(runtime.parent, child, child, { now }, (specifier) =>
         load(specifier, child)
       );
+      return child;
     },
   };
 };
@@ -200,12 +210,7 @@ it('records completion after a failed execution import settles', async () => {
   const run = startTestRun(runtime, 7);
   run.executeChild((specifier) => {
     events.push(`import:${specifier}`);
-    return {
-      finally: (complete: () => void) => {
-        void executionImport.finally(complete).catch(() => undefined);
-        return Promise.resolve();
-      },
-    } as Promise<unknown>;
+    return executionImport;
   });
 
   expect(events).toEqual(['import:/execution.ts?run=7']);
@@ -213,6 +218,97 @@ it('records completion after a failed execution import settles', async () => {
   await executionImport.catch(() => undefined);
   await Promise.resolve();
   expect(runtime.records).toContainEqual([RUN_COMPLETE_PREFIX + '7']);
+});
+
+it('reports a rejected execution import before completing the run', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+  const failure = new Error('direct boom');
+
+  run.executeChild(() => Promise.reject(failure));
+  await flushChildTasks();
+
+  expect(runtime.records[0]?.[0]).toBe(errorMarker(7));
+  expect(runtime.records[0]?.[1]).toEqual(
+    expect.stringContaining('Error: direct boom')
+  );
+  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
+  expect(
+    runtime.records.filter((record) => record[0] === errorMarker(7))
+  ).toHaveLength(1);
+});
+
+it.each([
+  ['error', 'error', new Error('window boom')],
+  ['unhandled rejection', 'unhandledrejection', new Error('promise boom')],
+] as const)(
+  'reports an active child %s before completion',
+  async (_label, eventType, failure) => {
+    const runtime = createTestRuntime();
+    const run = startTestRun(runtime, 7);
+    const child = run.executeChild(() => Promise.resolve());
+    const event = new child.Event(eventType, { cancelable: true });
+    Object.defineProperty(event, eventType === 'error' ? 'error' : 'reason', {
+      value: failure,
+    });
+
+    child.dispatchEvent(event);
+    await flushChildTasks();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(runtime.records[0]?.[0]).toBe(errorMarker(7));
+    expect(runtime.records[0]?.[1]).toEqual(
+      expect.stringContaining(failure.message)
+    );
+    expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
+  }
+);
+
+it('reports one error when the same failure reaches window and import paths', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+  const failure = new Error('one boom');
+  let rejectImport: (error: Error) => void = () => undefined;
+  const executionImport = new Promise<never>((_resolve, reject) => {
+    rejectImport = reject;
+  });
+  const child = run.executeChild(() => executionImport);
+  const event = new child.Event('error', { cancelable: true });
+  Object.defineProperty(event, 'error', { value: failure });
+
+  child.dispatchEvent(event);
+  rejectImport(failure);
+  await flushChildTasks();
+
+  expect(
+    runtime.records.filter((record) => record[0] === errorMarker(7))
+  ).toHaveLength(1);
+  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
+});
+
+it('drops stale child errors after replacing its execution realm', async () => {
+  const runtime = createTestRuntime();
+  const stale = startTestRun(runtime, 7);
+  const staleChild = stale.executeChild(() => Promise.resolve());
+  const active = startTestRun(runtime, 8);
+  const activeChild = active.executeChild(() => Promise.resolve());
+  const dispatchError = (child: TestChild, message: string): void => {
+    const event = new child.Event('error', { cancelable: true });
+    Object.defineProperty(event, 'error', { value: new Error(message) });
+    child.dispatchEvent(event);
+  };
+
+  dispatchError(staleChild, 'stale boom');
+  dispatchError(activeChild, 'active boom');
+  await flushChildTasks();
+
+  expect(runtime.records.some((record) => record[0] === errorMarker(7))).toBe(
+    false
+  );
+  expect(runtime.records).toContainEqual([
+    errorMarker(8),
+    expect.stringContaining('active boom'),
+  ]);
 });
 
 it('tokenizes execution and does not mutate the previous setup', () => {
@@ -248,6 +344,67 @@ it('tokens globalThis, window, and imported-module console output', async () => 
       [RUN_OUTPUT_PREFIX + '7', 'log', 'imported output'],
     ])
   );
+});
+
+it('normalizes cross-realm console values before forwarding them', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+
+  run.executeChild((_specifier, child) => {
+    child.console.log(
+      new child.Error('console boom'),
+      new child.Date('2026-08-04T12:34:56.000Z'),
+      new child.RegExp('favy\\s+di', 'gi'),
+      { nested: { value: 1 } },
+      'text',
+      42,
+      true,
+      null
+    );
+    return Promise.resolve();
+  });
+  await flushChildTasks();
+
+  expect(runtime.records).toContainEqual([
+    RUN_OUTPUT_PREFIX + '7',
+    'log',
+    expect.stringContaining('Error: console boom'),
+    '2026-08-04T12:34:56.000Z',
+    '/favy\\s+di/gi',
+    '{"nested":{"value":1}}',
+    'text',
+    42,
+    true,
+    null,
+  ]);
+});
+
+it('serializes cycles without invoking object getters', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+  let getterRuns = 0;
+  const value: Record<string, unknown> = { safe: 1 };
+  Object.defineProperty(value, 'danger', {
+    enumerable: true,
+    get: () => {
+      getterRuns += 1;
+      return 'unsafe';
+    },
+  });
+  value.self = value;
+
+  run.executeChild((_specifier, child) => {
+    child.console.log(value);
+    return Promise.resolve();
+  });
+  await flushChildTasks();
+
+  expect(getterRuns).toBe(0);
+  expect(runtime.records).toContainEqual([
+    RUN_OUTPUT_PREFIX + '7',
+    'log',
+    '{"safe":1,"danger":"[Getter]","self":"[Circular]"}',
+  ]);
 });
 
 it('drops qualified output from a replaced child realm', async () => {
