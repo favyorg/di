@@ -356,6 +356,7 @@ it('normalizes cross-realm console values before forwarding them', async () => {
       new child.Date('2026-08-04T12:34:56.000Z'),
       new child.RegExp('favy\\s+di', 'gi'),
       { nested: { value: 1 } },
+      [1, { nested: true }],
       'text',
       42,
       true,
@@ -371,7 +372,8 @@ it('normalizes cross-realm console values before forwarding them', async () => {
     expect.stringContaining('Error: console boom'),
     '2026-08-04T12:34:56.000Z',
     '/favy\\s+di/gi',
-    '{"nested":{"value":1}}',
+    '[Object]',
+    '[1,"[Object]"]',
     'text',
     42,
     true,
@@ -379,7 +381,7 @@ it('normalizes cross-realm console values before forwarding them', async () => {
   ]);
 });
 
-it('serializes cycles without invoking object getters', async () => {
+it('handles cycles without invoking object getters', async () => {
   const runtime = createTestRuntime();
   const run = startTestRun(runtime, 7);
   let getterRuns = 0;
@@ -392,9 +394,11 @@ it('serializes cycles without invoking object getters', async () => {
     },
   });
   value.self = value;
+  const circular: unknown[] = [1];
+  circular.push(circular);
 
   run.executeChild((_specifier, child) => {
-    child.console.log(value);
+    child.console.log(value, circular);
     return Promise.resolve();
   });
   await flushChildTasks();
@@ -403,27 +407,32 @@ it('serializes cycles without invoking object getters', async () => {
   expect(runtime.records).toContainEqual([
     RUN_OUTPUT_PREFIX + '7',
     'log',
-    '{"safe":1,"danger":"[Getter]","self":"[Circular]"}',
+    '[Object]',
+    '[1,"[Circular]"]',
   ]);
 });
 
-it('bounds wide console values and still completes the run', async () => {
+it('bounds arrays without materializing their own keys', async () => {
   const runtime = createTestRuntime();
   const run = startTestRun(runtime, 7);
-  const keys = Array.from({ length: 2_000 }, (_, index) => `key${index}`);
+  let ownKeyReads = 0;
   let descriptorReads = 0;
-  const wide = new Proxy(Object.create(null) as Record<string, unknown>, {
-    ownKeys: () => keys,
-    getOwnPropertyDescriptor: (_target, key) => {
-      descriptorReads += 1;
-      if (typeof key !== 'string' || !key.startsWith('key')) return undefined;
-      return {
-        configurable: true,
-        enumerable: true,
-        value: `${String(key)}:${'🙂'.repeat(200)}`,
-      };
-    },
-  });
+  const wide = new Proxy(
+    Array.from(
+      { length: 2_000 },
+      (_, index) => `item${index}:${'🙂'.repeat(200)}`
+    ),
+    {
+      ownKeys: (target) => {
+        ownKeyReads += 1;
+        return Reflect.ownKeys(target);
+      },
+      getOwnPropertyDescriptor: (target, key) => {
+        descriptorReads += 1;
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    }
+  );
 
   run.executeChild((_specifier, child) => {
     child.console.log(wide);
@@ -437,46 +446,56 @@ it('bounds wide console values and still completes the run', async () => {
   expect(typeof value).toBe('string');
   expect((value as string).length).toBeLessThanOrEqual(4_096);
   expect(Buffer.byteLength(value as string, 'utf8')).toBeLessThanOrEqual(4_096);
-  expect(value).toEqual(expect.stringContaining('key0'));
+  expect(value).toEqual(expect.stringContaining('item0'));
   expect(value).toEqual(expect.stringContaining('[Truncated]'));
+  expect(ownKeyReads).toBe(0);
   expect(descriptorReads).toBeLessThan(256);
   expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
 });
 
-it('marks the depth boundary without discarding the useful prefix', async () => {
+it('does not enumerate unknown console objects before completing the run', async () => {
   const runtime = createTestRuntime();
   const run = startTestRun(runtime, 7);
-  const deep: Record<string, unknown> = { leaf: true };
-  for (let depth = 0; depth < 100; depth += 1) {
-    deep.next = { depth, previous: deep.next };
-  }
+  const keys = Array.from({ length: 2_500 }, (_, index) => `hidden${index}`);
+  let ownKeyReads = 0;
+  let descriptorReads = 0;
+  const value = new Proxy(Object.create(null) as Record<string, unknown>, {
+    ownKeys: () => {
+      ownKeyReads += 1;
+      return keys;
+    },
+    getOwnPropertyDescriptor: (_target, key) => {
+      descriptorReads += 1;
+      return typeof key === 'string' && key.startsWith('hidden')
+        ? { configurable: true, enumerable: false, value: 'hidden' }
+        : undefined;
+    },
+  });
 
   run.executeChild((_specifier, child) => {
-    child.console.log({ label: 'deep', value: deep.next });
+    child.console.log(value);
     return Promise.resolve();
   });
   await flushChildTasks();
 
-  const value = runtime.records.find(
-    (record) => record[0] === RUN_OUTPUT_PREFIX + '7'
-  )?.[2];
-  expect(value).toEqual(expect.stringContaining('{"label":"deep"'));
-  expect(value).toEqual(expect.stringContaining('[Truncated]'));
-  expect((value as string).length).toBeLessThanOrEqual(4_096);
+  expect(descriptorReads).toBeLessThan(8);
+  expect(ownKeyReads).toBe(0);
+  expect(runtime.records).toContainEqual([
+    RUN_OUTPUT_PREFIX + '7',
+    'log',
+    '[Object]',
+  ]);
   expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
 });
 
 it('renders a safe placeholder when proxy reflection throws', async () => {
   const runtime = createTestRuntime();
   const run = startTestRun(runtime, 7);
-  const throwing = new Proxy(Object.create(null) as Record<string, unknown>, {
-    ownKeys: () => {
-      throw new Error('reflection failed');
-    },
-  });
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
 
   run.executeChild((_specifier, child) => {
-    child.console.log({ safe: 1, throwing });
+    child.console.log(proxy);
     return Promise.resolve();
   });
   await flushChildTasks();
@@ -484,7 +503,7 @@ it('renders a safe placeholder when proxy reflection throws', async () => {
   expect(runtime.records).toContainEqual([
     RUN_OUTPUT_PREFIX + '7',
     'log',
-    '{"safe":1,"throwing":"[Unserializable value]"}',
+    '[Unserializable value]',
   ]);
   expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
 });
