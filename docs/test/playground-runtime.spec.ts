@@ -1,7 +1,10 @@
+import path from 'node:path';
 import type {
   SandboxSetup,
   SandpackMessage,
 } from '@codesandbox/sandpack-client';
+import ts from 'typescript';
+import { playgroundExamples } from '../src/components/playground/playground-examples';
 import {
   RUN_COMPLETE_PREFIX,
   RUN_OUTPUT_PREFIX,
@@ -12,6 +15,9 @@ import {
   setupForRun,
   warmupSource,
 } from '../src/components/playground/playground-runtime';
+
+const RUN_FRAME_SELECTOR = 'iframe[data-favy-playground-execution]';
+const workspace = path.resolve(__dirname, '../..');
 
 const setup: SandboxSetup = {
   entry: '/runner.ts',
@@ -24,18 +30,127 @@ const setup: SandboxSetup = {
   },
 };
 
-const executeRunSource = (
-  source: string,
-  load: (specifier: string) => Promise<unknown>,
-  debug: (value: unknown) => void
-): Promise<unknown> => {
-  const executableSource = source.replace('void import(', 'return load(');
-  const execute = Function('load', 'console', executableSource) as (
-    loadModule: (specifier: string) => Promise<unknown>,
-    runtimeConsole: { debug(value: unknown): void }
-  ) => Promise<unknown>;
-  return execute(load, { debug });
+type TestRuntime = Readonly<{
+  parent: Record<string, unknown>;
+  records: unknown[][];
+  runtimeConsole: { debug(...data: unknown[]): void };
+}>;
+
+type TestChild = Window & Readonly<{ console: Console }>;
+
+type TestRun = Readonly<{
+  frame: HTMLIFrameElement;
+  executeChild(
+    load: (specifier: string, child: TestChild) => Promise<unknown>,
+    now?: () => number
+  ): void;
+}>;
+
+const createTestRuntime = (): TestRuntime => {
+  const records: unknown[][] = [];
+  const runtimeConsole = {
+    debug: (...data: unknown[]) => records.push(data),
+  };
+  return {
+    parent: { console: runtimeConsole },
+    records,
+    runtimeConsole,
+  };
 };
+
+const startTestRun = (runtime: TestRuntime, token: number): TestRun => {
+  const executableSource = runSource(token).replaceAll('import(', 'load(');
+  const execute = Function(
+    'globalThis',
+    'document',
+    'console',
+    'load',
+    executableSource
+  ) as (
+    runtimeGlobal: Record<string, unknown>,
+    runtimeDocument: Document,
+    runtimeConsole: TestRuntime['runtimeConsole'],
+    loadModule: (specifier: string) => Promise<unknown>
+  ) => void;
+  execute(runtime.parent, document, runtime.runtimeConsole, () =>
+    Promise.resolve()
+  );
+
+  const frames =
+    document.querySelectorAll<HTMLIFrameElement>(RUN_FRAME_SELECTOR);
+  const frame = frames.item(frames.length - 1);
+  if (!frame) throw new Error('Runner did not create an execution iframe.');
+
+  return {
+    frame,
+    executeChild: (load, now = () => performance.now()) => {
+      const child = frame.contentWindow as TestChild | null;
+      if (!child) throw new Error('Execution iframe has no window.');
+      const script = /<script type="module">([\s\S]*)<\/script>/.exec(
+        frame.srcdoc
+      )?.[1];
+      if (!script) throw new Error('Execution iframe has no module bootstrap.');
+      const executeBootstrap = Function(
+        'parent',
+        'window',
+        'globalThis',
+        'performance',
+        'load',
+        script
+      ) as (
+        runtimeParent: Record<string, unknown>,
+        runtimeWindow: TestChild,
+        runtimeGlobal: TestChild,
+        runtimePerformance: { now(): number },
+        loadModule: (specifier: string) => Promise<unknown>
+      ) => void;
+      executeBootstrap(runtime.parent, child, child, { now }, (specifier) =>
+        load(specifier, child)
+      );
+    },
+  };
+};
+
+const diagnosticsForExecution = (
+  id: string,
+  source: string
+): readonly ts.Diagnostic[] => {
+  const filename = path.join(
+    workspace,
+    'docs',
+    'test',
+    '__virtual__',
+    `${id}-execution.ts`
+  );
+  const options: ts.CompilerOptions = {
+    strict: true,
+    noEmit: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    baseUrl: workspace,
+    paths: { '@favy/di': ['di/src/index.ts'] },
+    skipLibCheck: true,
+  };
+  const host = ts.createCompilerHost(options);
+  const originalFileExists = host.fileExists;
+  const originalReadFile = host.readFile;
+  const originalGetSourceFile = host.getSourceFile;
+  host.fileExists = (file) => file === filename || originalFileExists(file);
+  host.readFile = (file) =>
+    file === filename ? source : originalReadFile(file);
+  host.getSourceFile = (file, languageVersion, onError, shouldCreate) =>
+    file === filename
+      ? ts.createSourceFile(file, source, languageVersion, true)
+      : originalGetSourceFile(file, languageVersion, onError, shouldCreate);
+  return ts.getPreEmitDiagnostics(ts.createProgram([filename], options, host));
+};
+
+afterEach(() => {
+  document
+    .querySelectorAll(RUN_FRAME_SELECTOR)
+    .forEach((frame) => frame.remove());
+});
 
 it('warms dependencies with encoded static imports only', () => {
   const source = warmupSource(['@favy/di', 'lodash']);
@@ -62,35 +177,42 @@ it.each([
   expect(() => warmupSource([dependency])).toThrow();
 });
 
-it('generates a tokenized execution import with one completion record', () => {
+it('generates a tokenized child-realm import with one completion record', () => {
   const source = runSource(7);
   expect(source).toContain("import('/execution.ts?run=7')");
-  expect(source.match(/console\.debug/g)).toHaveLength(1);
+  expect(source.match(/__FAVY_PLAYGROUND_DONE__:/g)).toHaveLength(1);
   expect(source).toContain(RUN_COMPLETE_PREFIX + '7');
+  expect(source).toContain('srcdoc');
+  expect(
+    diagnosticsForExecution('runner', source).map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+    )
+  ).toEqual([]);
 });
 
 it('records completion after a failed execution import settles', async () => {
+  const runtime = createTestRuntime();
   const events: string[] = [];
   let rejectExecution: (error: Error) => void = () => undefined;
   const executionImport = new Promise<never>((_resolve, reject) => {
     rejectExecution = reject;
   });
-  const execution = executeRunSource(
-    runSource(7),
-    (specifier) => {
-      events.push(`import:${specifier}`);
-      return executionImport;
-    },
-    (value) => events.push(`debug:${String(value)}`)
-  );
+  const run = startTestRun(runtime, 7);
+  run.executeChild((specifier) => {
+    events.push(`import:${specifier}`);
+    return {
+      finally: (complete: () => void) => {
+        void executionImport.finally(complete).catch(() => undefined);
+        return Promise.resolve();
+      },
+    } as Promise<unknown>;
+  });
 
   expect(events).toEqual(['import:/execution.ts?run=7']);
   rejectExecution(new Error('execution failed'));
-  await expect(execution).rejects.toThrow('execution failed');
-  expect(events).toEqual([
-    'import:/execution.ts?run=7',
-    `debug:${RUN_COMPLETE_PREFIX}7`,
-  ]);
+  await executionImport.catch(() => undefined);
+  await Promise.resolve();
+  expect(runtime.records).toContainEqual([RUN_COMPLETE_PREFIX + '7']);
 });
 
 it('tokenizes execution and does not mutate the previous setup', () => {
@@ -102,43 +224,118 @@ it('tokenizes execution and does not mutate the previous setup', () => {
   expect(setup.files['/index.ts'].code).toBe('console.log("old")');
 });
 
-it('binds delayed console output to the run that created its callback', () => {
-  const callbacks: Array<() => void> = [];
-  const records: unknown[][] = [];
-  const runtimeGlobal = {
-    console: {
-      debug: (...data: unknown[]) => records.push(data),
-      log: (...data: unknown[]) => records.push(['untagged', ...data]),
-    },
-  };
-  const execute = (source: string): void => {
-    const run = Function(
+it('tokens globalThis, window, and imported-module console output', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+
+  run.executeChild((_specifier, child) => {
+    const executeImportedModule = Function(
+      'window',
       'globalThis',
-      'setTimeout',
-      `with (globalThis) {${source}}`
-    ) as (
-      runtime: typeof runtimeGlobal,
-      schedule: (callback: () => void) => void
-    ) => void;
-    run(runtimeGlobal, (callback) => callbacks.push(callback));
-  };
+      "globalThis.console.log('global output');" +
+        "window.console.log('window output');" +
+        "globalThis.console.log('imported output');"
+    ) as (runtimeWindow: TestChild, runtimeGlobal: TestChild) => void;
+    executeImportedModule(child, child);
+    return Promise.resolve();
+  });
+  await Promise.resolve();
 
-  execute(
-    setupForRun(setup, `setTimeout(() => console.log('first'), 0);`, 7).files[
-      '/execution.ts'
-    ].code
+  expect(runtime.records).toEqual(
+    expect.arrayContaining([
+      [RUN_OUTPUT_PREFIX + '7', 'log', 'global output'],
+      [RUN_OUTPUT_PREFIX + '7', 'log', 'window output'],
+      [RUN_OUTPUT_PREFIX + '7', 'log', 'imported output'],
+    ])
   );
-  execute(
-    setupForRun(setup, `setTimeout(() => console.log('second'), 0);`, 8).files[
-      '/execution.ts'
-    ].code
-  );
-  callbacks.forEach((callback) => callback());
+});
 
-  expect(records).toEqual([
-    ['__FAVY_PLAYGROUND_OUTPUT__:7', 'log', 'first'],
-    ['__FAVY_PLAYGROUND_OUTPUT__:8', 'log', 'second'],
+it('drops qualified output from a replaced child realm', async () => {
+  const runtime = createTestRuntime();
+  const first = startTestRun(runtime, 7);
+  first.executeChild(() => Promise.resolve());
+  const staleConsole = (first.frame.contentWindow as TestChild | null)?.console;
+  if (!staleConsole) throw new Error('First execution iframe has no console.');
+
+  const replacement = startTestRun(runtime, 8);
+  replacement.executeChild((_specifier, child) => {
+    child.console.log('replacement output');
+    return Promise.resolve();
+  });
+  staleConsole.log('stale qualified output');
+  await Promise.resolve();
+
+  expect(runtime.records).toContainEqual([
+    RUN_OUTPUT_PREFIX + '8',
+    'log',
+    'replacement output',
   ]);
+  expect(runtime.records).not.toContainEqual([
+    RUN_OUTPUT_PREFIX + '7',
+    'log',
+    'stale qualified output',
+  ]);
+});
+
+it('preserves assert, clear, count, and timer console semantics', async () => {
+  const runtime = createTestRuntime();
+  const run = startTestRun(runtime, 7);
+  const times = [10, 25];
+
+  run.executeChild(
+    (_specifier, child) => {
+      child.console.assert(true, 'hidden assertion');
+      child.console.assert(false, 'visible assertion');
+      child.console.clear();
+      child.console.count('jobs');
+      child.console.count('jobs');
+      child.console.time('work');
+      child.console.timeEnd('work');
+      return Promise.resolve();
+    },
+    () => times.shift() ?? 25
+  );
+  await Promise.resolve();
+
+  const output = runtime.records.filter(
+    (record) => record[0] === RUN_OUTPUT_PREFIX + '7'
+  );
+  expect(output.filter((record) => record[1] === 'assert')).toEqual([
+    expect.arrayContaining(['visible assertion']),
+  ]);
+  expect(output).toContainEqual([RUN_OUTPUT_PREFIX + '7', 'clear']);
+  expect(output).toContainEqual([RUN_OUTPUT_PREFIX + '7', 'count', 'jobs: 1']);
+  expect(output).toContainEqual([RUN_OUTPUT_PREFIX + '7', 'count', 'jobs: 2']);
+  expect(output).toContainEqual([
+    RUN_OUTPUT_PREFIX + '7',
+    'timeEnd',
+    'work: 15ms',
+  ]);
+});
+
+it('removes the previous execution iframe before creating its replacement', () => {
+  const runtime = createTestRuntime();
+  const first = startTestRun(runtime, 7);
+
+  const replacement = startTestRun(runtime, 8);
+
+  expect(first.frame.isConnected).toBe(false);
+  expect(replacement.frame.isConnected).toBe(true);
+  expect(document.querySelectorAll(RUN_FRAME_SELECTOR)).toHaveLength(1);
+});
+
+it('keeps all generated execution files strict-valid and uninstrumented', () => {
+  for (const example of playgroundExamples) {
+    const source = setupForRun(setup, example.source, 7).files['/execution.ts']
+      .code;
+    const diagnostics = diagnosticsForExecution(example.id, source);
+    expect(
+      diagnostics.map((diagnostic) =>
+        ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+      )
+    ).toEqual([]);
+    expect(source).toBe(`${example.source}\n// run:7\n`);
+  }
 });
 
 it('recognizes only private debug completion records', () => {

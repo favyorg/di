@@ -450,6 +450,26 @@ it('shows console messages from the active browser run', () => {
   expect(screen.getByRole('log').textContent).toContain('Hello, Ada!');
 });
 
+it('shows qualified and imported-module output from the active run', () => {
+  mockUpdateMode = 'hold';
+  renderReadyPlayground();
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [
+      runOutputLog(1, 'globalThis output', 'qualified:global'),
+      runOutputLog(1, 'window output', 'qualified:window'),
+      runOutputLog(1, 'imported output', 'qualified:imported'),
+    ],
+  });
+
+  expect(screen.getByRole('log').textContent).toContain('globalThis output');
+  expect(screen.getByRole('log').textContent).toContain('window output');
+  expect(screen.getByRole('log').textContent).toContain('imported output');
+});
+
 it('renders non-JSON console values without breaking the playground', () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;

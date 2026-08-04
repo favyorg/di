@@ -7,6 +7,11 @@ import type {
 export const RUN_COMPLETE_PREFIX = '__FAVY_PLAYGROUND_DONE__:';
 export const RUN_OUTPUT_PREFIX = '__FAVY_PLAYGROUND_OUTPUT__:';
 
+const RUN_BRIDGE_KEY = '__favyPlaygroundRunBridge__';
+const RUN_FRAME_KEY = '__favyPlaygroundExecutionFrame__';
+const RUN_FRAME_ATTRIBUTE = 'data-favy-playground-execution';
+const RUN_COMPLETE_METHOD = '__favyPlaygroundComplete__';
+
 type ConsoleRecord = Readonly<{
   method?: unknown;
   data?: readonly unknown[];
@@ -45,30 +50,108 @@ export const warmupSource = (dependencies: readonly string[]): string =>
     })
     .join('\n');
 
-export const runSource = (token: number): string =>
+const childBootstrap = (token: number): string =>
   [
+    "'use strict';",
+    `const bridgeKey = ${JSON.stringify(RUN_BRIDGE_KEY)};`,
+    'const send = function () {',
+    '  const bridge = Reflect.get(parent, bridgeKey);',
+    "  if (typeof bridge !== 'function') return;",
+    '  bridge(window, arguments[0], Array.from(arguments).slice(1));',
+    '};',
+    'const counts = new Map();',
+    'const timers = new Map();',
+    'const nativeConsole = globalThis.console;',
+    'const runConsole = Object.create(nativeConsole);',
+    'Object.assign(runConsole, {',
+    "  debug: (...data) => send('debug', ...data),",
+    "  error: (...data) => send('error', ...data),",
+    "  info: (...data) => send('info', ...data),",
+    "  log: (...data) => send('log', ...data),",
+    "  table: (...data) => send('table', ...data),",
+    "  warn: (...data) => send('warn', ...data),",
+    '  assert: (condition, ...data) => {',
+    '    if (condition) return;',
+    '    const assertion =',
+    "      data.length === 0 ? ['Assertion failed'] : ['Assertion failed:', ...data];",
+    "    send('assert', ...assertion);",
+    '  },',
+    "  clear: () => send('clear'),",
+    "  count: (label = 'default') => {",
+    '    const key = String(label);',
+    '    const value = (counts.get(key) ?? 0) + 1;',
+    '    counts.set(key, value);',
+    "    send('count', `${key}: ${value}`);",
+    '  },',
+    "  time: (label = 'default') => {",
+    '    const key = String(label);',
+    '    if (timers.has(key)) return;',
+    '    timers.set(key, performance.now());',
+    '  },',
+    "  timeEnd: (label = 'default') => {",
+    '    const key = String(label);',
+    '    const start = timers.get(key);',
+    '    if (start === undefined) return;',
+    '    timers.delete(key);',
+    "    send('timeEnd', `${key}: ${performance.now() - start}ms`);",
+    '  },',
+    '});',
+    "Object.defineProperty(globalThis, 'console', {",
+    '  configurable: true,',
+    '  writable: true,',
+    '  value: runConsole,',
+    '});',
     `void import('/execution.ts?run=${token}').finally(() => {`,
-    `  console.debug('${RUN_COMPLETE_PREFIX}${token}');`,
+    `  send(${JSON.stringify(RUN_COMPLETE_METHOD)});`,
     '});',
     '',
   ].join('\n');
 
-const executionSource = (code: string, token: number): string =>
-  [
-    'const __favyPlaygroundNativeConsole = globalThis.console;',
-    'const console = new Proxy(__favyPlaygroundNativeConsole, {',
-    '  get(target, property, receiver) {',
-    '    const value = Reflect.get(target, property, receiver);',
-    "    if (typeof value !== 'function') return value;",
-    '    return (...data) => {',
-    `      target.debug('${RUN_OUTPUT_PREFIX}${token}', String(property), ...data);`,
-    '    };',
+export const runSource = (token: number): string => {
+  const srcdoc = `<!doctype html><script type="module">${childBootstrap(
+    token
+  )}</script>`;
+  return [
+    `const previousFrame = Reflect.get(globalThis, ${JSON.stringify(
+      RUN_FRAME_KEY
+    )});`,
+    "if (previousFrame && typeof previousFrame.remove === 'function') {",
+    '  previousFrame.remove();',
+    '}',
+    "const frame = document.createElement('iframe');",
+    'frame.hidden = true;',
+    "frame.setAttribute('aria-hidden', 'true');",
+    `frame.setAttribute(${JSON.stringify(
+      RUN_FRAME_ATTRIBUTE
+    )}, ${JSON.stringify(String(token))});`,
+    'const parentConsole = globalThis.console;',
+    `Object.defineProperty(globalThis, ${JSON.stringify(RUN_BRIDGE_KEY)}, {`,
+    '  configurable: true,',
+    '  value: function () {',
+    '    const source = arguments[0];',
+    '    const method = arguments[1];',
+    '    const data = arguments[2];',
+    '    if (source !== frame.contentWindow || !Array.isArray(data)) return;',
+    `    if (method === ${JSON.stringify(RUN_COMPLETE_METHOD)}) {`,
+    `      parentConsole.debug(${JSON.stringify(
+      RUN_COMPLETE_PREFIX + token
+    )});`,
+    '      return;',
+    '    }',
+    `    parentConsole.debug(${JSON.stringify(
+      RUN_OUTPUT_PREFIX + token
+    )}, method, ...data);`,
     '  },',
     '});',
-    code,
-    `// run:${token}`,
+    `frame.srcdoc = ${JSON.stringify(srcdoc)};`,
+    'document.body.append(frame);',
+    `Reflect.set(globalThis, ${JSON.stringify(RUN_FRAME_KEY)}, frame);`,
     '',
   ].join('\n');
+};
+
+const executionSource = (code: string, token: number): string =>
+  [code, `// run:${token}`, ''].join('\n');
 
 export const setupForRun = (
   setup: SandboxSetup,
