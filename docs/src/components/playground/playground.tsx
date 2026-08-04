@@ -36,6 +36,7 @@ import {
 import './playground.css';
 
 type PlaygroundStatus =
+  | 'Loading editor'
   | 'Ready'
   | 'Checking imports'
   | 'Preparing dependencies'
@@ -622,9 +623,9 @@ export function Playground(): JSX.Element {
   const [resetGeneration, setResetGeneration] = useState<ResetGenerations>(
     initialResetGenerations
   );
-  const [status, setStatus] = useState<PlaygroundStatus>('Preparing runtime');
+  const [status, setStatus] = useState<PlaygroundStatus>('Loading editor');
   const [runRequest, setRunRequest] = useState<RunRequest | null>(null);
-  const [theme, setTheme] = useState<PlaygroundTheme>(documentTheme);
+  const [theme, setTheme] = useState<PlaygroundTheme>('light');
   const sandboxRef = useRef<SandboxHandle>(null);
   const scanTimer = useRef<number>();
   const deferredScan = useRef<DeferredScan>();
@@ -649,6 +650,12 @@ export function Playground(): JSX.Element {
     runRequest !== null ||
     status === 'Preparing dependencies' ||
     status === 'Running';
+  const runLabel =
+    runRequest === null
+      ? 'Run'
+      : status === 'Running'
+      ? 'Running…'
+      : 'Preparing…';
 
   const cancelScan = useCallback(() => {
     if (scanTimer.current === undefined) return;
@@ -931,7 +938,10 @@ export function Playground(): JSX.Element {
             disabled={runDisabled}
             onClick={run}
           >
-            Run
+            {runRequest && (
+              <span className="playground__spinner" aria-hidden="true" />
+            )}
+            {runLabel}
           </button>
           <span className="playground__shortcut">
             Shortcut: <kbd>Ctrl/⌘ + Enter</kbd>

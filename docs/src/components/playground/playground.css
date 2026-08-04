@@ -152,8 +152,28 @@ html:not([data-has-hero]):has(.playground-page) {
 }
 
 .playground__toolbar button[aria-label='Run code'] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   border-color: var(--docs-accent);
   background: var(--docs-accent-soft);
+}
+
+.playground__spinner {
+  flex: 0 0 auto;
+  inline-size: 0.9rem;
+  block-size: 0.9rem;
+  border: 2px solid currentColor;
+  border-block-end-color: transparent;
+  border-radius: 999px;
+  animation: playground-spin 0.7s linear infinite;
+}
+
+@keyframes playground-spin {
+  to {
+    transform: rotate(1turn);
+  }
 }
 
 .playground__toolbar button:disabled {
@@ -240,6 +260,28 @@ html:not([data-has-hero]):has(.playground-page) {
 .playground__editor {
   block-size: 28rem;
   overflow: hidden;
+}
+
+astro-island[ssr] .playground .sp-syntax-plain,
+astro-island[ssr] .playground .sp-syntax-punctuation {
+  color: #d7dae0;
+}
+
+astro-island[ssr] .playground .sp-syntax-keyword {
+  color: #c792ea;
+}
+
+astro-island[ssr] .playground .sp-syntax-definition,
+astro-island[ssr] .playground .sp-syntax-property {
+  color: #82aaff;
+}
+
+astro-island[ssr] .playground .sp-syntax-string {
+  color: #c3e88d;
+}
+
+astro-island[ssr] .playground .sp-syntax-comment {
+  color: #7f8799;
 }
 
 .playground__editor:focus-within {
@@ -341,5 +383,11 @@ html:not([data-has-hero]):has(.playground-page) {
 
   .playground__mobile-nav {
     display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playground__spinner {
+    animation: none;
   }
 }

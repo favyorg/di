@@ -1,4 +1,5 @@
 import React from 'react';
+import { renderToString } from 'react-dom/server';
 import {
   act,
   cleanup,
@@ -69,6 +70,7 @@ let mockClientReady = false;
 let mockClientNullReads = 0;
 let mockUpdateMode: 'auto-done' | 'hold' | 'reject' = 'auto-done';
 let mockProviderProps: any[] = [];
+let mockProviderThemes: string[] = [];
 let mockUpdatedSetups: any[] = [];
 let mockEmitMessage: ((message: MockSandpackMessage) => void) | undefined;
 let mockChangeHookIdentities: (() => void) | undefined;
@@ -99,7 +101,9 @@ jest.mock('@codesandbox/sandpack-react', () => {
     files,
     options,
     template,
+    theme,
   }: any) => {
+    mockProviderThemes.push(theme);
     const signature = signatureFor(customSetup.dependencies);
     const [code, setCode] = React.useState(codeFor(files['/index.ts']));
     const [hookIdentity, setHookIdentity] = React.useState(0);
@@ -370,6 +374,7 @@ beforeEach(() => {
   mockClientNullReads = 0;
   mockUpdateMode = 'auto-done';
   mockProviderProps = [];
+  mockProviderThemes = [];
   mockUpdatedSetups = [];
   mockEmitMessage = undefined;
   mockChangeHookIdentities = undefined;
@@ -382,6 +387,59 @@ afterEach(() => {
   jest.clearAllTimers();
   jest.useRealTimers();
   delete document.documentElement.dataset.theme;
+});
+
+it('renders deterministic light loading markup before hydration', () => {
+  document.documentElement.dataset.theme = 'dark';
+
+  const markup = renderToString(<Playground />);
+
+  expect(mockProviderThemes).toEqual(['light']);
+  expect(markup).toContain('Loading editor');
+});
+
+it('follows the document theme after mounting and when it changes', async () => {
+  document.documentElement.dataset.theme = 'dark';
+
+  render(<Playground />);
+
+  expect(mockProviderThemes[0]).toBe('light');
+  expect(mockProviderThemes.at(-1)).toBe('dark');
+
+  await act(async () => {
+    document.documentElement.dataset.theme = 'light';
+    await Promise.resolve();
+  });
+  expect(mockProviderThemes.at(-1)).toBe('light');
+});
+
+it('shows preparation progress and visible feedback for queued and active runs', () => {
+  mockUpdateMode = 'hold';
+  render(<Playground />);
+  emitSandpackMessage({
+    type: 'shell/progress',
+    data: { state: 'starting_command' },
+  });
+  expect(screen.getByRole('status').textContent).toBe('Starting Vite');
+
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+  fireEvent.click(runButton);
+
+  expect(runButton.textContent).toContain('Preparing…');
+  expect(runButton.querySelector('.playground__spinner')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Run code' })).toBe(runButton);
+
+  emitSandpackMessage({
+    type: 'dependencies',
+    data: { state: 'starting' },
+  });
+  expect(screen.getByRole('status').textContent).toBe('Installing packages');
+  expect(runButton.textContent).toContain('Preparing…');
+
+  mockClientReady = true;
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+  expect(runButton.textContent).toContain('Running…');
+  expect(runButton.querySelector('.playground__spinner')).toBeTruthy();
 });
 
 it('exposes the playground controls and regions with accessible semantics', () => {
