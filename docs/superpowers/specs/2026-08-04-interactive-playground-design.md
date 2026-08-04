@@ -91,15 +91,19 @@ The helper applies these rules:
 - keep bare package imports such as `lodash`;
 - normalize `lodash/fp` to `lodash`;
 - normalize `@scope/package/subpath` to `@scope/package`;
-- support static imports, re-exports with `from`, and string-literal dynamic
-  imports;
+- support static imports, re-exports with `from`, and dynamic imports whose
+  specifier is a string or no-substitution template literal;
 - ignore relative paths, absolute paths, URLs, data URLs, and `node:` imports;
 - pin `@favy/di` to `3.0.0` and assign `latest` to other detected packages.
 
-An incomplete or syntactically invalid import leaves the last valid dependency
-set intact and shows a neutral waiting state rather than a runtime error. A
-valid changed dependency set remounts only the active provider with the new
-Sandpack configuration; because autorun is disabled, this does not execute the
+An incomplete or syntactically invalid dependency-bearing import leaves the
+last valid dependency set intact and shows a neutral waiting state rather than
+a runtime error. A valid changed dependency set remounts only the active
+provider with the new Sandpack configuration; because autorun is disabled,
+this does not execute the program.
+
+Computed dynamic imports do not declare an installable dependency. Sandpack
+reports their syntax or runtime errors after `Run`, like the rest of the
 program.
 
 Pressing `Run` while the debounce is pending cancels the timer, parses imports

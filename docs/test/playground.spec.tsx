@@ -19,7 +19,7 @@ type MockSandpackMessage =
       log: Array<{
         method: 'log' | 'clear';
         id: string;
-        data: string[];
+        data: unknown[];
       }>;
     };
 
@@ -332,6 +332,26 @@ it('shows console messages from the active browser run', () => {
   expect(screen.getByRole('log').textContent).toContain('Hello, Ada!');
 });
 
+it('renders non-JSON console values without breaking the playground', () => {
+  const circular: Record<string, unknown> = {};
+  circular.self = circular;
+  render(<Playground />);
+
+  emitSandpackMessage({
+    type: 'console',
+    codesandbox: true,
+    log: [
+      {
+        method: 'log',
+        id: 'complex',
+        data: [1n, circular],
+      },
+    ],
+  });
+
+  expect(screen.getByRole('log').textContent).toContain('1 [object Object]');
+});
+
 it('marks the controls busy while a run is active', () => {
   mockRunMode = 'hold';
   render(<Playground />);
@@ -432,11 +452,14 @@ it('keeps the last valid dependency generation for an incomplete import', () => 
   expect(mockMountedProviders).toBe(1);
 });
 
-it('does not run when the immediate import scan is incomplete', async () => {
+it.each([
+  ['incomplete', "import value from '"],
+  ['malformed', "import { value as } from 'lodash';"],
+])('does not run when the immediate import scan is %s', async (_, source) => {
   render(<Playground />);
   fireEvent.change(editor(), {
     target: {
-      value: `${playgroundExampleById.basic.source}\nimport value from '`,
+      value: `${playgroundExampleById.basic.source}\n${source}`,
     },
   });
 
@@ -446,6 +469,20 @@ it('does not run when the immediate import scan is incomplete', async () => {
   expect(runEvents()).toEqual([]);
   expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
   expect(screen.getByRole('status').textContent).toBe('Checking imports');
+});
+
+it('lets Sandpack report syntax errors outside import declarations', async () => {
+  render(<Playground />);
+  fireEvent.change(editor(), {
+    target: {
+      value: `${playgroundExampleById.basic.source}\nconst broken = ;`,
+    },
+  });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  await act(async () => jest.runAllTimersAsync());
+
+  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
 });
 
 it('keeps Run busy after show-error and an edit until that run settles', () => {

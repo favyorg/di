@@ -16,10 +16,18 @@ const assertMinimumTargetSize = async (locator, label) => {
   assert.ok(box.height >= 44, `${label} height was ${box.height}px`);
 };
 
-const assertFocusContrast = async (page, locator, label, theme) => {
+const assertFocusContrast = async (
+  page,
+  locator,
+  label,
+  theme,
+  indicatorSelector,
+) => {
   await page.keyboard.press('Tab');
   await locator.focus();
-  const focus = await locator.evaluate((element) => {
+  const focus = await locator.evaluate((element, selector) => {
+    const indicator = selector ? element.closest(selector) : element;
+    if (!indicator) throw new Error(`Missing focus indicator: ${selector}`);
     const parseColor = (value) => {
       const channels = value.match(/[\d.]+/g)?.map(Number);
       if (!channels || channels.length < 3) {
@@ -45,7 +53,7 @@ const assertFocusContrast = async (page, locator, label, theme) => {
       ];
     };
     const layers = [];
-    let parent = element.parentElement;
+    let parent = indicator.parentElement;
     while (parent) {
       const color = parseColor(getComputedStyle(parent).backgroundColor);
       layers.push(color);
@@ -66,7 +74,7 @@ const assertFocusContrast = async (page, locator, label, theme) => {
             sum + channel * [0.2126, 0.7152, 0.0722][index],
           0,
         );
-    const style = getComputedStyle(element);
+    const style = getComputedStyle(indicator);
     const foreground = luminance(parseColor(style.outlineColor));
     const adjacent = luminance(background);
     return {
@@ -74,12 +82,14 @@ const assertFocusContrast = async (page, locator, label, theme) => {
         (Math.max(foreground, adjacent) + 0.05) /
         (Math.min(foreground, adjacent) + 0.05),
       focusVisible: element.matches(':focus-visible'),
+      outlineStyle: style.outlineStyle,
       outlineWidth: Number.parseFloat(style.outlineWidth),
     };
-  });
+  }, indicatorSelector);
   assert.equal(focus.focusVisible, true, `${label} should be focus-visible`);
+  assert.notEqual(focus.outlineStyle, 'none', `${label} should have an outline`);
   assert.ok(
-    focus.outlineWidth >= 2,
+    focus.outlineWidth >= 3,
     `${label} outline was ${focus.outlineWidth}px`,
   );
   assert.ok(
@@ -158,6 +168,20 @@ const checkPlayground = async (page) => {
     );
     await assertFocusContrast(page, reset, 'Reset example', theme);
     await assertFocusContrast(page, run, 'Run code', theme);
+    await assertFocusContrast(
+      page,
+      outerEditor,
+      'Outer playground editor',
+      theme,
+      '.playground__editor',
+    );
+    await assertFocusContrast(
+      page,
+      codeEditor,
+      'Inner playground editor',
+      theme,
+      '.playground__editor',
+    );
   }
 
   const consoleOutput = page.getByRole('region', { name: 'Console output' });

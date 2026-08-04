@@ -62,10 +62,9 @@ type Drafts = Record<PlaygroundExampleId, string>;
 type DependencyMap = Record<PlaygroundExampleId, PlaygroundDependencies>;
 type ResetGenerations = Record<PlaygroundExampleId, number>;
 type PlaygroundTheme = 'light' | 'dark';
-type ConsoleValue = string | Record<string, string>;
 type ConsoleLog = Readonly<{
   method: string;
-  data?: readonly ConsoleValue[];
+  data?: readonly unknown[];
 }>;
 
 const SANDBOX_OPTIONS = Object.freeze({
@@ -96,6 +95,21 @@ const initialResetGenerations = (): ResetGenerations =>
   Object.fromEntries(
     playgroundExamples.map(({ id }) => [id, 0])
   ) as ResetGenerations;
+
+const formatConsoleValue = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized !== undefined) return serialized;
+  } catch {
+    // Fall back to the value's string representation below.
+  }
+  try {
+    return String(value);
+  } catch {
+    return '[Unserializable value]';
+  }
+};
 
 const keyFor = (
   selectedId: PlaygroundExampleId,
@@ -144,11 +158,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       setConsoleLines(
         logs.flatMap(({ data, method }) => {
           if (method === 'clear') return [];
-          const line = data
-            ?.map((value) =>
-              typeof value === 'string' ? value : JSON.stringify(value)
-            )
-            .join(' ');
+          const line = data?.map(formatConsoleValue).join(' ');
           return !line || (method === 'debug' && line.startsWith('[vite]'))
             ? []
             : [line];

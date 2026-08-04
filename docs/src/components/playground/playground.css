@@ -242,6 +242,12 @@ html:not([data-has-hero]):has(.playground-page) {
   overflow: hidden;
 }
 
+.playground__editor:focus-within {
+  outline: 3px solid
+    color-mix(in srgb, var(--docs-accent) 72%, var(--sl-color-white));
+  outline-offset: -3px;
+}
+
 .playground__console {
   block-size: 12rem;
   overflow: hidden;
