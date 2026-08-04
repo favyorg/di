@@ -10,7 +10,7 @@ import { Playground } from '../src/components/playground/playground';
 import { playgroundExampleById } from '../src/components/playground/playground-examples';
 
 type MockSandpackMessage =
-  | { type: 'done'; compilatonError: false }
+  | { type: 'done'; compilatonError: boolean }
   | { type: 'action'; action: 'show-error' };
 
 type MockSandpackContext = {
@@ -24,6 +24,10 @@ let mockEvents: string[] = [];
 let mockMountedProviders = 0;
 let mockMaximumMountedProviders = 0;
 let mockConsoleMountCounter = 0;
+let mockRunMode: 'auto-done' | 'hold' | 'reject' = 'auto-done';
+let mockEmitMessage: ((message: MockSandpackMessage) => void) | undefined;
+let mockChangeHookIdentities: (() => void) | undefined;
+let mockActiveListenerCount = 0;
 
 jest.mock('@codesandbox/sandpack-react', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -44,39 +48,66 @@ jest.mock('@codesandbox/sandpack-react', () => {
   const SandpackProvider = ({ children, customSetup, files }: any) => {
     const signature = signatureFor(customSetup.dependencies);
     const [code, setCode] = React.useState(files['/index.ts']);
+    const [hookIdentity, setHookIdentity] = React.useState(0);
     const listeners = React.useRef(new Set<(mockMessage: any) => void>());
     const runSandpack = React.useMemo(
       () =>
         jest.fn(async () => {
           mockEvents.push(`run:${signature}`);
-          setTimeout(() => {
-            listeners.current.forEach((listener) =>
-              listener({ type: 'done', compilatonError: false })
-            );
-          }, 0);
+          if (mockRunMode === 'reject') {
+            throw new Error('Mock Sandpack launch failed');
+          }
+          if (mockRunMode === 'auto-done') {
+            setTimeout(() => {
+              listeners.current.forEach((listener) =>
+                listener({ type: 'done', compilatonError: false })
+              );
+            }, 0);
+          }
         }),
-      [signature]
+      [hookIdentity, signature]
     );
     const listen = React.useCallback(
       (mockListener: (mockMessage: any) => void) => {
+        if (!listeners.current.has(mockListener)) {
+          mockActiveListenerCount += 1;
+        }
         listeners.current.add(mockListener);
-        return () => listeners.current.delete(mockListener);
+        return () => {
+          if (!listeners.current.delete(mockListener)) return;
+          mockActiveListenerCount -= 1;
+        };
       },
+      [hookIdentity]
+    );
+    const changeHookIdentities = React.useCallback(
+      () => setHookIdentity((current: number) => current + 1),
       []
     );
 
     React.useEffect(() => {
+      const emitMessage = (mockMessage: any): void => {
+        listeners.current.forEach((listener) => listener(mockMessage));
+      };
       mockMountedProviders += 1;
       mockMaximumMountedProviders = Math.max(
         mockMaximumMountedProviders,
         mockMountedProviders
       );
       mockEvents.push(`mount:${signature}`);
+      mockEmitMessage = emitMessage;
+      mockChangeHookIdentities = changeHookIdentities;
       return () => {
+        if (mockEmitMessage === emitMessage) mockEmitMessage = undefined;
+        if (mockChangeHookIdentities === changeHookIdentities) {
+          mockChangeHookIdentities = undefined;
+        }
+        mockActiveListenerCount -= listeners.current.size;
+        listeners.current.clear();
         mockEvents.push(`unmount:${signature}`);
         mockMountedProviders -= 1;
       };
-    }, [signature]);
+    }, [changeHookIdentities, signature]);
 
     const value = React.useMemo(
       () => ({ code, setCode, runSandpack, listen }),
@@ -169,12 +200,26 @@ const consoleMountId = (): string | null =>
 const mountEvents = (): string[] =>
   mockEvents.filter((event) => event.startsWith('mount:'));
 
+const runEvents = (): string[] =>
+  mockEvents.filter((event) => event.startsWith('run:'));
+
+const emitSandpackMessage = (message: MockSandpackMessage): void => {
+  act(() => {
+    if (!mockEmitMessage) throw new Error('No mounted Sandpack provider');
+    mockEmitMessage(message);
+  });
+};
+
 beforeEach(() => {
   jest.useFakeTimers();
   mockEvents = [];
   mockMountedProviders = 0;
   mockMaximumMountedProviders = 0;
   mockConsoleMountCounter = 0;
+  mockRunMode = 'auto-done';
+  mockEmitMessage = undefined;
+  mockChangeHookIdentities = undefined;
+  mockActiveListenerCount = 0;
   document.documentElement.dataset.theme = 'light';
 });
 
@@ -259,6 +304,184 @@ it('keeps the last valid dependency generation for an incomplete import', () => 
   expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
   expect(consoleMountId()).toBe(initialConsole);
   expect(mockMountedProviders).toBe(1);
+});
+
+it('does not run when the immediate import scan is incomplete', async () => {
+  render(<Playground />);
+  fireEvent.change(editor(), {
+    target: {
+      value: `${playgroundExampleById.basic.source}\nimport value from '`,
+    },
+  });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  await act(async () => jest.runAllTimersAsync());
+
+  expect(runEvents()).toEqual([]);
+  expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
+  expect(screen.getByRole('status').textContent).toBe('Checking imports');
+});
+
+it('keeps Run busy after show-error and an edit until that run settles', () => {
+  mockRunMode = 'hold';
+  render(<Playground />);
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+
+  fireEvent.click(runButton);
+  act(() => jest.advanceTimersByTime(0));
+  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect((runButton as HTMLButtonElement).disabled).toBe(true);
+
+  emitSandpackMessage({ type: 'action', action: 'show-error' });
+  expect(screen.getByRole('status').textContent).toBe('Failed');
+  expect((runButton as HTMLButtonElement).disabled).toBe(true);
+
+  fireEvent.change(editor(), {
+    target: { value: `${playgroundExampleById.basic.source}\n// Edited` },
+  });
+  fireEvent.keyDown(editor(), { key: 'Enter', ctrlKey: true });
+  act(() => jest.advanceTimersByTime(0));
+  expect(screen.getByRole('status').textContent).toBe('Checking imports');
+  expect((runButton as HTMLButtonElement).disabled).toBe(true);
+  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+  expect((runButton as HTMLButtonElement).disabled).toBe(false);
+  expect(screen.getByRole('status').textContent).toBe('Checking imports');
+
+  act(() => jest.advanceTimersByTime(1_000));
+  expect(screen.getByRole('status').textContent).toBe('Ready');
+});
+
+it('defers a matured dependency remount until the active run settles', () => {
+  mockRunMode = 'hold';
+  render(<Playground />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  act(() => jest.advanceTimersByTime(0));
+  fireEvent.change(editor(), {
+    target: {
+      value: `${playgroundExampleById.basic.source}\nimport 'lodash/fp';`,
+    },
+  });
+  act(() => jest.advanceTimersByTime(1_000));
+
+  expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
+  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(screen.getByRole('status').textContent).toBe('Checking imports');
+
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+
+  expect(mountEvents()).toEqual([
+    'mount:@favy/di@3.0.0',
+    'mount:@favy/di@3.0.0|lodash@latest',
+  ]);
+  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(mockMaximumMountedProviders).toBe(1);
+});
+
+it('keeps the active listener when useSandpack callback identities change', () => {
+  mockRunMode = 'hold';
+  render(<Playground />);
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+
+  fireEvent.click(runButton);
+  act(() => jest.advanceTimersByTime(0));
+  expect(mockActiveListenerCount).toBe(1);
+
+  act(() => {
+    if (!mockChangeHookIdentities) {
+      throw new Error('No mounted Sandpack provider');
+    }
+    mockChangeHookIdentities();
+  });
+
+  expect(mockActiveListenerCount).toBe(1);
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+  expect(screen.getByRole('status').textContent).toBe('Ready');
+  expect((runButton as HTMLButtonElement).disabled).toBe(false);
+  expect(mockActiveListenerCount).toBe(0);
+});
+
+it('settles a compilation failure and disposes its listener', () => {
+  mockRunMode = 'hold';
+  render(<Playground />);
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+
+  fireEvent.click(runButton);
+  act(() => jest.advanceTimersByTime(0));
+  expect(mockActiveListenerCount).toBe(1);
+
+  emitSandpackMessage({ type: 'done', compilatonError: true });
+
+  expect(screen.getByRole('status').textContent).toBe('Failed');
+  expect((runButton as HTMLButtonElement).disabled).toBe(false);
+  expect(mockActiveListenerCount).toBe(0);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+it.each([
+  { outcome: 'launch rejection', mode: 'reject' as const, elapsed: 0 },
+  { outcome: '30-second timeout', mode: 'hold' as const, elapsed: 30_000 },
+])(
+  'settles a $outcome and disposes its listener',
+  async ({ mode, elapsed }) => {
+    mockRunMode = mode;
+    render(<Playground />);
+    const runButton = screen.getByRole('button', { name: 'Run code' });
+
+    fireEvent.click(runButton);
+    await act(async () => jest.advanceTimersByTimeAsync(elapsed));
+
+    expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+    expect(screen.getByRole('status').textContent).toBe('Failed');
+    expect((runButton as HTMLButtonElement).disabled).toBe(false);
+    expect(mockActiveListenerCount).toBe(0);
+    expect(jest.getTimerCount()).toBe(0);
+  }
+);
+
+it.each(['switch', 'reset'] as const)(
+  'cancels a pending launch on %s',
+  (testCase) => {
+    mockRunMode = 'hold';
+    render(<Playground />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+    if (testCase === 'switch') {
+      fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'Reset example' }));
+    }
+    act(() => jest.advanceTimersByTime(0));
+
+    expect(runEvents()).toEqual([]);
+    expect(mockActiveListenerCount).toBe(0);
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Run code',
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
+  }
+);
+
+it('launches once and cleans up under StrictMode effect replay', () => {
+  mockRunMode = 'hold';
+  render(
+    <React.StrictMode>
+      <Playground />
+    </React.StrictMode>
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+  act(() => jest.advanceTimersByTime(0));
+
+  expect(runEvents()).toEqual(['run:@favy/di@3.0.0']);
+  expect(mockActiveListenerCount).toBe(1);
+  emitSandpackMessage({ type: 'done', compilatonError: false });
+  expect(mockActiveListenerCount).toBe(0);
 });
 
 it('restores selection and focus after a dependency remount', () => {

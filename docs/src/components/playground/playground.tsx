@@ -46,6 +46,12 @@ type RunRequest = Readonly<{
   sandboxKey: string;
 }>;
 
+type DeferredScan = Readonly<{
+  token: number;
+  selectedId: PlaygroundExampleId;
+  code: string;
+}>;
+
 type SandboxHandle = {
   readCode(): string;
   captureEditor(): EditorSnapshot | undefined;
@@ -121,7 +127,11 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     const liveCode = useRef(code);
     const previousCode = useRef(code);
     const handledRun = useRef(0);
+    const listenRef = useRef(listen);
+    const runSandpackRef = useRef(sandpack.runSandpack);
     liveCode.current = code;
+    listenRef.current = listen;
+    runSandpackRef.current = sandpack.runSandpack;
 
     useImperativeHandle(
       forwardedRef,
@@ -160,7 +170,6 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       return () => window.clearTimeout(timer);
     }, [onReady, restoreSnapshot, sandboxKey]);
 
-    const runSandpack = sandpack.runSandpack;
     useEffect(() => {
       if (!runRequest || runRequest.sandboxKey !== sandboxKey) return;
       let stop: (() => void) | undefined;
@@ -179,7 +188,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         if (runRequest.token <= handledRun.current) return;
         handledRun.current = runRequest.token;
         onStatus('Running');
-        stop = listen((message) => {
+        stop = listenRef.current((message) => {
           if (message.type === 'done') {
             finish(message.compilatonError ? 'Failed' : 'Ready');
           }
@@ -188,7 +197,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
           }
         });
         failureTimer = window.setTimeout(() => finish('Failed'), 30_000);
-        void runSandpack().catch(() => finish('Failed'));
+        void runSandpackRef.current().catch(() => finish('Failed'));
       }, 0);
       return () => {
         settled = true;
@@ -196,7 +205,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         if (failureTimer !== undefined) window.clearTimeout(failureTimer);
         stop?.();
       };
-    }, [listen, onRunSettled, onStatus, runRequest, runSandpack, sandboxKey]);
+    }, [onRunSettled, onStatus, runRequest, sandboxKey]);
 
     return (
       <>
@@ -265,10 +274,15 @@ export function Playground(): JSX.Element {
   const [theme, setTheme] = useState<PlaygroundTheme>(documentTheme);
   const sandboxRef = useRef<SandboxHandle>(null);
   const scanTimer = useRef<number>();
+  const deferredScan = useRef<DeferredScan>();
   const restoreSnapshot = useRef<EditorSnapshot>();
   const runCounter = useRef(0);
   const runRequestRef = useRef(runRequest);
+  const selectedIdRef = useRef(selectedId);
+  const dependenciesRef = useRef(dependencies);
   runRequestRef.current = runRequest;
+  selectedIdRef.current = selectedId;
+  dependenciesRef.current = dependencies;
 
   const sandboxKey = keyFor(
     selectedId,
@@ -276,7 +290,9 @@ export function Playground(): JSX.Element {
     dependencies[selectedId]
   );
   const runDisabled =
-    status === 'Preparing dependencies' || status === 'Running';
+    runRequest !== null ||
+    status === 'Preparing dependencies' ||
+    status === 'Running';
 
   const cancelScan = useCallback(() => {
     if (scanTimer.current === undefined) return;
@@ -302,43 +318,92 @@ export function Playground(): JSX.Element {
     if (runRequestRef.current?.sandboxKey !== readyKey) setStatus('Ready');
   }, []);
 
-  const handleRunSettled = useCallback((token: number) => {
-    setRunRequest((current) => (current?.token === token ? null : current));
-  }, []);
+  const updateDependencies = useCallback(
+    (
+      updateSelectedId: PlaygroundExampleId,
+      nextDependencies: PlaygroundDependencies
+    ) => {
+      const next = {
+        ...dependenciesRef.current,
+        [updateSelectedId]: nextDependencies,
+      };
+      dependenciesRef.current = next;
+      setDependencies(next);
+    },
+    []
+  );
+
+  const applyDependencyScan = useCallback(
+    (scanSelectedId: PlaygroundExampleId, code: string) => {
+      if (selectedIdRef.current !== scanSelectedId) return;
+      const resolution = resolvePlaygroundDependencies(code);
+      if (!resolution.ok) {
+        setStatus('Checking imports');
+        return;
+      }
+      if (
+        dependencySignature(resolution.dependencies) ===
+        dependencySignature(dependenciesRef.current[scanSelectedId])
+      ) {
+        setStatus('Ready');
+        return;
+      }
+      restoreSnapshot.current = sandboxRef.current?.captureEditor();
+      updateDependencies(scanSelectedId, resolution.dependencies);
+      setStatus('Preparing dependencies');
+    },
+    [updateDependencies]
+  );
+
+  const handleRunSettled = useCallback(
+    (token: number) => {
+      if (runRequestRef.current?.token !== token) return;
+      runRequestRef.current = null;
+      setRunRequest(null);
+      const scan = deferredScan.current;
+      if (scan?.token === token) {
+        deferredScan.current = undefined;
+        applyDependencyScan(scan.selectedId, scan.code);
+        return;
+      }
+      if (scanTimer.current !== undefined) setStatus('Checking imports');
+    },
+    [applyDependencyScan]
+  );
 
   const handleCodeChange = useCallback(
     (code: string) => {
-      setDrafts((current) => ({ ...current, [selectedId]: code }));
+      const editSelectedId = selectedIdRef.current;
+      setDrafts((current) => ({ ...current, [editSelectedId]: code }));
       setStatus('Checking imports');
       cancelScan();
+      deferredScan.current = undefined;
       scanTimer.current = window.setTimeout(() => {
         scanTimer.current = undefined;
-        const resolution = resolvePlaygroundDependencies(code);
-        if (!resolution.ok) return;
-        if (
-          dependencySignature(resolution.dependencies) ===
-          dependencySignature(dependencies[selectedId])
-        ) {
-          setStatus('Ready');
+        const activeRequest = runRequestRef.current;
+        if (activeRequest) {
+          deferredScan.current = {
+            token: activeRequest.token,
+            selectedId: editSelectedId,
+            code,
+          };
           return;
         }
-        restoreSnapshot.current = sandboxRef.current?.captureEditor();
-        setDependencies((current) => ({
-          ...current,
-          [selectedId]: resolution.dependencies,
-        }));
-        setStatus('Preparing dependencies');
+        applyDependencyScan(editSelectedId, code);
       }, 1_000);
     },
-    [cancelScan, dependencies, selectedId]
+    [applyDependencyScan, cancelScan]
   );
 
   const selectExample = useCallback(
     (nextId: PlaygroundExampleId) => {
       if (nextId === selectedId) return;
       cancelScan();
+      deferredScan.current = undefined;
       restoreSnapshot.current = undefined;
+      runRequestRef.current = null;
       setRunRequest(null);
+      selectedIdRef.current = nextId;
       setSelectedId(nextId);
       setStatus('Ready');
     },
@@ -347,57 +412,58 @@ export function Playground(): JSX.Element {
 
   const resetExample = useCallback(() => {
     cancelScan();
+    deferredScan.current = undefined;
     restoreSnapshot.current = undefined;
+    runRequestRef.current = null;
     setRunRequest(null);
     setDrafts((current) => ({
       ...current,
       [selectedId]: playgroundExampleById[selectedId].source,
     }));
-    setDependencies((current) => ({
-      ...current,
-      [selectedId]: detectedDependencies[selectedId],
-    }));
+    updateDependencies(selectedId, detectedDependencies[selectedId]);
     setResetGeneration((current) => ({
       ...current,
       [selectedId]: current[selectedId] + 1,
     }));
     setStatus('Ready');
-  }, [cancelScan, detectedDependencies, selectedId]);
+  }, [cancelScan, detectedDependencies, selectedId, updateDependencies]);
 
   const run = useCallback(() => {
-    if (runDisabled) return;
+    if (runRequestRef.current || runDisabled) return;
     cancelScan();
+    deferredScan.current = undefined;
     const code = sandboxRef.current?.readCode() ?? drafts[selectedId];
     setDrafts((current) => ({ ...current, [selectedId]: code }));
     const resolution = resolvePlaygroundDependencies(code);
-    const currentDependencies = dependencies[selectedId];
-    const nextDependencies = resolution.ok
-      ? resolution.dependencies
-      : currentDependencies;
+    if (!resolution.ok) {
+      setStatus('Checking imports');
+      return;
+    }
+    const currentDependencies = dependenciesRef.current[selectedId];
+    const nextDependencies = resolution.dependencies;
     const changed =
       dependencySignature(nextDependencies) !==
       dependencySignature(currentDependencies);
     if (changed) {
       restoreSnapshot.current = sandboxRef.current?.captureEditor();
-      setDependencies((current) => ({
-        ...current,
-        [selectedId]: nextDependencies,
-      }));
+      updateDependencies(selectedId, nextDependencies);
     }
     const targetKey = changed
       ? keyFor(selectedId, resetGeneration[selectedId], nextDependencies)
       : sandboxKey;
     runCounter.current += 1;
-    setRunRequest({ token: runCounter.current, sandboxKey: targetKey });
+    const request = { token: runCounter.current, sandboxKey: targetKey };
+    runRequestRef.current = request;
+    setRunRequest(request);
     setStatus(changed ? 'Preparing dependencies' : 'Running');
   }, [
     cancelScan,
-    dependencies,
     drafts,
     resetGeneration,
     runDisabled,
     sandboxKey,
     selectedId,
+    updateDependencies,
   ]);
 
   const handleExampleChange = (event: ChangeEvent<HTMLSelectElement>): void =>
