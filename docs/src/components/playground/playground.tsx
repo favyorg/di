@@ -27,6 +27,7 @@ import {
   playgroundExamples,
   type PlaygroundExampleId,
 } from './playground-examples';
+import './playground.css';
 
 type PlaygroundStatus =
   | 'Ready'
@@ -154,6 +155,9 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     }, [code, onCodeChange]);
 
     useEffect(() => {
+      editorRef.current
+        ?.getCodemirror()
+        ?.contentDOM.setAttribute('aria-label', 'TypeScript playground editor');
       onReady(sandboxKey);
       if (!restoreSnapshot) return;
       const timer = window.setTimeout(() => {
@@ -209,14 +213,30 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
 
     return (
       <>
-        <SandpackCodeEditor
-          ref={editorRef}
-          initMode="immediate"
-          showLineNumbers
-          showRunButton={false}
-          showTabs={false}
-        />
-        <SandpackConsole standalone />
+        <section
+          className="playground__region playground__editor-region"
+          aria-labelledby="playground-editor-heading"
+        >
+          <h2 id="playground-editor-heading">Editor</h2>
+          <div className="playground__editor">
+            <SandpackCodeEditor
+              ref={editorRef}
+              initMode="immediate"
+              showLineNumbers
+              showRunButton={false}
+              showTabs={false}
+            />
+          </div>
+        </section>
+        <section
+          className="playground__region playground__console-region"
+          aria-labelledby="playground-console-heading"
+        >
+          <h2 id="playground-console-heading">Console</h2>
+          <div className="playground__console">
+            <SandpackConsole standalone />
+          </div>
+        </section>
       </>
     );
   }
@@ -469,29 +489,60 @@ export function Playground(): JSX.Element {
   const handleExampleChange = (event: ChangeEvent<HTMLSelectElement>): void =>
     selectExample(event.currentTarget.value as PlaygroundExampleId);
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
     event.preventDefault();
     if (!runDisabled) run();
   };
 
   return (
-    <div aria-label="TypeScript playground" onKeyDown={handleKeyDown}>
-      <div>
-        {playgroundExamples.map((example) => (
-          <button
-            key={example.id}
-            type="button"
-            aria-pressed={selectedId === example.id}
-            onClick={() => selectExample(example.id)}
-          >
-            {example.title}
-          </button>
-        ))}
-      </div>
-      <label>
-        Example
+    <section
+      className="playground not-content"
+      aria-label="TypeScript playground"
+      onKeyDown={handleKeyDown}
+    >
+      <nav className="playground__desktop-nav" aria-label="Playground examples">
+        <h2>Examples</h2>
+        <div className="playground__example-list">
+          {playgroundExamples.map((example) => {
+            const selected = selectedId === example.id;
+            const descriptionId = `playground-example-${example.id}-description`;
+            return (
+              <button
+                key={example.id}
+                className="playground__example"
+                type="button"
+                aria-label={example.title}
+                aria-describedby={descriptionId}
+                aria-pressed={selected}
+                onClick={() => selectExample(example.id)}
+              >
+                <span className="playground__example-heading">
+                  <span>{example.title}</span>
+                  {selected && (
+                    <span
+                      className="playground__selected-marker"
+                      aria-hidden="true"
+                    >
+                      ✓
+                    </span>
+                  )}
+                </span>
+                <span
+                  id={descriptionId}
+                  className="playground__example-description"
+                >
+                  {example.description}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+      <div className="playground__mobile-nav">
+        <label htmlFor="playground-example-select">Example</label>
         <select
+          id="playground-example-select"
           aria-label="Example"
           value={selectedId}
           onChange={handleExampleChange}
@@ -502,35 +553,53 @@ export function Playground(): JSX.Element {
             </option>
           ))}
         </select>
-      </label>
-      <button type="button" aria-label="Reset example" onClick={resetExample}>
-        Reset
-      </button>
-      <button
-        type="button"
-        aria-label="Run code"
-        disabled={runDisabled}
-        onClick={run}
-      >
-        Run
-      </button>
-      <span role="status" aria-live="polite">
-        {status}
-      </span>
-      <SandboxSession
-        key={sandboxKey}
-        ref={sandboxRef}
-        sandboxKey={sandboxKey}
-        dependencies={dependencies[selectedId]}
-        initialCode={drafts[selectedId]}
-        theme={theme}
-        runRequest={runRequest}
-        restoreSnapshot={restoreSnapshot.current}
-        onCodeChange={handleCodeChange}
-        onReady={handleSandboxReady}
-        onRunSettled={handleRunSettled}
-        onStatus={setStatus}
-      />
-    </div>
+      </div>
+      <div className="playground__workspace">
+        <div
+          className="playground__toolbar"
+          role="toolbar"
+          aria-label="Playground controls"
+          aria-busy={runDisabled}
+        >
+          <button
+            type="button"
+            aria-label="Reset example"
+            onClick={resetExample}
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            aria-label="Run code"
+            disabled={runDisabled}
+            onClick={run}
+          >
+            Run
+          </button>
+          <span className="playground__shortcut">
+            Shortcut: <kbd>Ctrl/⌘ + Enter</kbd>
+          </span>
+          <span className="playground__status" role="status" aria-live="polite">
+            {status}
+          </span>
+        </div>
+        <div className="playground__sandbox">
+          <SandboxSession
+            key={sandboxKey}
+            ref={sandboxRef}
+            sandboxKey={sandboxKey}
+            dependencies={dependencies[selectedId]}
+            initialCode={drafts[selectedId]}
+            theme={theme}
+            runRequest={runRequest}
+            restoreSnapshot={restoreSnapshot.current}
+            onCodeChange={handleCodeChange}
+            onReady={handleSandboxReady}
+            onRunSettled={handleRunSettled}
+            onStatus={setStatus}
+          />
+        </div>
+      </div>
+    </section>
   );
 }

@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from '@testing-library/react';
 import { Playground } from '../src/components/playground/playground';
 import { playgroundExampleById } from '../src/components/playground/playground-examples';
@@ -130,6 +131,7 @@ jest.mock('@codesandbox/sandpack-react', () => {
           const textarea = textareaRef.current;
           if (!textarea) return undefined;
           return {
+            contentDOM: textarea,
             get hasFocus() {
               return globalThis.document.activeElement === textarea;
             },
@@ -154,7 +156,7 @@ jest.mock('@codesandbox/sandpack-react', () => {
       return (
         <textarea
           ref={textareaRef}
-          aria-label="TypeScript playground editor"
+          aria-label="Code Editor for index.ts"
           value={code}
           onChange={(event) => setCode(event.currentTarget.value)}
         />
@@ -191,8 +193,7 @@ jest.mock('@codesandbox/sandpack-react', () => {
   };
 });
 
-const editor = (): HTMLTextAreaElement =>
-  screen.getByLabelText('TypeScript playground editor');
+const editor = (): HTMLTextAreaElement => screen.getByRole('textbox');
 
 const consoleMountId = (): string | null =>
   screen.getByLabelText('Console output').getAttribute('data-mount-id');
@@ -228,6 +229,64 @@ afterEach(() => {
   jest.clearAllTimers();
   jest.useRealTimers();
   delete document.documentElement.dataset.theme;
+});
+
+it('exposes the playground controls and regions with accessible semantics', () => {
+  render(<Playground />);
+
+  expect(
+    screen.getByRole('navigation', { name: 'Playground examples' })
+  ).toBeTruthy();
+  expect(screen.getByRole('combobox', { name: 'Example' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Reset example' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Run code' })).toBeTruthy();
+  expect(screen.getByRole('status').textContent).toContain('Ready');
+  expect(
+    screen.getByRole('region', { name: 'TypeScript playground' })
+  ).toBeTruthy();
+  const navigation = screen.getByRole('navigation', {
+    name: 'Playground examples',
+  });
+  expect(within(navigation).getAllByRole('button')).toHaveLength(6);
+  const selectedExample = within(navigation).getByRole('button', {
+    name: 'Basic module',
+    pressed: true,
+  });
+  expect(selectedExample.textContent).toContain(
+    'Create and call one named module.'
+  );
+  const toolbar = screen.getByRole('toolbar', {
+    name: 'Playground controls',
+  });
+  const toolbarButtons = within(toolbar).getAllByRole('button');
+  expect(
+    toolbarButtons.map((button) => button.getAttribute('aria-label'))
+  ).toEqual(['Reset example', 'Run code']);
+  expect(within(toolbar).getByText('Ctrl/⌘ + Enter')).toBeTruthy();
+  expect(toolbar.getAttribute('aria-busy')).toBe('false');
+  expect(screen.getByRole('region', { name: 'Editor' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Console' })).toBeTruthy();
+});
+
+it('marks the controls busy while a run is active', () => {
+  mockRunMode = 'hold';
+  render(<Playground />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run code' }));
+
+  expect(
+    screen
+      .getByRole('toolbar', { name: 'Playground controls' })
+      .getAttribute('aria-busy')
+  ).toBe('true');
+});
+
+it('gives the focusable CodeMirror editor a stable accessible name', () => {
+  render(<Playground />);
+
+  expect(
+    screen.getByRole('textbox', { name: 'TypeScript playground editor' })
+  ).toBe(editor());
 });
 
 it('stays ready through StrictMode effect replay', () => {
