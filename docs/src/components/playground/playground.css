@@ -262,24 +262,24 @@
 
 astro-island[ssr] .playground .sp-syntax-plain,
 astro-island[ssr] .playground .sp-syntax-punctuation {
-  color: #d7dae0;
+  color: var(--playground-syntax-plain);
 }
 
 astro-island[ssr] .playground .sp-syntax-keyword {
-  color: #c792ea;
+  color: var(--playground-syntax-keyword);
 }
 
 astro-island[ssr] .playground .sp-syntax-definition,
 astro-island[ssr] .playground .sp-syntax-property {
-  color: #82aaff;
+  color: var(--playground-syntax-definition);
 }
 
 astro-island[ssr] .playground .sp-syntax-string {
-  color: #c3e88d;
+  color: var(--playground-syntax-string);
 }
 
 astro-island[ssr] .playground .sp-syntax-comment {
-  color: #7f8799;
+  color: var(--playground-syntax-comment);
 }
 
 .playground__editor:focus-within {

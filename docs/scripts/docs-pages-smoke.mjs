@@ -10,33 +10,79 @@ const context = await browser.newContext({
 const page = await context.newPage();
 
 const checkPlaygroundFirstPaint = async (browser) => {
-  const noScript = await browser.newContext({
-    javaScriptEnabled: false,
-    colorScheme: 'dark',
-    viewport: { width: 390, height: 844 },
-  });
-  try {
-    const noScriptPage = await noScript.newPage();
-    await noScriptPage.goto(`${origin}/playground/`, {
-      waitUntil: 'domcontentloaded',
+  for (const colorScheme of ['light', 'dark']) {
+    const firstPaint = await browser.newContext({
+      colorScheme,
+      viewport: { width: 390, height: 844 },
     });
-    const [keyword, plain] = await Promise.all([
-      noScriptPage
-        .locator('.sp-syntax-keyword')
-        .first()
-        .evaluate((token) => getComputedStyle(token).color),
-      noScriptPage
-        .locator('.sp-syntax-plain')
-        .first()
-        .evaluate((token) => getComputedStyle(token).color),
-    ]);
-    assert.notEqual(
-      keyword,
-      plain,
-      `SSR keyword and plain tokens both rendered as ${keyword}`,
-    );
-  } finally {
-    await noScript.close();
+    try {
+      const firstPaintPage = await firstPaint.newPage();
+      await firstPaintPage.route('**/*', async (route) => {
+        if (route.request().resourceType() === 'script') {
+          await route.abort();
+          return;
+        }
+        await route.continue();
+      });
+      await firstPaintPage.goto(`${origin}/playground/`, {
+        waitUntil: 'domcontentloaded',
+      });
+      assert.equal(
+        await firstPaintPage.locator('html').getAttribute('data-theme'),
+        colorScheme,
+      );
+      const colors = await firstPaintPage.evaluate(() => {
+        const rgb = (value) => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+        const luminance = (value) =>
+          rgb(value)
+            .map((channel) => channel / 255)
+            .map((channel) =>
+              channel <= 0.04045
+                ? channel / 12.92
+                : ((channel + 0.055) / 1.055) ** 2.4,
+            )
+            .reduce(
+              (sum, channel, index) =>
+                sum + channel * [0.2126, 0.7152, 0.0722][index],
+              0,
+            );
+        const contrast = (foreground, background) => {
+          const left = luminance(foreground);
+          const right = luminance(background);
+          return (
+            (Math.max(left, right) + 0.05) / (Math.min(left, right) + 0.05)
+          );
+        };
+        const editor = document.querySelector('.playground__editor');
+        const plain = document.querySelector('.sp-syntax-plain');
+        const keyword = document.querySelector('.sp-syntax-keyword');
+        if (!editor || !plain || !keyword) {
+          throw new Error('Missing SSR editor tokens');
+        }
+        let paintedSurface = editor;
+        while (paintedSurface) {
+          const background = getComputedStyle(paintedSurface).backgroundColor;
+          const channels = background.match(/[\d.]+/g)?.map(Number);
+          if (channels && (channels[3] ?? 1) > 0) break;
+          paintedSurface = paintedSurface.parentElement;
+        }
+        if (!paintedSurface) throw new Error('Missing painted editor surface');
+        const background = getComputedStyle(paintedSurface).backgroundColor;
+        const plainColor = getComputedStyle(plain).color;
+        const keywordColor = getComputedStyle(keyword).color;
+        return {
+          plainColor,
+          keywordColor,
+          plainContrast: contrast(plainColor, background),
+          keywordContrast: contrast(keywordColor, background),
+        };
+      });
+      assert.notEqual(colors.keywordColor, colors.plainColor);
+      assert.ok(colors.plainContrast >= 4.5);
+      assert.ok(colors.keywordContrast >= 4.5);
+    } finally {
+      await firstPaint.close();
+    }
   }
 };
 
@@ -240,6 +286,10 @@ const checkPlayground = async (page) => {
   await playgroundLink.click();
   await page.waitForURL(`${origin}/playground/`);
 
+  const themeToggle = page.locator('[data-theme-toggle]');
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+  assert.equal(await themeToggle.getAttribute('aria-label'), 'Use dark theme');
+
   assert.equal(await page.title(), 'Playground | @favy/di');
   assert.equal(
     await page.locator('meta[name="description"]').getAttribute('content'),
@@ -307,6 +357,14 @@ const checkPlayground = async (page) => {
     'Lazy and cache',
     'HKT transform',
   ];
+  const expectedExampleOutput = [
+    ['Hello, Ada!'],
+    ['Built at 2026-08-04T09:00:00.000Z'],
+    ['Built at 2000-01-01T00:00:00.000Z'],
+    ['15'],
+    ['unused 0', '[1,1]', '[2,2]'],
+    ['Greeting: hello'],
+  ];
   const exampleNavigation = page.getByRole('navigation', {
     name: 'Playground examples',
   });
@@ -341,6 +399,16 @@ const checkPlayground = async (page) => {
   const run = page.getByRole('button', { name: 'Run code' });
   await assertMinimumTargetSize(reset, 'Reset example');
   await assertMinimumTargetSize(run, 'Run code');
+  const shellControls = [
+    [header.getByRole('link', { name: '@favy/di', exact: true }), 'Brand'],
+    [header.getByRole('link', { name: 'Docs', exact: true }), 'Docs'],
+    [header.getByRole('link', { name: 'GitHub', exact: true }), 'GitHub'],
+    [themeToggle, 'Theme toggle'],
+  ];
+  for (const [control, label] of shellControls) {
+    await assertMinimumTargetSize(control, label);
+    await assertFocusContrast(page, control, label, 'light');
+  }
 
   const originalTheme = await page.locator('html').getAttribute('data-theme');
   for (const theme of ['light', 'dark']) {
@@ -363,6 +431,10 @@ const checkPlayground = async (page) => {
       '.playground__editor',
     );
   }
+  await page.locator('html').evaluate((element, theme) => {
+    if (theme) element.setAttribute('data-theme', theme);
+    else element.removeAttribute('data-theme');
+  }, originalTheme);
 
   const consoleOutput = page.getByRole('region', { name: 'Console output' });
   const status = page.getByRole('status');
@@ -371,6 +443,65 @@ const checkPlayground = async (page) => {
     (await consoleOutput.textContent())?.includes('Hello, Ada!'),
     false,
   );
+
+  const runtime = page.locator('iframe.playground__runtime-client');
+  await playgroundInput.focus();
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+End' : 'Control+End',
+  );
+  await page.keyboard.insertText('\n// theme sentinel');
+  const runtimeBeforeTheme = await runtime.elementHandle();
+  assert.ok(runtimeBeforeTheme);
+  await themeToggle.click();
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('starlight-theme')),
+    'dark',
+  );
+  assert.equal(await themeToggle.getAttribute('aria-label'), 'Use light theme');
+  assert.match(await playgroundInput.inputValue(), /theme sentinel/);
+  assert.equal(
+    await runtime.evaluate(
+      (currentRuntime, previousRuntime) =>
+        currentRuntime.isSameNode(previousRuntime),
+      runtimeBeforeTheme,
+    ),
+    true,
+  );
+
+  const persistedThemePage = await page.context().newPage();
+  await persistedThemePage.goto(`${origin}/playground/`, {
+    waitUntil: 'domcontentloaded',
+  });
+  assert.equal(
+    await persistedThemePage.locator('html').getAttribute('data-theme'),
+    'dark',
+  );
+  await persistedThemePage.close();
+
+  await themeToggle.click();
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+  await runtimeBeforeTheme.dispose();
+  await reset.click();
+
+  for (const [index, fragments] of expectedExampleOutput.entries()) {
+    await exampleButtons.nth(index).click();
+    await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
+    await run.click();
+    await page.waitForFunction(
+      (expected) => {
+        const output = document.querySelector(
+          '[aria-label="Console output"]',
+        )?.textContent;
+        return expected.every((fragment) => output?.includes(fragment));
+      },
+      fragments,
+      { timeout: 60_000 },
+    );
+  }
+
+  await exampleButtons.first().click();
+  await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
 
   assert.match(
     await hoverMonacoToken(
@@ -411,7 +542,6 @@ const checkPlayground = async (page) => {
   });
   await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
 
-  const runtime = page.locator('iframe.playground__runtime-client');
   const initialRuntime = await runtime.elementHandle();
   assert.ok(initialRuntime, 'Playground runtime iframe should be attached');
   const warmRunRequests = [[], []];
@@ -653,6 +783,7 @@ const checkExistingDocumentationPages = async (page, browser) => {
   await page.goto(`${origin}/guides/introduction/`, {
     waitUntil: 'domcontentloaded',
   });
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
 
   assert.equal(
     (await page.locator('.docs-page-label').textContent())?.trim(),

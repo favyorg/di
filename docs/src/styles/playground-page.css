@@ -7,6 +7,11 @@
   --playground-border: rgba(151, 163, 190, 0.22);
   --playground-muted: #aeb6ca;
   --playground-text: #f8fafc;
+  --playground-syntax-plain: #d7dae0;
+  --playground-syntax-keyword: #c792ea;
+  --playground-syntax-definition: #82aaff;
+  --playground-syntax-string: #c3e88d;
+  --playground-syntax-comment: #9aa3b8;
   --playground-radius-md: 0.8rem;
   --playground-radius-lg: 1.15rem;
   --playground-shadow: 0 18px 45px rgba(2, 6, 23, 0.18);
@@ -25,6 +30,11 @@
   --playground-border: rgba(51, 65, 85, 0.18);
   --playground-muted: #596276;
   --playground-text: #111827;
+  --playground-syntax-plain: #1f2937;
+  --playground-syntax-keyword: #6d28d9;
+  --playground-syntax-definition: #1d4ed8;
+  --playground-syntax-string: #166534;
+  --playground-syntax-comment: #596276;
   --playground-shadow: 0 18px 45px rgba(30, 41, 59, 0.09);
 }
 
