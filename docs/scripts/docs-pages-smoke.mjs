@@ -629,7 +629,9 @@ const checkExistingDocumentationPages = async (page, browser) => {
     });
   assert.ok(modulePosition);
   await page.mouse.move(modulePosition.x, modulePosition.y);
-  await page.locator('.monaco-hover:visible').waitFor({ timeout: 5_000 });
+  const moduleHover = page.locator('.monaco-hover:visible');
+  await moduleHover.waitFor({ timeout: 5_000 });
+  assert.ok((await moduleHover.innerText()).trim());
 
   const noScript = await browser.newContext({
     javaScriptEnabled: false,
