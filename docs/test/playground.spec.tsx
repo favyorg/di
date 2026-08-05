@@ -30,6 +30,7 @@ let mockTypeScriptEditorProps: any[] = [];
 let mockEditorReadValue: string | undefined;
 let mockEditorCaptures = 0;
 let mockEditorRestores = 0;
+let mockTypeScriptEditorReady = true;
 
 jest.mock('../src/components/playground/playground-sandbox', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -57,7 +58,7 @@ jest.mock('../src/components/playground/playground-sandbox', () => {
 jest.mock('@codesandbox/sandpack-react', () => ({
   SandpackCodeEditor: () => {
     mockVisibleSandpackEditors += 1;
-    return <pre>Sandpack editor fallback</pre>;
+    return <div role="tabpanel">Sandpack editor fallback</div>;
   },
 }));
 
@@ -66,7 +67,7 @@ jest.mock('../src/components/typescript-editor', () => {
 
   const TypeScriptEditor = React.forwardRef<any, any>(
     function MockTypeScriptEditor(props, ref) {
-      const { ariaLabel, onChange, value } = props;
+      const { ariaLabel, fallback, onChange, value } = props;
       const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
       const valueRef = React.useRef(value);
       valueRef.current = value;
@@ -106,6 +107,8 @@ jest.mock('../src/components/typescript-editor', () => {
         }),
         []
       );
+
+      if (!mockTypeScriptEditorReady) return fallback;
 
       return (
         <textarea
@@ -208,6 +211,7 @@ beforeEach(() => {
   mockEditorReadValue = undefined;
   mockEditorCaptures = 0;
   mockEditorRestores = 0;
+  mockTypeScriptEditorReady = true;
   document.documentElement.dataset.theme = 'light';
 });
 
@@ -243,10 +247,141 @@ it('follows the document theme after mounting and when it changes', async () => 
   expect(latestSandbox().theme).toBe('light');
 });
 
+it('exposes one readable fallback textbox beside a hidden visual editor', () => {
+  mockTypeScriptEditorReady = false;
+  render(<Playground />);
+
+  const visualTabpanel = screen.getByRole('tabpanel', { hidden: true });
+  const hiddenVisual = visualTabpanel.closest('[aria-hidden="true"]');
+  const textboxes = screen.getAllByRole('textbox', {
+    name: 'TypeScript playground editor',
+  });
+
+  expect(hiddenVisual).toBeTruthy();
+  expect(hiddenVisual?.hasAttribute('inert')).toBe(true);
+  expect(textboxes).toHaveLength(1);
+  const fallbackControl = textboxes[0] as HTMLTextAreaElement;
+  expect(fallbackControl.value).toBe(playgroundExampleById.basic.source);
+  expect(fallbackControl.readOnly).toBe(true);
+  expect(fallbackControl.getAttribute('aria-readonly')).toBe('true');
+  expect(fallbackControl.tabIndex).toBe(0);
+  expect(hiddenVisual?.parentElement).toBe(fallbackControl.parentElement);
+  expect(hiddenVisual?.contains(fallbackControl)).toBe(false);
+  expect(fallbackControl.contains(hiddenVisual)).toBe(false);
+});
+
+it('exposes exactly one editor textbox after Monaco is ready', () => {
+  render(<Playground />);
+
+  expect(
+    screen.getAllByRole('textbox', {
+      name: 'TypeScript playground editor',
+    })
+  ).toHaveLength(1);
+  expect(screen.queryByRole('tabpanel', { hidden: true })).toBeNull();
+});
+
+type ExpectedControlState = Readonly<{
+  disabled: boolean;
+  busy: 'true' | 'false';
+  spinner: boolean;
+}>;
+
+const expectControlState = (expected: ExpectedControlState): void => {
+  const toolbar = screen.getByRole('toolbar', {
+    name: 'Playground controls',
+  });
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+
+  expect((runButton as HTMLButtonElement).disabled).toBe(expected.disabled);
+  expect(toolbar.getAttribute('aria-busy')).toBe(expected.busy);
+  expect(Boolean(runButton.querySelector('.playground__spinner'))).toBe(
+    expected.spinner
+  );
+};
+
+it('distinguishes ready, queued, committing, executing, settled, and cancelled states', () => {
+  renderReadyPlayground();
+  expectControlState({ disabled: false, busy: 'false', spinner: false });
+
+  const first = clickRun();
+  expectControlState({ disabled: true, busy: 'true', spinner: true });
+
+  emitPhase('committing');
+  expectControlState({ disabled: true, busy: 'true', spinner: true });
+
+  emitPhase('executing');
+  emitStatus('Running');
+  expectControlState({ disabled: true, busy: 'true', spinner: true });
+
+  settle({ runToken: first.runToken, outcome: 'completed', failed: false });
+  expectControlState({ disabled: false, busy: 'false', spinner: false });
+
+  const second = clickRun();
+  expectControlState({ disabled: true, busy: 'true', spinner: true });
+  settle({ runToken: second.runToken, outcome: 'cancelled' });
+  expectControlState({ disabled: false, busy: 'false', spinner: false });
+});
+
+it.each([
+  'Preparing runtime',
+  'Downloading packages',
+  'Installing packages',
+  'Starting Vite',
+] as const)('marks background %s as busy', (backgroundStatus) => {
+  render(<Playground />);
+
+  emitStatus(backgroundStatus);
+
+  expectControlState({ disabled: true, busy: 'true', spinner: true });
+});
+
+it('marks dependency preparation as busy without an active run', () => {
+  renderReadyPlayground();
+  edit(`${playgroundExampleById.basic.source}\nimport 'lodash';`);
+
+  act(() => jest.advanceTimersByTime(1_000));
+
+  expect(screen.getByRole('status').textContent).toBe('Preparing dependencies');
+  expect(latestSandbox().runRequest).toBeNull();
+  expectControlState({ disabled: true, busy: 'true', spinner: true });
+});
+
+it.each([
+  ['unsupported', "import '_hidden';", 'Unsupported import: _hidden'],
+  ['oversized', 'a'.repeat(65_537), 'Source is too large (64 KiB maximum)'],
+] as const)(
+  'disables %s source without reporting busy',
+  (_, source, status) => {
+    renderReadyPlayground();
+
+    edit(source);
+    act(() => jest.advanceTimersByTime(1_000));
+
+    expect(screen.getByRole('status').textContent).toBe(status);
+    expectControlState({ disabled: true, busy: 'false', spinner: false });
+  }
+);
+
+it('stays busy when source becomes invalid during an active run', () => {
+  renderReadyPlayground();
+  clickRun();
+
+  edit('a'.repeat(65_537));
+
+  expect(screen.getByRole('status').textContent).toBe(
+    'Source is too large (64 KiB maximum)'
+  );
+  expectControlState({ disabled: true, busy: 'true', spinner: true });
+});
+
 it('shows preparation progress and visible feedback for queued and active runs', () => {
   render(<Playground />);
   emitStatus('Starting Vite');
   expect(screen.getByRole('status').textContent).toBe('Starting Vite');
+  expectControlState({ disabled: true, busy: 'true', spinner: true });
+
+  emitStatus('Ready');
 
   const runButton = screen.getByRole('button', { name: 'Run code' });
   fireEvent.click(runButton);

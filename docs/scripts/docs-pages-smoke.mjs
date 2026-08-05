@@ -29,22 +29,26 @@ const checkPlaygroundFirstPaint = async (browser) => {
       });
       assert.equal(
         await firstPaintPage.locator('html').getAttribute('data-theme'),
-        colorScheme,
+        colorScheme
       );
       const colors = await firstPaintPage.evaluate(() => {
-        const rgb = (value) => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+        const rgb = (value) =>
+          value
+            .match(/[\d.]+/g)
+            .slice(0, 3)
+            .map(Number);
         const luminance = (value) =>
           rgb(value)
             .map((channel) => channel / 255)
             .map((channel) =>
               channel <= 0.04045
                 ? channel / 12.92
-                : ((channel + 0.055) / 1.055) ** 2.4,
+                : ((channel + 0.055) / 1.055) ** 2.4
             )
             .reduce(
               (sum, channel, index) =>
                 sum + channel * [0.2126, 0.7152, 0.0722][index],
-              0,
+              0
             );
         const contrast = (foreground, background) => {
           const left = luminance(foreground);
@@ -80,6 +84,71 @@ const checkPlaygroundFirstPaint = async (browser) => {
       assert.notEqual(colors.keywordColor, colors.plainColor);
       assert.ok(colors.plainContrast >= 4.5);
       assert.ok(colors.keywordContrast >= 4.5);
+
+      const fallbackControl = firstPaintPage.getByRole('textbox', {
+        name: 'TypeScript playground editor',
+      });
+      const fallbackVisual = firstPaintPage.locator(
+        '.playground__editor-fallback-visual[aria-hidden="true"][inert]'
+      );
+      assert.equal(await fallbackControl.count(), 1);
+      assert.equal(await firstPaintPage.getByRole('textbox').count(), 1);
+      assert.equal(await fallbackVisual.count(), 1);
+      assert.match(await fallbackControl.inputValue(), /@favy\/di/);
+      assert.equal(await fallbackControl.getAttribute('aria-readonly'), 'true');
+      assert.equal(await fallbackControl.getAttribute('tabindex'), '0');
+      assert.equal(await fallbackControl.isEditable(), false);
+
+      const compactFallback = await fallbackControl.evaluate((control) => {
+        const visual = document.querySelector(
+          '.playground__editor-fallback-visual'
+        );
+        const editor = control.closest('.playground__editor');
+        if (!visual || !editor) throw new Error('Missing fallback structure');
+        const controlBox = control.getBoundingClientRect();
+        const editorBox = editor.getBoundingClientRect();
+        const style = getComputedStyle(control);
+        return {
+          height: controlBox.height,
+          editorHeight: editorBox.height,
+          hasSharedParent: visual.parentElement === control.parentElement,
+          visualContainsControl: visual.contains(control),
+          controlContainsVisual: control.contains(visual),
+          background: style.backgroundColor,
+          color: style.color,
+          overflow: style.overflow,
+          visibility: style.visibility,
+        };
+      });
+      assert.equal(compactFallback.hasSharedParent, true);
+      assert.equal(compactFallback.visualContainsControl, false);
+      assert.equal(compactFallback.controlContainsVisual, false);
+      assert.ok(compactFallback.height >= 44);
+      assert.ok(compactFallback.height < compactFallback.editorHeight / 2);
+      assert.notEqual(compactFallback.background, 'rgba(0, 0, 0, 0)');
+      assert.notEqual(compactFallback.color, compactFallback.background);
+      assert.equal(compactFallback.overflow, 'auto');
+      assert.equal(compactFallback.visibility, 'visible');
+
+      await fallbackControl.focus();
+      const focusedFallback = await fallbackControl.evaluate((control) => {
+        const box = control.getBoundingClientRect();
+        const style = getComputedStyle(control);
+        return {
+          height: box.height,
+          focused: document.activeElement === control,
+          outlineStyle: style.outlineStyle,
+          outlineWidth: Number.parseFloat(style.outlineWidth),
+          overflow: style.overflow,
+          zIndex: style.zIndex,
+        };
+      });
+      assert.equal(focusedFallback.focused, true);
+      assert.ok(focusedFallback.height > compactFallback.height * 2);
+      assert.notEqual(focusedFallback.outlineStyle, 'none');
+      assert.ok(focusedFallback.outlineWidth >= 3);
+      assert.equal(focusedFallback.overflow, 'auto');
+      assert.notEqual(focusedFallback.zIndex, 'auto');
     } finally {
       await firstPaint.close();
     }
@@ -98,7 +167,7 @@ const assertFocusContrast = async (
   locator,
   label,
   theme,
-  indicatorSelector,
+  indicatorSelector
 ) => {
   await locator.focus();
   await page.keyboard.press('Shift+Tab');
@@ -125,7 +194,7 @@ const assertFocusContrast = async (
             (channel, index) =>
               (channel * foreground[3] +
                 background[index] * background[3] * (1 - foreground[3])) /
-              alpha,
+              alpha
           ),
         alpha,
       ];
@@ -145,12 +214,12 @@ const assertFocusContrast = async (
         .map((channel) =>
           channel <= 0.04045
             ? channel / 12.92
-            : ((channel + 0.055) / 1.055) ** 2.4,
+            : ((channel + 0.055) / 1.055) ** 2.4
         )
         .reduce(
           (sum, channel, index) =>
             sum + channel * [0.2126, 0.7152, 0.0722][index],
-          0,
+          0
         );
     const style = getComputedStyle(indicator);
     const foreground = luminance(parseColor(style.outlineColor));
@@ -168,15 +237,15 @@ const assertFocusContrast = async (
   assert.notEqual(
     focus.outlineStyle,
     'none',
-    `${label} should have an outline`,
+    `${label} should have an outline`
   );
   assert.ok(
     focus.outlineWidth >= 3,
-    `${label} outline was ${focus.outlineWidth}px`,
+    `${label} outline was ${focus.outlineWidth}px`
   );
   assert.ok(
     focus.contrast >= 3,
-    `${label} ${theme} focus contrast was ${focus.contrast.toFixed(2)}:1`,
+    `${label} ${theme} focus contrast was ${focus.contrast.toFixed(2)}:1`
   );
 };
 
@@ -184,8 +253,8 @@ const waitForEditorLayout = (locator) =>
   locator.evaluate(
     () =>
       new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      )
   );
 
 const hoverMonacoToken = async (page, editor, token, lineText) => {
@@ -200,7 +269,7 @@ const hoverMonacoToken = async (page, editor, token, lineText) => {
       (lines, target) => {
         const normalize = (value) => value.replaceAll('\u00a0', ' ');
         const line = lines.find((candidate) =>
-          normalize(candidate.textContent ?? '').includes(target.lineText),
+          normalize(candidate.textContent ?? '').includes(target.lineText)
         );
         if (!line) return null;
         const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
@@ -237,7 +306,7 @@ const hoverMonacoToken = async (page, editor, token, lineText) => {
           y: rect.top + rect.height / 2,
         };
       },
-      { token, lineText },
+      { token, lineText }
     );
 
   let point;
@@ -252,8 +321,8 @@ const hoverMonacoToken = async (page, editor, token, lineText) => {
   assert.ok(
     point,
     `Missing Monaco token ${JSON.stringify(token)} on ${JSON.stringify(
-      lineText,
-    )}`,
+      lineText
+    )}`
   );
 
   await page.mouse.move(point.x, point.y);
@@ -288,20 +357,21 @@ const checkPlayground = async (page) => {
 
   const themeToggle = page.locator('[data-theme-toggle]');
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
-  assert.equal(await themeToggle.getAttribute('aria-label'), 'Use dark theme');
+  assert.equal(await themeToggle.getAttribute('aria-label'), 'Dark theme');
+  assert.equal(await themeToggle.getAttribute('aria-pressed'), 'false');
 
   assert.equal(await page.title(), 'Playground | @favy/di');
   assert.equal(
     await page.locator('meta[name="description"]').getAttribute('content'),
-    'Edit and run focused @favy/di examples directly in the browser.',
+    'Edit and run focused @favy/di examples directly in the browser.'
   );
   assert.equal(
     await page.locator('link[rel="canonical"]').getAttribute('href'),
-    'https://di.favy.dev/playground/',
+    'https://di.favy.dev/playground/'
   );
   assert.equal(
     await page.locator('link[rel~="icon"][href="/favicon.svg"]').count(),
-    1,
+    1
   );
 
   for (const selector of [
@@ -316,7 +386,7 @@ const checkPlayground = async (page) => {
     assert.equal(
       await page.locator(selector).count(),
       0,
-      `Standalone playground unexpectedly rendered ${selector}`,
+      `Standalone playground unexpectedly rendered ${selector}`
     );
   }
 
@@ -326,27 +396,27 @@ const checkPlayground = async (page) => {
     await header
       .getByRole('link', { name: '@favy/di', exact: true })
       .getAttribute('href'),
-    '/',
+    '/'
   );
   assert.equal(
     await header
       .getByRole('link', { name: 'Docs', exact: true })
       .getAttribute('href'),
-    '/guides/introduction/',
+    '/guides/introduction/'
   );
   assert.equal(
     await header
       .getByRole('link', { name: 'GitHub', exact: true })
       .getAttribute('href'),
-    'https://github.com/favyorg/di',
+    'https://github.com/favyorg/di'
   );
   assert.equal(
     await page.getByRole('heading', { level: 1, name: 'Playground' }).count(),
-    1,
+    1
   );
   assert.equal(
     await page.locator('main[aria-label="TypeScript playground"]').count(),
-    1,
+    1
   );
 
   const exampleNames = [
@@ -372,16 +442,16 @@ const checkPlayground = async (page) => {
   assert.equal(await exampleButtons.count(), exampleNames.length);
   assert.deepEqual(
     await exampleButtons.evaluateAll((buttons) =>
-      buttons.map((button) => button.getAttribute('aria-label')),
+      buttons.map((button) => button.getAttribute('aria-label'))
     ),
-    exampleNames,
+    exampleNames
   );
   const provider = page.locator('.playground__sandbox .sp-wrapper');
   await provider.waitFor({ timeout: 30_000 });
   assert.equal(await provider.count(), 1);
   const playgroundEditor = page.locator('.playground__editor .monaco-editor');
   const playgroundInput = playgroundEditor.locator(
-    'textarea.inputarea[role="textbox"][aria-label="TypeScript playground editor"]',
+    'textarea.inputarea[role="textbox"][aria-label="TypeScript playground editor"]'
   );
   await playgroundEditor.waitFor({ timeout: 30_000 });
   await playgroundInput.waitFor({ timeout: 30_000 });
@@ -389,7 +459,7 @@ const checkPlayground = async (page) => {
   assert.equal(await playgroundInput.count(), 1);
   assert.equal(
     await page.locator('.playground__editor .sp-code-editor').count(),
-    0,
+    0
   );
 
   for (const [index, name] of exampleNames.entries()) {
@@ -399,6 +469,8 @@ const checkPlayground = async (page) => {
   const run = page.getByRole('button', { name: 'Run code' });
   await assertMinimumTargetSize(reset, 'Reset example');
   await assertMinimumTargetSize(run, 'Run code');
+  const status = page.getByRole('status');
+  await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
   const shellControls = [
     [header.getByRole('link', { name: '@favy/di', exact: true }), 'Brand'],
     [header.getByRole('link', { name: 'Docs', exact: true }), 'Docs'],
@@ -419,7 +491,7 @@ const checkPlayground = async (page) => {
       page,
       exampleButtons.first(),
       'Basic module',
-      theme,
+      theme
     );
     await assertFocusContrast(page, reset, 'Reset example', theme);
     await assertFocusContrast(page, run, 'Run code', theme);
@@ -428,7 +500,7 @@ const checkPlayground = async (page) => {
       playgroundInput,
       'Playground editor',
       theme,
-      '.playground__editor',
+      '.playground__editor'
     );
   }
   await page.locator('html').evaluate((element, theme) => {
@@ -437,17 +509,15 @@ const checkPlayground = async (page) => {
   }, originalTheme);
 
   const consoleOutput = page.getByRole('region', { name: 'Console output' });
-  const status = page.getByRole('status');
-  await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
   assert.equal(
     (await consoleOutput.textContent())?.includes('Hello, Ada!'),
-    false,
+    false
   );
 
   const runtime = page.locator('iframe.playground__runtime-client');
   await playgroundInput.focus();
   await page.keyboard.press(
-    process.platform === 'darwin' ? 'Meta+End' : 'Control+End',
+    process.platform === 'darwin' ? 'Meta+End' : 'Control+End'
   );
   await page.keyboard.insertText('\n// theme sentinel');
   const runtimeBeforeTheme = await runtime.elementHandle();
@@ -456,47 +526,61 @@ const checkPlayground = async (page) => {
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   assert.equal(
     await page.evaluate(() => localStorage.getItem('starlight-theme')),
-    'dark',
+    'dark'
   );
-  assert.equal(await themeToggle.getAttribute('aria-label'), 'Use light theme');
+  assert.equal(await themeToggle.getAttribute('aria-label'), 'Dark theme');
+  assert.equal(await themeToggle.getAttribute('aria-pressed'), 'true');
   assert.match(await playgroundInput.inputValue(), /theme sentinel/);
   assert.equal(
     await runtime.evaluate(
       (currentRuntime, previousRuntime) =>
         currentRuntime.isSameNode(previousRuntime),
-      runtimeBeforeTheme,
+      runtimeBeforeTheme
     ),
-    true,
+    true
   );
 
   const persistedThemePage = await page.context().newPage();
   await persistedThemePage.goto(`${origin}/playground/`, {
     waitUntil: 'domcontentloaded',
   });
-  assert.equal(
-    await persistedThemePage.locator('html').getAttribute('data-theme'),
-    'dark',
-  );
-  await persistedThemePage.close();
 
   await themeToggle.click();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+  assert.equal(await themeToggle.getAttribute('aria-label'), 'Dark theme');
+  assert.equal(await themeToggle.getAttribute('aria-pressed'), 'false');
+
+  assert.equal(
+    await persistedThemePage.locator('html').getAttribute('data-theme'),
+    'dark'
+  );
+  const persistedThemeToggle = persistedThemePage.locator(
+    '[data-theme-toggle]'
+  );
+  assert.equal(
+    await persistedThemeToggle.getAttribute('aria-label'),
+    'Dark theme'
+  );
+  assert.equal(await persistedThemeToggle.getAttribute('aria-pressed'), 'true');
+  await persistedThemePage.close();
   await runtimeBeforeTheme.dispose();
   await reset.click();
 
   for (const [index, fragments] of expectedExampleOutput.entries()) {
     await exampleButtons.nth(index).click();
-    await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
+    await status
+      .getByText('Ready', { exact: true })
+      .waitFor({ timeout: 60_000 });
     await run.click();
     await page.waitForFunction(
       (expected) => {
         const output = document.querySelector(
-          '[aria-label="Console output"]',
+          '[aria-label="Console output"]'
         )?.textContent;
         return expected.every((fragment) => output?.includes(fragment));
       },
       fragments,
-      { timeout: 60_000 },
+      { timeout: 60_000 }
     );
   }
 
@@ -508,9 +592,9 @@ const checkPlayground = async (page) => {
       page,
       playgroundEditor,
       'Module',
-      "import { Module } from '@favy/di';",
+      "import { Module } from '@favy/di';"
     ),
-    /Module/,
+    /Module/
   );
   await closeMonacoHover(page);
 
@@ -518,16 +602,16 @@ const checkPlayground = async (page) => {
   await page.waitForFunction(() =>
     document
       .querySelector('.playground__editor .monaco-editor .view-lines')
-      ?.textContent?.includes('BoxHKT'),
+      ?.textContent?.includes('BoxHKT')
   );
   assert.match(
     await hoverMonacoToken(
       page,
       playgroundEditor,
       'output',
-      'const output = Greeting();',
+      'const output = Greeting();'
     ),
-    /Box|Greeting/,
+    /Box|Greeting/
   );
   await closeMonacoHover(page);
 
@@ -535,7 +619,7 @@ const checkPlayground = async (page) => {
   await page.waitForFunction(() => {
     const editor = document.querySelector('.playground__editor .monaco-editor');
     const scrollable = editor?.querySelector(
-      '.monaco-scrollable-element.editor-scrollable',
+      '.monaco-scrollable-element.editor-scrollable'
     );
     if (scrollable) scrollable.scrollTop = 0;
     return editor?.querySelector('.view-lines')?.textContent?.includes('Ada!');
@@ -560,10 +644,10 @@ const checkPlayground = async (page) => {
         window.__playgroundSmokeRunObserver?.disconnect();
         const button = document.querySelector('button[aria-label="Run code"]');
         const status = document.querySelector(
-          '.playground__status[role="status"]',
+          '.playground__status[role="status"]'
         );
         const consoleOutput = document.querySelector(
-          '[aria-label="Console output"]',
+          '[aria-label="Console output"]'
         );
         const workspace = button?.closest('.playground__workspace');
         if (!button || !status || !consoleOutput || !workspace) {
@@ -613,7 +697,7 @@ const checkPlayground = async (page) => {
       await page.waitForFunction(
         () => window.__playgroundSmokeRunCycle?.completedAt !== null,
         undefined,
-        { timeout: 10_000 },
+        { timeout: 10_000 }
       );
       const cycle = await page.evaluate(() => {
         const current = window.__playgroundSmokeRunCycle;
@@ -628,13 +712,13 @@ const checkPlayground = async (page) => {
         await runtime.evaluate(
           (currentRuntime, firstRuntime) =>
             firstRuntime.isSameNode(currentRuntime),
-          initialRuntime,
+          initialRuntime
         ),
         true,
-        `Run ${runIndex + 1} replaced the outer runtime iframe`,
+        `Run ${runIndex + 1} replaced the outer runtime iframe`
       );
       await page.evaluate(
-        () => new Promise((resolve) => requestAnimationFrame(resolve)),
+        () => new Promise((resolve) => requestAnimationFrame(resolve))
       );
       activeWarmRun = -1;
     }
@@ -645,7 +729,7 @@ const checkPlayground = async (page) => {
   }
   for (const [runIndex, requests] of warmRunRequests.entries()) {
     const registryRequests = requests.filter(
-      (request) => new URL(request).hostname === 'registry.npmjs.org',
+      (request) => new URL(request).hostname === 'registry.npmjs.org'
     );
     const previewReloadRequests = requests.filter((request) => {
       const { hostname, pathname } = new URL(request);
@@ -659,41 +743,39 @@ const checkPlayground = async (page) => {
     const toolingRequests = requests.filter((request) => {
       const { pathname, search } = new URL(request);
       return /(?:monaco-editor|@monaco-editor|(?:editor|ts)\.worker(?:[-.][^/?]*)?\.js)/i.test(
-        decodeURIComponent(`${pathname}${search}`),
+        decodeURIComponent(`${pathname}${search}`)
       );
     });
     assert.deepEqual(
       registryRequests,
       [],
-      `Warm Run ${runIndex + 1} should not fetch registry packages`,
+      `Warm Run ${runIndex + 1} should not fetch registry packages`
     );
     assert.deepEqual(
       previewReloadRequests,
       [],
-      `Warm Run ${runIndex + 1} should not reload the outer Vite preview`,
+      `Warm Run ${runIndex + 1} should not reload the outer Vite preview`
     );
     assert.deepEqual(
       toolingRequests,
       [],
-      `Warm Run ${runIndex + 1} should not load Monaco or workers`,
+      `Warm Run ${runIndex + 1} should not load Monaco or workers`
     );
   }
   assert.ok(
     warmDurations.every((duration) => duration < 1_000),
-    `Warm playground runs exceeded 1000ms: ${warmDurations.join('ms, ')}ms`,
+    `Warm playground runs exceeded 1000ms: ${warmDurations.join('ms, ')}ms`
   );
   console.log(
-    'Warm playground runs: ' +
-      warmDurations.map(Math.round).join('ms, ') +
-      'ms',
+    'Warm playground runs: ' + warmDurations.map(Math.round).join('ms, ') + 'ms'
   );
 
   await playgroundInput.focus();
   await page.keyboard.press(
-    process.platform === 'darwin' ? 'Meta+A' : 'Control+A',
+    process.platform === 'darwin' ? 'Meta+A' : 'Control+A'
   );
   await page.keyboard.insertText(
-    "import { Module } from '@favy/di\nconsole.log('SHOULD NOT RUN')",
+    "import { Module } from '@favy/di\nconsole.log('SHOULD NOT RUN')"
   );
   await page
     .getByRole('status')
@@ -702,7 +784,7 @@ const checkPlayground = async (page) => {
   await page.waitForTimeout(1_100);
   assert.equal(
     (await page.getByRole('status').textContent())?.trim(),
-    'Checking imports',
+    'Checking imports'
   );
   await run.click();
   assert.equal(await run.isDisabled(), false);
@@ -710,15 +792,15 @@ const checkPlayground = async (page) => {
     await page
       .getByRole('toolbar', { name: 'Playground controls' })
       .getAttribute('aria-busy'),
-    'false',
+    'false'
   );
   assert.equal(
     (await page.getByRole('status').textContent())?.trim(),
-    'Checking imports',
+    'Checking imports'
   );
   assert.equal(
     (await consoleOutput.textContent())?.includes('SHOULD NOT RUN'),
-    false,
+    false
   );
 
   await reset.click();
@@ -728,7 +810,7 @@ const checkPlayground = async (page) => {
   await status.getByText('Ready', { exact: true }).waitFor();
   assert.equal(
     (await consoleOutput.textContent())?.includes('Hello, Ada!'),
-    false,
+    false
   );
   await playgroundInput.press('Control+Enter');
   await consoleOutput
@@ -749,17 +831,17 @@ const checkPlayground = async (page) => {
   await page.waitForFunction(() =>
     document
       .querySelector('.playground__editor .monaco-editor .view-lines')
-      ?.textContent?.includes('BoxHKT'),
+      ?.textContent?.includes('BoxHKT')
   );
   assert.equal(
     await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
+      () => document.documentElement.scrollWidth <= window.innerWidth
     ),
-    true,
+    true
   );
   assert.equal(
     (await consoleOutput.textContent())?.includes('Greeting: hello'),
-    false,
+    false
   );
   await playgroundInput.press('Meta+Enter');
   await consoleOutput
@@ -767,9 +849,9 @@ const checkPlayground = async (page) => {
     .waitFor({ timeout: 60_000 });
   assert.equal(
     await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
+      () => document.documentElement.scrollWidth <= window.innerWidth
     ),
-    true,
+    true
   );
 
   await page.locator('html').evaluate((element, theme) => {
@@ -787,15 +869,15 @@ const checkExistingDocumentationPages = async (page, browser) => {
 
   assert.equal(
     (await page.locator('.docs-page-label').textContent())?.trim(),
-    'Guide',
+    'Guide'
   );
   assert.equal(
     (await page.locator('.docs-page-title h1').textContent())?.trim(),
-    'Introduction',
+    'Introduction'
   );
   assert.equal(
     (await page.locator('.docs-page-description').textContent())?.trim(),
-    'Build and run an explicit, type-safe dependency graph with @favy/di.',
+    'Build and run an explicit, type-safe dependency graph with @favy/di.'
   );
   assert.equal(await page.locator('h1#_top').count(), 1);
 
@@ -842,11 +924,11 @@ const checkExistingDocumentationPages = async (page, browser) => {
   const contentPrimitives = page.locator('[data-smoke-content-primitives]');
   await assertMinimumTargetSize(
     contentPrimitives.locator('.api-index a'),
-    'API index link',
+    'API index link'
   );
   await assertMinimumTargetSize(
     contentPrimitives.locator('details > summary'),
-    'Content details summary',
+    'Content details summary'
   );
 
   const originalTheme = await page.locator('html').getAttribute('data-theme');
@@ -872,12 +954,12 @@ const checkExistingDocumentationPages = async (page, browser) => {
             .map((channel) =>
               channel <= 0.04045
                 ? channel / 12.92
-                : ((channel + 0.055) / 1.055) ** 2.4,
+                : ((channel + 0.055) / 1.055) ** 2.4
             )
             .reduce(
               (sum, channel, index) =>
                 sum + channel * [0.2126, 0.7152, 0.0722][index],
-              0,
+              0
             );
         const style = getComputedStyle(term);
         const foreground = luminance(style.color);
@@ -889,7 +971,7 @@ const checkExistingDocumentationPages = async (page, browser) => {
       });
     assert.ok(
       contrast >= 4.5,
-      `Example contract term ${theme} contrast was ${contrast.toFixed(2)}:1`,
+      `Example contract term ${theme} contrast was ${contrast.toFixed(2)}:1`
     );
   }
   await page.locator('html').evaluate((element, theme) => {
@@ -906,7 +988,7 @@ const checkExistingDocumentationPages = async (page, browser) => {
     .locator('.monaco-editor .view-line')
     .evaluateAll((lines) => {
       const blankLineIndex = lines.findIndex(
-        (line, index) => index > 0 && !line.textContent?.trim(),
+        (line, index) => index > 0 && !line.textContent?.trim()
       );
       if (blankLineIndex < 1) return null;
       const previousLine = lines[blankLineIndex - 1].getBoundingClientRect();
@@ -920,7 +1002,7 @@ const checkExistingDocumentationPages = async (page, browser) => {
   assert.ok(
     Math.abs(editorLineRhythm.blankLineDelta - editorLineRhythm.lineHeight) <=
       1,
-    `Editor blank-line delta was ${editorLineRhythm.blankLineDelta}px for a ${editorLineRhythm.lineHeight}px line`,
+    `Editor blank-line delta was ${editorLineRhythm.blankLineDelta}px for a ${editorLineRhythm.lineHeight}px line`
   );
 
   const editorSurface = await page
@@ -943,16 +1025,16 @@ const checkExistingDocumentationPages = async (page, browser) => {
   await page.setViewportSize({ width: 320, height: 900 });
   assert.equal(
     await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
+      () => document.documentElement.scrollWidth <= window.innerWidth
     ),
-    true,
+    true
   );
   assert.match(
     await page
       .locator("astro-island[component-export='Editor']")
       .first()
       .evaluate((element) => getComputedStyle(element, '::before').content),
-    /scroll|swipe/i,
+    /scroll|swipe/i
   );
 
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -995,9 +1077,9 @@ const checkExistingDocumentationPages = async (page, browser) => {
   assert.ok(
     await noScriptPage
       .locator(
-        "astro-island[component-export='Editor'] pre[aria-label='TypeScript example']",
+        "astro-island[component-export='Editor'] pre[aria-label='TypeScript example']"
       )
-      .count(),
+      .count()
   );
   await noScript.close();
 
@@ -1065,19 +1147,19 @@ const checkExistingDocumentationPages = async (page, browser) => {
                 value?.tagName,
                 value?.textContent?.trim(),
               ];
-            },
+            }
           ),
           adjacentEditor:
             editor?.matches("astro-island[component-export='Editor']") ?? false,
         };
-      }),
+      })
     );
   assert.deepEqual(
     testingContracts,
     expectedTestingContracts.map((pairs) => ({
       pairs: pairs.map(([label, value]) => ['DT', label, 'DD', value]),
       adjacentEditor: true,
-    })),
+    }))
   );
 
   await page.goto(`${origin}/reference/api/`, {
@@ -1119,14 +1201,14 @@ const checkExistingDocumentationPages = async (page, browser) => {
         [...editor.querySelectorAll('.view-line')]
           .filter((line) =>
             /^\s*(?:'(?:IgnoreResource|ReadTwice)'|\(\) =>|\(\w+\) =>)/.test(
-              (line.textContent ?? '').replaceAll('\u00a0', ' '),
-            ),
+              (line.textContent ?? '').replaceAll('\u00a0', ' ')
+            )
           )
           .map(
             (line) =>
-              line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0,
-          ),
-      ),
+              line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0
+          )
+      )
     );
   assert.deepEqual(lazyExampleIndents, [
     [2, 2, 2, 2],
@@ -1146,12 +1228,12 @@ const checkExistingDocumentationPages = async (page, browser) => {
       lines
         .filter((line) =>
           /^\s*(?:'Calculator'|\(\{ x, y \}\) =>)/.test(
-            (line.textContent ?? '').replaceAll('\u00a0', ' '),
-          ),
+            (line.textContent ?? '').replaceAll('\u00a0', ' ')
+          )
         )
         .map(
-          (line) => line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0,
-        ),
+          (line) => line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0
+        )
     );
   assert.deepEqual(partialExampleIndents, [2, 2]);
 
@@ -1166,37 +1248,37 @@ const checkExistingDocumentationPages = async (page, browser) => {
 
   await assertMinimumTargetSize(
     page.locator('site-search > button'),
-    'Mobile docs search button',
+    'Mobile docs search button'
   );
   await assertMinimumTargetSize(
     page.locator('.expressive-code button[title="Copy to clipboard"]').first(),
-    'Mobile code copy button',
+    'Mobile code copy button'
   );
 
   const menuButton = page.locator('starlight-menu-button button');
   await assertMinimumTargetSize(menuButton, 'Mobile menu button');
   await menuButton.click();
   await page.waitForFunction(() =>
-    document.body.hasAttribute('data-mobile-menu-expanded'),
+    document.body.hasAttribute('data-mobile-menu-expanded')
   );
 
   await assertMinimumTargetSize(
     page.locator('.sidebar-pane a[aria-current="page"]'),
-    'Current sidebar link',
+    'Current sidebar link'
   );
   await assertMinimumTargetSize(
     page.locator('.sidebar-pane summary').first(),
-    'Sidebar group summary',
+    'Sidebar group summary'
   );
 
   await menuButton.click();
   await page.waitForFunction(
-    () => !document.body.hasAttribute('data-mobile-menu-expanded'),
+    () => !document.body.hasAttribute('data-mobile-menu-expanded')
   );
   await page.locator('mobile-starlight-toc summary').click();
   await assertMinimumTargetSize(
     page.locator('mobile-starlight-toc .dropdown a').first(),
-    'Mobile table of contents link',
+    'Mobile table of contents link'
   );
 };
 
@@ -1213,5 +1295,5 @@ try {
 console.log(
   process.env.PLAYGROUND_ONLY === '1'
     ? 'Playground page contract passed'
-    : 'Documentation page contract passed',
+    : 'Documentation page contract passed'
 );

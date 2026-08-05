@@ -260,6 +260,47 @@
   overflow: hidden;
 }
 
+.playground__editor-fallback {
+  position: relative;
+  block-size: 100%;
+  inline-size: 100%;
+  overflow: hidden;
+}
+
+.playground__editor-fallback-visual {
+  block-size: 100%;
+  inline-size: 100%;
+}
+
+.playground__editor-fallback-control {
+  position: absolute;
+  z-index: 1;
+  inset-block-end: 0.75rem;
+  inset-inline-end: 0.75rem;
+  block-size: 2.75rem;
+  inline-size: min(18rem, calc(100% - 1.5rem));
+  resize: none;
+  overflow: auto;
+  border: 1px solid var(--playground-border);
+  border-radius: 0.4rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--playground-surface-raised);
+  color: var(--playground-text);
+  font-family: var(--playground-font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  white-space: pre;
+}
+
+.playground__editor-fallback-control:focus {
+  inset: 0.75rem;
+  block-size: calc(100% - 1.5rem);
+  inline-size: calc(100% - 1.5rem);
+  outline: 3px solid
+    color-mix(in srgb, var(--playground-accent) 72%, var(--playground-text));
+  outline-offset: -3px;
+}
+
 astro-island[ssr] .playground .sp-syntax-plain,
 astro-island[ssr] .playground .sp-syntax-punctuation {
   color: var(--playground-syntax-plain);
@@ -318,7 +359,8 @@ astro-island[ssr] .playground .sp-syntax-comment {
   display: none;
 }
 
-.playground__editor > :is(.sp-stack, section),
+.playground__editor > :is(.sp-stack, section, .playground__editor-fallback),
+.playground__editor-fallback-visual > :is(.sp-stack, section),
 .playground__console > .sp-stack {
   block-size: 100%;
 }

@@ -39,7 +39,12 @@ const canonical = new URL('/playground/', Astro.site);
       <nav aria-label="Playground">
         <a href="/guides/introduction/">Docs</a>
         <a href="https://github.com/favyorg/di">GitHub</a>
-        <button type="button" data-theme-toggle aria-label="Use dark theme">
+        <button
+          type="button"
+          data-theme-toggle
+          aria-label="Dark theme"
+          aria-pressed="true"
+        >
           <span aria-hidden="true">◐</span>
         </button>
       </nav>
@@ -55,10 +60,6 @@ const canonical = new URL('/playground/', Astro.site);
         if (!themeButton) return;
         const isDark = document.documentElement.dataset.theme === 'dark';
         themeButton.setAttribute('aria-pressed', String(isDark));
-        themeButton.setAttribute(
-          'aria-label',
-          isDark ? 'Use light theme' : 'Use dark theme',
-        );
       };
       themeButton?.addEventListener('click', () => {
         const next =

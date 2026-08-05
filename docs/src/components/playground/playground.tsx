@@ -169,12 +169,14 @@ export function Playground(): JSX.Element {
       )
     : undefined;
   const visibleStatus = sourceWithinLimit ? status : SOURCE_TOO_LARGE_STATUS;
-  const runDisabled =
+  const isBusy =
     runRequest !== null ||
-    !sourceWithinLimit ||
-    importsBlocked ||
     status === 'Preparing dependencies' ||
-    status === 'Running';
+    status === 'Preparing runtime' ||
+    status === 'Downloading packages' ||
+    status === 'Installing packages' ||
+    status === 'Starting Vite';
+  const runDisabled = isBusy || !sourceWithinLimit || importsBlocked;
   const runLabel =
     runRequest === null
       ? 'Run'
@@ -626,7 +628,7 @@ export function Playground(): JSX.Element {
           className="playground__toolbar"
           role="toolbar"
           aria-label="Playground controls"
-          aria-busy={runDisabled}
+          aria-busy={isBusy}
         >
           <button
             type="button"
@@ -641,7 +643,7 @@ export function Playground(): JSX.Element {
             disabled={runDisabled}
             onClick={run}
           >
-            {runRequest && (
+            {isBusy && (
               <span className="playground__spinner" aria-hidden="true" />
             )}
             {runLabel}
@@ -687,13 +689,29 @@ export function Playground(): JSX.Element {
                   ariaLabel="TypeScript playground editor"
                   typingVersions={typingVersions}
                   fallback={
-                    <SandpackCodeEditor
-                      initMode="immediate"
-                      readOnly
-                      showLineNumbers
-                      showRunButton={false}
-                      showTabs={false}
-                    />
+                    <div className="playground__editor-fallback">
+                      <div
+                        className="playground__editor-fallback-visual"
+                        aria-hidden="true"
+                        {...{ inert: '' }}
+                      >
+                        <SandpackCodeEditor
+                          initMode="immediate"
+                          readOnly
+                          showLineNumbers
+                          showRunButton={false}
+                          showTabs={false}
+                        />
+                      </div>
+                      <textarea
+                        className="playground__editor-fallback-control"
+                        aria-label="TypeScript playground editor"
+                        aria-readonly="true"
+                        readOnly
+                        tabIndex={0}
+                        value={selectedSource}
+                      />
+                    </div>
                   }
                 />
               </div>
