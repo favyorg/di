@@ -752,7 +752,7 @@ it('handles cycles and reflection failures without invoking object getters', asy
   });
 });
 
-it('bounds arrays and argument counts before posting', async () => {
+it('bounds arrays without materializing their own keys before posting', async () => {
   let ownKeyReads = 0;
   const wide = new Proxy(
     Array.from(
@@ -770,7 +770,6 @@ it('bounds arrays and argument counts before posting', async () => {
     '?mode=run&session=11&run=7',
     (_specifier, runtime) => {
       runtime.console.log(wide);
-      runtime.console.info(...Array.from({ length: 30 }, (_, index) => index));
       return Promise.resolve();
     }
   );
@@ -784,10 +783,50 @@ it('bounds arrays and argument counts before posting', async () => {
   );
   expect(serialized).toEqual(expect.stringContaining('[Truncated]'));
   expect(ownKeyReads).toBe(0);
-  expect((child.messages[1]?.record as { data?: unknown[] }).data).toEqual([
-    ...Array.from({ length: 19 }, (_, index) => index),
-    '[Truncated]',
-  ]);
+});
+
+it('keeps exactly 20 console arguments and truncates the twenty-first', async () => {
+  const child = executeBootstrap(
+    '?mode=run&session=11&run=7',
+    (_specifier, runtime) => {
+      runtime.console.info(...Array.from({ length: 20 }, (_, index) => index));
+      runtime.console.warn(...Array.from({ length: 21 }, (_, index) => index));
+      return Promise.resolve();
+    }
+  );
+  await flushTasks();
+
+  expect(child.messages[0]?.record).toMatchObject({
+    method: 'info',
+    data: [
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    ],
+  });
+  expect(child.messages[1]?.record).toMatchObject({
+    method: 'warn',
+    data: [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      '[Truncated]',
+    ],
+  });
 });
 
 it('preserves assert, count, and timer console semantics', async () => {
