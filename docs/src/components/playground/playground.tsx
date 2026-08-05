@@ -936,7 +936,7 @@ export function Playground(): JSX.Element {
 
   return (
     <section
-      className="playground not-content"
+      className="playground"
       aria-label="TypeScript playground"
       onKeyDown={handleKeyDown}
     >

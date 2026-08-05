@@ -1,0 +1,75 @@
+---
+import { Playground as PlaygroundApp } from '../components/playground/playground';
+import '../styles/playground-page.css';
+
+const title = 'Playground | @favy/di';
+const description =
+  'Edit and run focused @favy/di examples directly in the browser.';
+const canonical = new URL('/playground/', Astro.site);
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script is:inline>
+      (() => {
+        const preferred = matchMedia('(prefers-color-scheme: light)').matches
+          ? 'light'
+          : 'dark';
+        let theme = preferred;
+        try {
+          const stored = localStorage.getItem('starlight-theme');
+          if (stored === 'light' || stored === 'dark') theme = stored;
+        } catch {}
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+  <body>
+    <a class="playground-shell__skip" href="#playground-main">Skip to playground</a>
+    <header class="playground-shell__header">
+      <a class="playground-shell__brand" href="/">@favy/di</a>
+      <h1>Playground</h1>
+      <nav aria-label="Playground">
+        <a href="/guides/introduction/">Docs</a>
+        <a href="https://github.com/favyorg/di">GitHub</a>
+        <button type="button" data-theme-toggle aria-label="Use dark theme">
+          <span aria-hidden="true">◐</span>
+        </button>
+      </nav>
+    </header>
+    <main id="playground-main" aria-label="TypeScript playground">
+      <PlaygroundApp client:load />
+    </main>
+    <script>
+      const themeButton = document.querySelector<HTMLButtonElement>(
+        '[data-theme-toggle]',
+      );
+      const syncThemeButton = (): void => {
+        if (!themeButton) return;
+        const isDark = document.documentElement.dataset.theme === 'dark';
+        themeButton.setAttribute('aria-pressed', String(isDark));
+        themeButton.setAttribute(
+          'aria-label',
+          isDark ? 'Use light theme' : 'Use dark theme',
+        );
+      };
+      themeButton?.addEventListener('click', () => {
+        const next =
+          document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        try {
+          localStorage.setItem('starlight-theme', next);
+        } catch {}
+        syncThemeButton();
+      });
+      syncThemeButton();
+    </script>
+  </body>
+</html>

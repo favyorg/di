@@ -1,13 +1,9 @@
-html:not([data-has-hero]):has(.playground-page) {
-  --sl-content-width: 76rem;
-}
-
 .playground {
   display: grid;
   grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
   gap: 1rem;
   max-inline-size: 100%;
-  margin-block: 2rem;
+  margin: 0;
 }
 
 .playground,
@@ -34,16 +30,16 @@ html:not([data-has-hero]):has(.playground-page) {
   align-content: start;
   gap: 0.75rem;
   padding: 1rem;
-  border: 1px solid var(--docs-border);
-  border-radius: var(--docs-radius-lg);
-  background: var(--docs-surface-raised);
-  box-shadow: var(--docs-shadow);
+  border: 1px solid var(--playground-border);
+  border-radius: var(--playground-radius-lg);
+  background: var(--playground-surface-raised);
+  box-shadow: var(--playground-shadow);
 }
 
 .playground__desktop-nav h2,
 .playground__region h2 {
   margin: 0;
-  color: var(--sl-color-white);
+  color: var(--playground-text);
   font-size: 0.875rem;
   font-weight: 700;
   line-height: 1.4;
@@ -60,8 +56,8 @@ html:not([data-has-hero]):has(.playground-page) {
   inline-size: 100%;
   padding: 0.75rem;
   border: 1px solid transparent;
-  border-radius: var(--docs-radius-md);
-  color: var(--sl-color-white);
+  border-radius: var(--playground-radius-md);
+  color: var(--playground-text);
   background: transparent;
   font: inherit;
   text-align: start;
@@ -69,8 +65,8 @@ html:not([data-has-hero]):has(.playground-page) {
 }
 
 .playground__example:is(:hover, [aria-pressed='true']) {
-  border-color: var(--docs-accent);
-  background: var(--docs-accent-soft);
+  border-color: var(--playground-accent);
+  background: var(--playground-accent-soft);
 }
 
 .playground__example-heading {
@@ -87,16 +83,16 @@ html:not([data-has-hero]):has(.playground-page) {
   inline-size: 1.5rem;
   block-size: 1.5rem;
   place-items: center;
-  border: 1px solid var(--docs-accent);
+  border: 1px solid var(--playground-accent);
   border-radius: 999px;
-  background: var(--docs-accent-soft);
+  background: var(--playground-accent-soft);
   font-size: 0.875rem;
 }
 
 .playground__example-description {
   display: block;
   margin-block-start: 0.35rem;
-  color: var(--docs-muted);
+  color: var(--playground-muted);
   font-size: 0.875rem;
   line-height: 1.5;
 }
@@ -106,7 +102,7 @@ html:not([data-has-hero]):has(.playground-page) {
 }
 
 .playground__mobile-nav label {
-  color: var(--sl-color-white);
+  color: var(--playground-text);
   font-size: 0.875rem;
   font-weight: 700;
 }
@@ -115,19 +111,19 @@ html:not([data-has-hero]):has(.playground-page) {
   inline-size: 100%;
   max-inline-size: 100%;
   padding-inline: 0.75rem;
-  border: 1px solid var(--docs-border);
-  border-radius: var(--docs-radius-md);
-  color: var(--sl-color-white);
-  background: var(--docs-surface-raised);
+  border: 1px solid var(--playground-border);
+  border-radius: var(--playground-radius-md);
+  color: var(--playground-text);
+  background: var(--playground-surface-raised);
   font: inherit;
 }
 
 .playground__workspace {
   overflow: hidden;
-  border: 1px solid var(--docs-border);
-  border-radius: var(--docs-radius-lg);
-  background: var(--docs-surface-raised);
-  box-shadow: var(--docs-shadow);
+  border: 1px solid var(--playground-border);
+  border-radius: var(--playground-radius-lg);
+  background: var(--playground-surface-raised);
+  box-shadow: var(--playground-shadow);
 }
 
 .playground__toolbar {
@@ -136,16 +132,16 @@ html:not([data-has-hero]):has(.playground-page) {
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  border-block-end: 1px solid var(--docs-border);
-  background: var(--docs-surface-raised);
+  border-block-end: 1px solid var(--playground-border);
+  background: var(--playground-surface-raised);
 }
 
 .playground__toolbar button {
   padding-inline: 1rem;
-  border: 1px solid var(--docs-border);
-  border-radius: var(--docs-radius-md);
-  color: var(--sl-color-white);
-  background: var(--docs-surface);
+  border: 1px solid var(--playground-border);
+  border-radius: var(--playground-radius-md);
+  color: var(--playground-text);
+  background: var(--playground-surface);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
@@ -156,8 +152,8 @@ html:not([data-has-hero]):has(.playground-page) {
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  border-color: var(--docs-accent);
-  background: var(--docs-accent-soft);
+  border-color: var(--playground-accent);
+  background: var(--playground-accent-soft);
 }
 
 .playground__spinner {
@@ -183,16 +179,16 @@ html:not([data-has-hero]):has(.playground-page) {
 
 .playground__shortcut {
   margin-inline-start: auto;
-  color: var(--docs-muted);
+  color: var(--playground-muted);
   font-size: 0.875rem;
 }
 
 .playground__shortcut kbd {
   padding: 0.2rem 0.4rem;
-  border: 1px solid var(--docs-border);
+  border: 1px solid var(--playground-border);
   border-radius: 0.35rem;
-  color: var(--sl-color-white);
-  background: var(--docs-surface);
+  color: var(--playground-text);
+  background: var(--playground-surface);
   font: inherit;
 }
 
@@ -201,7 +197,7 @@ html:not([data-has-hero]):has(.playground-page) {
   align-items: center;
   gap: 0.45rem;
   min-block-size: 2.75rem;
-  color: var(--sl-color-white);
+  color: var(--playground-text);
   font-size: 0.875rem;
   font-weight: 700;
 }
@@ -210,13 +206,13 @@ html:not([data-has-hero]):has(.playground-page) {
   content: '';
   inline-size: 0.55rem;
   block-size: 0.55rem;
-  border: 1px solid var(--docs-accent);
+  border: 1px solid var(--playground-accent);
   border-radius: 999px;
-  background: var(--docs-accent-soft);
+  background: var(--playground-accent-soft);
 }
 
 .playground__toolbar[aria-busy='true'] .playground__status::before {
-  background: var(--docs-accent);
+  background: var(--playground-accent);
 }
 
 .playground__sandbox,
@@ -247,16 +243,16 @@ html:not([data-has-hero]):has(.playground-page) {
 
 .playground__region {
   overflow: hidden;
-  background: var(--docs-surface-raised);
+  background: var(--playground-surface-raised);
 }
 
 .playground__region + .playground__region {
-  border-block-start: 1px solid var(--docs-border);
+  border-block-start: 1px solid var(--playground-border);
 }
 
 .playground__region h2 {
   padding: 0.7rem 1rem;
-  border-block-end: 1px solid var(--docs-border);
+  border-block-end: 1px solid var(--playground-border);
 }
 
 .playground__editor {
@@ -288,14 +284,14 @@ astro-island[ssr] .playground .sp-syntax-comment {
 
 .playground__editor:focus-within {
   outline: 3px solid
-    color-mix(in srgb, var(--docs-accent) 72%, var(--sl-color-white));
+    color-mix(in srgb, var(--playground-accent) 72%, var(--playground-text));
   outline-offset: -3px;
 }
 
 .playground__editor .monaco-editor,
 .playground__editor .monaco-editor .margin,
 .playground__editor .monaco-editor-background {
-  background: var(--docs-surface-raised);
+  background: var(--playground-surface-raised);
 }
 
 .playground__console {
@@ -307,15 +303,15 @@ astro-island[ssr] .playground .sp-syntax-comment {
   block-size: 100%;
   overflow: auto;
   padding: 0.875rem 1rem;
-  color: var(--sl-color-white);
-  font-family: var(--__sl-font-mono);
+  color: var(--playground-text);
+  font-family: var(--playground-font-mono);
   font-size: 0.875rem;
   line-height: 1.6;
   white-space: pre-wrap;
 }
 
 .playground__console-empty {
-  color: var(--docs-muted);
+  color: var(--playground-muted);
 }
 
 .playground__runtime-client {
@@ -344,7 +340,7 @@ astro-island[ssr] .playground .sp-syntax-comment {
 
 .playground :is(button, select):focus-visible {
   outline: 3px solid
-    color-mix(in srgb, var(--docs-accent) 72%, var(--sl-color-white));
+    color-mix(in srgb, var(--playground-accent) 72%, var(--playground-text));
   outline-offset: 2px;
 }
 

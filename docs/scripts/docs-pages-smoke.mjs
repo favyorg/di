@@ -227,14 +227,76 @@ const closeMonacoHover = async (page) => {
 };
 
 const checkPlayground = async (page) => {
-  await page.goto(`${origin}/playground/`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${origin}/guides/introduction/`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await page.evaluate(() => localStorage.setItem('starlight-theme', 'light'));
+
+  const playgroundLink = page
+    .locator('.sidebar-pane a[href="/playground/"]')
+    .filter({ hasText: 'Playground' })
+    .first();
+  assert.equal(await playgroundLink.count(), 1);
+  await playgroundLink.click();
+  await page.waitForURL(`${origin}/playground/`);
+
+  assert.equal(await page.title(), 'Playground | @favy/di');
   assert.equal(
-    (await page.locator('.docs-page-label').textContent())?.trim(),
-    'Playground',
+    await page.locator('meta[name="description"]').getAttribute('content'),
+    'Edit and run focused @favy/di examples directly in the browser.',
   );
   assert.equal(
-    (await page.locator('.docs-page-title h1').textContent())?.trim(),
-    'Playground',
+    await page.locator('link[rel="canonical"]').getAttribute('href'),
+    'https://di.favy.dev/playground/',
+  );
+  assert.equal(
+    await page.locator('link[rel~="icon"][href="/favicon.svg"]').count(),
+    1,
+  );
+
+  for (const selector of [
+    '.docs-page-title',
+    '.sidebar-pane',
+    'site-search',
+    'starlight-menu-button',
+    'starlight-toc',
+    'mobile-starlight-toc',
+    '.pagination-links',
+  ]) {
+    assert.equal(
+      await page.locator(selector).count(),
+      0,
+      `Standalone playground unexpectedly rendered ${selector}`,
+    );
+  }
+
+  const header = page.getByRole('banner');
+  assert.equal(await header.count(), 1);
+  assert.equal(
+    await header
+      .getByRole('link', { name: '@favy/di', exact: true })
+      .getAttribute('href'),
+    '/',
+  );
+  assert.equal(
+    await header
+      .getByRole('link', { name: 'Docs', exact: true })
+      .getAttribute('href'),
+    '/guides/introduction/',
+  );
+  assert.equal(
+    await header
+      .getByRole('link', { name: 'GitHub', exact: true })
+      .getAttribute('href'),
+    'https://github.com/favyorg/di',
+  );
+  assert.equal(
+    await page.getByRole('heading', { level: 1, name: 'Playground' }).count(),
+    1,
+  );
+  assert.equal(
+    await page.locator('main[aria-label="TypeScript playground"]').count(),
+    1,
   );
 
   const exampleNames = [
