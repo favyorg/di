@@ -4,6 +4,8 @@
     "start": "astro dev",
     "build": "astro check && astro build",
     "preview": "astro preview",
+    "test": "jest --runInBand",
+    "smoke": "node scripts/run-docs-smoke.mjs",
     "astro": "astro"
   },
   "dependencies": {

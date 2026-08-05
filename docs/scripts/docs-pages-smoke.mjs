@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
 const origin = process.env.DOCS_URL ?? 'http://127.0.0.1:4321';
-const browser = await chromium.launch({ channel: 'chrome' });
+const browser = await chromium.launch();
 const context = await browser.newContext({
   viewport: { width: 1440, height: 1000 },
   colorScheme: 'dark',
@@ -342,6 +342,37 @@ const closeMonacoHover = async (page) => {
 };
 
 const checkPlayground = async (page) => {
+  const coldRequests = [];
+  const coldResponses = [];
+  let rejectFrameFailure;
+  const frameFailure = new Promise((_, reject) => {
+    rejectFrameFailure = reject;
+  });
+  void frameFailure.catch(() => undefined);
+  const collectColdRequest = (request) => coldRequests.push(request);
+  const collectColdResponse = (response) => {
+    coldResponses.push(response);
+    const url = new URL(response.url());
+    if (url.pathname !== '/frame.html' || response.status() < 400) return;
+    void response.allHeaders().then(
+      (headers) =>
+        rejectFrameFailure(
+          new Error(
+            `Playground frame failed before readiness: ${response.url()} ` +
+              `${response.status()} ${JSON.stringify(headers)}`
+          )
+        ),
+      (error) =>
+        rejectFrameFailure(
+          new Error(
+            `Could not read failed frame headers for ${response.url()}: ${error}`
+          )
+        )
+    );
+  };
+  page.on('request', collectColdRequest);
+  page.on('response', collectColdResponse);
+
   await page.goto(`${origin}/guides/introduction/`, {
     waitUntil: 'domcontentloaded',
   });
@@ -470,7 +501,92 @@ const checkPlayground = async (page) => {
   await assertMinimumTargetSize(reset, 'Reset example');
   await assertMinimumTargetSize(run, 'Run code');
   const status = page.getByRole('status');
-  await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
+  try {
+    await Promise.race([
+      status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 }),
+      frameFailure,
+    ]);
+  } finally {
+    page.off('request', collectColdRequest);
+    page.off('response', collectColdResponse);
+  }
+
+  const runtime = page.locator('iframe.playground__runtime-client');
+  const runtimeSource = await runtime.getAttribute('src');
+  assert.ok(runtimeSource, 'Playground runtime iframe should have a source');
+  const viteOrigin = new URL(runtimeSource).origin;
+  const safeDecode = (value) => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+  const remoteFavyRequests = coldRequests
+    .map((request) => request.url())
+    .filter((requestUrl) => {
+      const url = new URL(requestUrl);
+      const isRegistryOrJsdelivr =
+        url.hostname === 'registry.npmjs.org' ||
+        url.hostname === 'cdn.jsdelivr.net' ||
+        url.hostname.endsWith('.jsdelivr.net');
+      return (
+        isRegistryOrJsdelivr && safeDecode(requestUrl).includes('@favy/di')
+      );
+    });
+  assert.deepEqual(
+    remoteFavyRequests,
+    [],
+    'The cold playground should load @favy/di from embedded local sources'
+  );
+
+  const activeViteRequests = coldRequests.filter(
+    (request) => new URL(request.url()).origin === viteOrigin
+  );
+  assert.ok(
+    activeViteRequests.some(
+      (request) => new URL(request.url()).pathname === '/favy-di/index.ts'
+    ),
+    `Missing local @favy/di entry request from ${viteOrigin}`
+  );
+  const frameRequests = activeViteRequests.filter(
+    (request) => new URL(request.url()).pathname === '/frame.html'
+  );
+  const localModuleRequests = activeViteRequests.filter((request) => {
+    const { pathname } = new URL(request.url());
+    return (
+      request.resourceType() === 'script' &&
+      (pathname === '/warmup.ts' ||
+        pathname === '/execution.ts' ||
+        pathname.startsWith('/favy-di/'))
+    );
+  });
+  assert.ok(frameRequests.length > 0, 'Missing opaque frame request');
+  assert.ok(localModuleRequests.length > 0, 'Missing local module requests');
+  for (const request of localModuleRequests) {
+    const requestHeaders = await request.allHeaders();
+    assert.equal(
+      requestHeaders.origin,
+      'null',
+      `Expected Origin: null for ${request.url()}`
+    );
+  }
+  for (const request of [...frameRequests, ...localModuleRequests]) {
+    const response = coldResponses.find(
+      (candidate) => candidate.request() === request
+    );
+    assert.ok(response, `Missing response for ${request.url()}`);
+    assert.ok(
+      response.status() >= 200 && response.status() < 300,
+      `Unexpected ${response.status()} for ${request.url()}`
+    );
+    assert.equal(
+      await response.headerValue('access-control-allow-origin'),
+      '*',
+      `Missing Access-Control-Allow-Origin: * for ${request.url()}`
+    );
+  }
+
   const shellControls = [
     [header.getByRole('link', { name: '@favy/di', exact: true }), 'Brand'],
     [header.getByRole('link', { name: 'Docs', exact: true }), 'Docs'],
@@ -514,7 +630,6 @@ const checkPlayground = async (page) => {
     false
   );
 
-  const runtime = page.locator('iframe.playground__runtime-client');
   await playgroundInput.focus();
   await page.keyboard.press(
     process.platform === 'darwin' ? 'Meta+End' : 'Control+End'
@@ -626,8 +741,211 @@ const checkPlayground = async (page) => {
   });
   await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
 
+  const externalSource = `import camelCase from 'lodash/camelCase';
+
+let parentBlocked = false;
+try {
+  void parent.document;
+} catch {
+  parentBlocked = true;
+}
+console.log(camelCase('opaque module graph'), parentBlocked, self.origin);
+await new Promise((resolve) => setTimeout(resolve, 750));`;
+  const externalRequests = [];
+  const externalResponses = [];
+  let rejectExternalFrameFailure;
+  const externalFrameFailure = new Promise((_, reject) => {
+    rejectExternalFrameFailure = reject;
+  });
+  void externalFrameFailure.catch(() => undefined);
+  const collectExternalRequest = (request) => externalRequests.push(request);
+  const collectExternalResponse = (response) => {
+    externalResponses.push(response);
+    const url = new URL(response.url());
+    if (url.pathname !== '/frame.html' || response.status() < 400) return;
+    void response.allHeaders().then(
+      (headers) =>
+        rejectExternalFrameFailure(
+          new Error(
+            `External playground frame failed: ${response.url()} ` +
+              `${response.status()} ${JSON.stringify(headers)}`
+          )
+        ),
+      (error) =>
+        rejectExternalFrameFailure(
+          new Error(
+            `Could not read failed external frame headers for ${response.url()}: ${error}`
+          )
+        )
+    );
+  };
+  page.on('request', collectExternalRequest);
+  page.on('response', collectExternalResponse);
+
+  let externalViteOrigin;
+  let externalRuntimeHandle;
+  let executionFrameHandle;
+  try {
+    await playgroundInput.focus();
+    await page.keyboard.press(
+      process.platform === 'darwin' ? 'Meta+A' : 'Control+A'
+    );
+    await page.keyboard.insertText(externalSource);
+    await status.getByText('Checking imports', { exact: true }).waitFor();
+    await Promise.race([
+      status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 }),
+      externalFrameFailure,
+    ]);
+
+    const externalRuntimeSource = await runtime.getAttribute('src');
+    assert.ok(
+      externalRuntimeSource,
+      'External package runtime iframe should have a source'
+    );
+    externalViteOrigin = new URL(externalRuntimeSource).origin;
+    externalRuntimeHandle = await runtime.elementHandle();
+    const externalRuntimeFrame = await externalRuntimeHandle?.contentFrame();
+    assert.ok(externalRuntimeFrame, 'Missing outer Sandpack runtime frame');
+    const executionFrameElement = externalRuntimeFrame.locator(
+      'iframe[data-favy-playground-execution]'
+    );
+    await run.click();
+    await executionFrameElement.waitFor({ state: 'attached', timeout: 10_000 });
+    assert.equal(
+      await executionFrameElement.getAttribute('sandbox'),
+      'allow-scripts'
+    );
+    executionFrameHandle = await executionFrameElement.elementHandle();
+    const executionFrame = await executionFrameHandle?.contentFrame();
+    assert.ok(executionFrame, 'Missing nested opaque execution frame');
+
+    await page.waitForFunction(
+      () => {
+        const output = document.querySelector(
+          '[aria-label="Console output"]'
+        )?.textContent;
+        return (
+          output?.includes('opaqueModuleGraph') &&
+          output.includes('true') &&
+          output.includes('null')
+        );
+      },
+      undefined,
+      { timeout: 60_000 }
+    );
+    const frameIsolation = await executionFrame.evaluate(() => {
+      let parentBlocked = false;
+      try {
+        void parent.document;
+      } catch {
+        parentBlocked = true;
+      }
+      return { origin: self.origin, parentBlocked };
+    });
+    assert.deepEqual(frameIsolation, { origin: 'null', parentBlocked: true });
+    assert.equal(await executionFrameElement.count(), 1);
+    await Promise.race([
+      status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 }),
+      externalFrameFailure,
+    ]);
+  } finally {
+    page.off('request', collectExternalRequest);
+    page.off('response', collectExternalResponse);
+    if (executionFrameHandle) {
+      await executionFrameHandle.dispose().catch(() => undefined);
+    }
+    if (externalRuntimeHandle) {
+      await externalRuntimeHandle.dispose().catch(() => undefined);
+    }
+  }
+
+  const externalFrameRequests = externalRequests.filter((request) => {
+    const url = new URL(request.url());
+    return url.origin === externalViteOrigin && url.pathname === '/frame.html';
+  });
+  const externalModuleRequests = externalRequests.filter((request) => {
+    const url = new URL(request.url());
+    return (
+      url.origin === externalViteOrigin &&
+      request.resourceType() === 'script' &&
+      (url.pathname === '/warmup.ts' ||
+        url.pathname === '/execution.ts' ||
+        url.pathname.startsWith('/favy-di/') ||
+        url.pathname.startsWith('/node_modules/'))
+    );
+  });
+  assert.ok(
+    externalFrameRequests.length > 0,
+    'Missing external opaque frame request'
+  );
+  assert.ok(
+    externalModuleRequests.some(
+      (request) => new URL(request.url()).pathname === '/execution.ts'
+    ),
+    'Missing external execution module request'
+  );
+  assert.ok(
+    externalModuleRequests.some((request) =>
+      new URL(request.url()).pathname.startsWith('/node_modules/')
+    ),
+    'Missing installed lodash module request'
+  );
+  for (const request of externalModuleRequests) {
+    assert.equal(
+      (await request.allHeaders()).origin,
+      'null',
+      `Expected Origin: null for ${request.url()}`
+    );
+  }
+  for (const request of [...externalFrameRequests, ...externalModuleRequests]) {
+    const response = externalResponses.find(
+      (candidate) => candidate.request() === request
+    );
+    assert.ok(response, `Missing response for ${request.url()}`);
+    assert.ok(
+      response.status() >= 200 && response.status() < 300,
+      `Unexpected ${response.status()} for ${request.url()}`
+    );
+    assert.equal(
+      await response.headerValue('access-control-allow-origin'),
+      '*',
+      `Missing Access-Control-Allow-Origin: * for ${request.url()}`
+    );
+  }
+
+  await reset.click();
+  await page.waitForFunction(() =>
+    document
+      .querySelector('.playground__editor .monaco-editor .view-lines')
+      ?.textContent?.includes('Ada!')
+  );
+  await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
+
   const initialRuntime = await runtime.elementHandle();
   assert.ok(initialRuntime, 'Playground runtime iframe should be attached');
+  const initialRuntimeFrame = await initialRuntime.contentFrame();
+  assert.ok(
+    initialRuntimeFrame,
+    'Playground runtime document should be attached'
+  );
+  const warmRuntimeSource = await runtime.getAttribute('src');
+  assert.ok(warmRuntimeSource, 'Warm playground runtime should have a source');
+  const warmViteOrigin = new URL(warmRuntimeSource).origin;
+  const runtimeDocumentSentinel = `smoke-${Date.now()}`;
+  const hostDocumentSentinel = `host-${Date.now()}`;
+  await initialRuntimeFrame.evaluate((sentinel) => {
+    globalThis.__favyPlaygroundSmokeDocument = sentinel;
+  }, runtimeDocumentSentinel);
+  await page.evaluate((sentinel) => {
+    globalThis.__favyPlaygroundSmokeHostDocument = sentinel;
+  }, hostDocumentSentinel);
+  let runtimeNavigationCount = 0;
+  let hostNavigationCount = 0;
+  const countRuntimeNavigation = (frame) => {
+    if (frame === initialRuntimeFrame) runtimeNavigationCount += 1;
+    if (frame === page.mainFrame()) hostNavigationCount += 1;
+  };
+  page.on('framenavigated', countRuntimeNavigation);
   const warmRunRequests = [[], []];
   let activeWarmRun = -1;
   const collectWarmRunRequest = (request) => {
@@ -717,6 +1035,44 @@ const checkPlayground = async (page) => {
         true,
         `Run ${runIndex + 1} replaced the outer runtime iframe`
       );
+      const currentRuntimeHandle = await runtime.elementHandle();
+      try {
+        const currentRuntimeFrame = await currentRuntimeHandle?.contentFrame();
+        assert.equal(
+          currentRuntimeFrame,
+          initialRuntimeFrame,
+          `Run ${runIndex + 1} replaced the outer runtime frame`
+        );
+        assert.equal(
+          await currentRuntimeFrame.evaluate(
+            (sentinel) => globalThis.__favyPlaygroundSmokeDocument === sentinel,
+            runtimeDocumentSentinel
+          ),
+          true,
+          `Run ${runIndex + 1} reloaded the outer runtime document`
+        );
+      } finally {
+        if (currentRuntimeHandle) await currentRuntimeHandle.dispose();
+      }
+      assert.equal(
+        runtimeNavigationCount,
+        0,
+        `Run ${runIndex + 1} navigated the outer runtime document`
+      );
+      assert.equal(
+        await page.evaluate(
+          (sentinel) =>
+            globalThis.__favyPlaygroundSmokeHostDocument === sentinel,
+          hostDocumentSentinel
+        ),
+        true,
+        `Run ${runIndex + 1} reloaded the host playground document`
+      );
+      assert.equal(
+        hostNavigationCount,
+        0,
+        `Run ${runIndex + 1} navigated the host playground document`
+      );
       await page.evaluate(
         () => new Promise((resolve) => requestAnimationFrame(resolve))
       );
@@ -725,6 +1081,17 @@ const checkPlayground = async (page) => {
   } finally {
     activeWarmRun = -1;
     page.off('request', collectWarmRunRequest);
+    page.off('framenavigated', countRuntimeNavigation);
+    await initialRuntimeFrame
+      .evaluate(() => {
+        delete globalThis.__favyPlaygroundSmokeDocument;
+      })
+      .catch(() => undefined);
+    await page
+      .evaluate(() => {
+        delete globalThis.__favyPlaygroundSmokeHostDocument;
+      })
+      .catch(() => undefined);
     await initialRuntime.dispose();
   }
   for (const [runIndex, requests] of warmRunRequests.entries()) {
@@ -746,6 +1113,26 @@ const checkPlayground = async (page) => {
         decodeURIComponent(`${pathname}${search}`)
       );
     });
+    const graphRequests = requests
+      .map((request) => {
+        const url = new URL(request);
+        return {
+          hostname: url.hostname,
+          key: `${url.origin}${safeDecode(url.pathname)}`,
+          origin: url.origin,
+          pathname: safeDecode(url.pathname),
+        };
+      })
+      .filter(
+        ({ hostname, origin: requestOrigin, pathname }) =>
+          hostname === 'registry.npmjs.org' ||
+          hostname === 'cdn.jsdelivr.net' ||
+          hostname.endsWith('.jsdelivr.net') ||
+          (requestOrigin === warmViteOrigin &&
+            (pathname.startsWith('/favy-di/') ||
+              pathname.startsWith('/node_modules/')))
+      )
+      .map(({ key }) => key);
     assert.deepEqual(
       registryRequests,
       [],
@@ -760,6 +1147,11 @@ const checkPlayground = async (page) => {
       toolingRequests,
       [],
       `Warm Run ${runIndex + 1} should not load Monaco or workers`
+    );
+    assert.deepEqual(
+      graphRequests,
+      [],
+      `Warm Run ${runIndex + 1} repeated package or local-module graph requests`
     );
   }
   assert.ok(
