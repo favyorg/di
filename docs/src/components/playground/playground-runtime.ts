@@ -3,6 +3,7 @@ import type {
   SandpackBundlerFile,
   SandpackMessage,
 } from '@codesandbox/sandpack-client';
+import { isNpmPackageName } from './playground-dependencies';
 
 export const RUN_COMPLETE_PREFIX = '__FAVY_PLAYGROUND_DONE__:';
 export const RUN_ERROR_PREFIX = '__FAVY_PLAYGROUND_ERROR__:';
@@ -46,13 +47,10 @@ const CONSOLE_METHODS = new Set([
   'warn',
 ]);
 
-const PACKAGE_NAME =
-  /^(?:@[-A-Za-z\d][A-Za-z\d._~-]*\/)?[-A-Za-z\d][A-Za-z\d._~-]*$/;
-
 export const warmupSource = (dependencies: readonly string[]): string =>
   dependencies
     .map((dependency) => {
-      if (dependency.length > 214 || !PACKAGE_NAME.test(dependency)) {
+      if (!isNpmPackageName(dependency)) {
         throw new TypeError('Warmup dependencies must be npm package names.');
       }
       return `import ${JSON.stringify(dependency)};`;

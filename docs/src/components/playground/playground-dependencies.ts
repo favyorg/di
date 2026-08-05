@@ -1,15 +1,22 @@
 import { parse as parseTypeScript, type ParserOptions } from '@babel/parser';
 import jsTokens, { type Token } from 'js-tokens';
 
-export type PlaygroundDependencyVersion = '3.0.0' | 'latest';
+export type PlaygroundDependencyVersion = 'local' | 'latest';
 export type PlaygroundDependencies = Readonly<
   Record<string, PlaygroundDependencyVersion>
 >;
 export type DependencyResolution =
-  | { readonly ok: true; readonly dependencies: PlaygroundDependencies }
-  | { readonly ok: false };
+  | { readonly kind: 'ready'; readonly dependencies: PlaygroundDependencies }
+  | { readonly kind: 'incomplete' }
+  | { readonly kind: 'unsupported'; readonly specifier: string };
 
 const URI_SCHEME = /^[A-Za-z][A-Za-z\d+.-]*:/;
+const PACKAGE_NAME =
+  /^(?:@[-A-Za-z\d][A-Za-z\d._~-]*\/)?[-A-Za-z\d][A-Za-z\d._~-]*$/;
+
+export const isNpmPackageName = (name: string): boolean =>
+  name.length <= 214 && PACKAGE_NAME.test(name);
+
 const PARSER_OPTIONS: ParserOptions = {
   allowUndeclaredExports: true,
   createImportExpressions: true,
@@ -128,7 +135,7 @@ const parseSpecifiers = (source: string): string[] | undefined => {
 const exportDependencyIntent = (
   tokens: SourceToken[],
   startIndex: number,
-  endIndex: number,
+  endIndex: number
 ): boolean => {
   let clauseIndex = nextCodeToken(tokens, startIndex);
   if (tokens[clauseIndex]?.token.value === 'type') {
@@ -156,7 +163,7 @@ const staticStatementSpecifiers = (
   source: string,
   tokens: SourceToken[],
   startIndex: number,
-  kind: 'export' | 'import',
+  kind: 'export' | 'import'
 ): string[] | undefined => {
   const start = tokens[startIndex].start;
   let nesting = 0;
@@ -195,7 +202,7 @@ const staticStatementSpecifiers = (
 const hasDirectLiteralArgument = (
   tokens: SourceToken[],
   openingIndex: number,
-  closingIndex: number,
+  closingIndex: number
 ): boolean => {
   let nesting = 0;
   let firstArgument = true;
@@ -231,7 +238,7 @@ const hasDirectLiteralArgument = (
 const dynamicImportSpecifiers = (
   source: string,
   tokens: SourceToken[],
-  importIndex: number,
+  importIndex: number
 ): string[] | undefined => {
   const openingIndex = nextCodeToken(tokens, importIndex);
   let nesting = 0;
@@ -244,16 +251,23 @@ const dynamicImportSpecifiers = (
       // syntax errors in runtime-computed imports after the user presses Run.
       if (!hasDirectLiteralArgument(tokens, openingIndex, index)) return [];
       return parseSpecifiers(
-        source.slice(tokens[importIndex].start, current.end),
+        source.slice(tokens[importIndex].start, current.end)
       );
     }
   }
   return undefined;
 };
 
-const moduleSpecifiers = (source: string): string[] | undefined => {
+type ModuleSpecifiers = Readonly<{
+  specifiers: readonly string[];
+  incomplete: boolean;
+}>;
+
+const moduleSpecifiers = (source: string): ModuleSpecifiers => {
   const completeProgram = parseSpecifiers(source);
-  if (completeProgram) return completeProgram;
+  if (completeProgram) {
+    return { specifiers: completeProgram, incomplete: false };
+  }
 
   const tokens = tokensFor(source);
   const names: string[] = [];
@@ -276,7 +290,7 @@ const moduleSpecifiers = (source: string): string[] | undefined => {
       current.token.value === 'import' && next === '(' && !propertyAccess;
     if (dynamicImport) {
       const specifiers = dynamicImportSpecifiers(source, tokens, index);
-      if (!specifiers) return undefined;
+      if (!specifiers) return { specifiers: names, incomplete: true };
       names.push(...specifiers);
     } else if (topLevel && statementStart) {
       const staticModule =
@@ -290,9 +304,9 @@ const moduleSpecifiers = (source: string): string[] | undefined => {
           source,
           tokens,
           index,
-          current.token.value === 'export' ? 'export' : 'import',
+          current.token.value === 'export' ? 'export' : 'import'
         );
-        if (!specifiers) return undefined;
+        if (!specifiers) return { specifiers: names, incomplete: true };
         names.push(...specifiers);
       }
     }
@@ -308,49 +322,57 @@ const moduleSpecifiers = (source: string): string[] | undefined => {
       (topLevel && current.token.value === ';') || closedTopLevelBlock;
     previousCode = current.token.value;
   }
-  return names;
+  return { specifiers: names, incomplete: false };
 };
 
-const packageName = (specifier: string): string | undefined => {
+type PackageSpecifier =
+  | { readonly kind: 'ignored' }
+  | { readonly kind: 'package'; readonly name: string }
+  | { readonly kind: 'unsupported'; readonly specifier: string };
+
+const classifySpecifier = (specifier: string): PackageSpecifier => {
   if (
     specifier.startsWith('.') ||
     specifier.startsWith('/') ||
     specifier.startsWith('#') ||
     URI_SCHEME.test(specifier)
   ) {
-    return undefined;
+    return { kind: 'ignored' };
   }
 
   const parts = specifier.split('/');
-  return specifier.startsWith('@')
+  const name = specifier.startsWith('@')
     ? parts.length >= 2
       ? `${parts[0]}/${parts[1]}`
-      : undefined
-    : parts[0] || undefined;
+      : specifier
+    : parts[0];
+  return isNpmPackageName(name)
+    ? { kind: 'package', name }
+    : { kind: 'unsupported', specifier };
 };
 
 export const resolvePlaygroundDependencies = (
-  source: string,
+  source: string
 ): DependencyResolution => {
-  const specifiers = moduleSpecifiers(source);
-  if (!specifiers) return { ok: false };
-  try {
-    const names = specifiers
-      .map(packageName)
-      .filter((name): name is string => name !== undefined);
-    const dependencies = Object.fromEntries(
-      [...new Set(names)]
-        .sort((left, right) => left.localeCompare(right))
-        .map((name) => [name, name === '@favy/di' ? '3.0.0' : 'latest']),
-    ) as Record<string, PlaygroundDependencyVersion>;
-    return { ok: true, dependencies };
-  } catch {
-    return { ok: false };
+  const { specifiers, incomplete } = moduleSpecifiers(source);
+  const packages: string[] = [];
+  for (const specifier of specifiers) {
+    const classified = classifySpecifier(specifier);
+    if (classified.kind === 'unsupported') return classified;
+    if (classified.kind === 'package') packages.push(classified.name);
   }
+  if (incomplete) return { kind: 'incomplete' };
+
+  const dependencies = Object.fromEntries(
+    [...new Set(packages)]
+      .sort((left, right) => left.localeCompare(right))
+      .map((name) => [name, name === '@favy/di' ? 'local' : 'latest'])
+  ) as Record<string, PlaygroundDependencyVersion>;
+  return { kind: 'ready', dependencies };
 };
 
 export const dependencySignature = (
-  dependencies: PlaygroundDependencies,
+  dependencies: PlaygroundDependencies
 ): string =>
   Object.entries(dependencies)
     .sort(([left], [right]) => left.localeCompare(right))

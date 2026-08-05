@@ -15,20 +15,17 @@ describe('resolvePlaygroundDependencies', () => {
     `);
 
     expect(resolution).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: {
-        '@favy/di': '3.0.0',
+        '@favy/di': 'local',
         '@scope/pkg': 'latest',
         lodash: 'latest',
         zod: 'latest',
       },
     });
-    expect(resolution.ok && Object.keys(resolution.dependencies)).toEqual([
-      '@favy/di',
-      '@scope/pkg',
-      'lodash',
-      'zod',
-    ]);
+    expect(
+      resolution.kind === 'ready' && Object.keys(resolution.dependencies)
+    ).toEqual(['@favy/di', '@scope/pkg', 'lodash', 'zod']);
   });
 
   it.each([
@@ -44,7 +41,7 @@ describe('resolvePlaygroundDependencies', () => {
     "import 'ftp://example.test/pkg';",
   ])('ignores non-package specifiers in %s', (source) => {
     expect(resolvePlaygroundDependencies(source)).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: {},
     });
   });
@@ -52,7 +49,9 @@ describe('resolvePlaygroundDependencies', () => {
   it.each(['import {', "import value from '", "void import('pkg"])(
     'reports incomplete import syntax without inventing dependencies',
     (source) =>
-      expect(resolvePlaygroundDependencies(source)).toEqual({ ok: false }),
+      expect(resolvePlaygroundDependencies(source)).toEqual({
+        kind: 'incomplete',
+      })
   );
 
   it.each([
@@ -69,7 +68,9 @@ describe('resolvePlaygroundDependencies', () => {
     "export { value } 'lodash';",
     "export { value as } from 'lodash';",
   ])('rejects malformed complete import syntax in %s', (source) => {
-    expect(resolvePlaygroundDependencies(source)).toEqual({ ok: false });
+    expect(resolvePlaygroundDependencies(source)).toEqual({
+      kind: 'incomplete',
+    });
   });
 
   it.each([
@@ -78,9 +79,9 @@ describe('resolvePlaygroundDependencies', () => {
     'export { value } garbage;',
   ])('lets Sandpack report malformed local export syntax in %s', (source) => {
     expect(
-      resolvePlaygroundDependencies(`${source} import 'later-package';`),
+      resolvePlaygroundDependencies(`${source} import 'later-package';`)
     ).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: { 'later-package': 'latest' },
     });
   });
@@ -90,7 +91,7 @@ describe('resolvePlaygroundDependencies', () => {
     "export default from + 'package' + ;",
   ])('does not mistake a local export for a re-export in %s', (source) => {
     expect(resolvePlaygroundDependencies(`${source} import 'later';`)).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: { later: 'latest' },
     });
   });
@@ -104,9 +105,9 @@ describe('resolvePlaygroundDependencies', () => {
         import defaultValue, * as helpers from 'combined';
         export { Source as Target } from 'exports';
         export * as namespace from 'namespace';
-      `),
+      `)
     ).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: {
         combined: 'latest',
         exports: 'latest',
@@ -124,9 +125,9 @@ describe('resolvePlaygroundDependencies', () => {
         import \u0066oo from 'escaped-default';
         import { value as \u0066oo } from 'escaped-named';
         export { value as \u0066oo } from 'escaped-export';
-      `),
+      `)
     ).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: {
         'escaped-default': 'latest',
         'escaped-export': 'latest',
@@ -143,10 +144,10 @@ describe('resolvePlaygroundDependencies', () => {
     'does not treat non-import syntax as dependency syntax in %s',
     (source, dependencies) => {
       expect(resolvePlaygroundDependencies(source)).toEqual({
-        ok: true,
+        kind: 'ready',
         dependencies,
       });
-    },
+    }
   );
 
   it('ignores module-like text in strings, comments, templates, and regular expressions', () => {
@@ -160,26 +161,26 @@ describe('resolvePlaygroundDependencies', () => {
         const object = { import: () => undefined };
         object.import('property-package');
         const broken = ;
-      `),
-    ).toEqual({ ok: true, dependencies: {} });
+      `)
+    ).toEqual({ kind: 'ready', dependencies: {} });
   });
 
   it('finds imports inside template interpolations', () => {
     expect(
       resolvePlaygroundDependencies(
-        "const value = `${await import('template-package')}`;",
-      ),
+        "const value = `${await import('template-package')}`;"
+      )
     ).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: { 'template-package': 'latest' },
     });
   });
 
   it('finds a static dynamic-import template', () => {
     expect(
-      resolvePlaygroundDependencies('void import(`template-package`);'),
+      resolvePlaygroundDependencies('void import(`template-package`);')
     ).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: { 'template-package': 'latest' },
     });
   });
@@ -194,9 +195,9 @@ describe('resolvePlaygroundDependencies', () => {
 
         void import('dynamic-package');
         const broken = ;
-      `),
+      `)
     ).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: {
         'dynamic-package': 'latest',
         'multiline-package': 'latest',
@@ -209,9 +210,9 @@ describe('resolvePlaygroundDependencies', () => {
       resolvePlaygroundDependencies(`
         export { value }
         from 'multiline-export';
-      `),
+      `)
     ).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: { 'multiline-export': 'latest' },
     });
   });
@@ -224,19 +225,21 @@ describe('resolvePlaygroundDependencies', () => {
     'keeps a line-broken re-export despite later invalid code in %s',
     (source) => {
       expect(
-        resolvePlaygroundDependencies(`${source}\nconst broken = ;`),
+        resolvePlaygroundDependencies(`${source}\nconst broken = ;`)
       ).toEqual({
-        ok: true,
+        kind: 'ready',
         dependencies: { 'line-broken-export': 'latest' },
       });
-    },
+    }
   );
 
   it.each([
     "import value from 'package'\nwith { type: };",
     "export * from 'package'\nwith { type: };",
   ])('rejects malformed multiline import attributes in %s', (source) => {
-    expect(resolvePlaygroundDependencies(source)).toEqual({ ok: false });
+    expect(resolvePlaygroundDependencies(source)).toEqual({
+      kind: 'incomplete',
+    });
   });
 
   it('does not confuse methods named import with dynamic imports', () => {
@@ -246,24 +249,24 @@ describe('resolvePlaygroundDependencies', () => {
         class Service { import(value: string): void {} }
         const service = { import(): void {} };
         const broken = ;
-      `),
-    ).toEqual({ ok: true, dependencies: {} });
+      `)
+    ).toEqual({ kind: 'ready', dependencies: {} });
   });
 
   it('finds declarations after a block despite a later syntax error', () => {
     expect(
       resolvePlaygroundDependencies(
-        "function ready() {} import 'package'; const broken = ;",
-      ),
+        "function ready() {} import 'package'; const broken = ;"
+      )
     ).toEqual({
-      ok: true,
+      kind: 'ready',
       dependencies: { package: 'latest' },
     });
   });
 
   it('creates a stable provider key independent of insertion order', () => {
-    expect(dependencySignature({ zod: 'latest', '@favy/di': '3.0.0' })).toBe(
-      '@favy/di@3.0.0|zod@latest',
+    expect(dependencySignature({ zod: 'latest', '@favy/di': 'local' })).toBe(
+      '@favy/di@local|zod@latest'
     );
   });
 
@@ -275,10 +278,10 @@ describe('resolvePlaygroundDependencies', () => {
     'lets Sandpack report non-static dynamic-import errors in %s',
     (source) => {
       expect(resolvePlaygroundDependencies(source)).toEqual({
-        ok: true,
+        kind: 'ready',
         dependencies: {},
       });
-    },
+    }
   );
 
   it.each(["'parenthesized-package'", '`parenthesized-template`'])(
@@ -286,16 +289,35 @@ describe('resolvePlaygroundDependencies', () => {
     (specifier) => {
       expect(
         resolvePlaygroundDependencies(
-          `void import(((${specifier}))); const broken = ;`,
-        ),
+          `void import(((${specifier}))); const broken = ;`
+        )
       ).toEqual({
-        ok: true,
+        kind: 'ready',
         dependencies: {
           [specifier.includes('template')
             ? 'parenthesized-template'
             : 'parenthesized-package']: 'latest',
         },
       });
-    },
+    }
   );
+
+  it('returns the first unsupported bare specifier in source order', () => {
+    expect(
+      resolvePlaygroundDependencies("import '_hidden'; import 'pkg?raw';")
+    ).toEqual({ kind: 'unsupported', specifier: '_hidden' });
+  });
+
+  it('distinguishes incomplete edits from unsupported bare specifiers', () => {
+    expect(resolvePlaygroundDependencies("import value from '")).toEqual({
+      kind: 'incomplete',
+    });
+    expect(resolvePlaygroundDependencies("import '_hidden';")).toEqual({
+      kind: 'unsupported',
+      specifier: '_hidden',
+    });
+    expect(
+      resolvePlaygroundDependencies("import '_hidden'; import value from '")
+    ).toEqual({ kind: 'unsupported', specifier: '_hidden' });
+  });
 });

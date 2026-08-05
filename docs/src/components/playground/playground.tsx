@@ -24,6 +24,7 @@ import {
   resolvePlaygroundDependencies,
   type PlaygroundDependencies,
 } from './playground-dependencies';
+import { favyDiSourceFiles } from './favy-di-sources';
 import {
   playgroundExampleById,
   playgroundExamples,
@@ -50,7 +51,8 @@ type PlaygroundStatus =
   | 'Installing packages'
   | 'Starting Vite'
   | 'Running'
-  | 'Failed';
+  | 'Failed'
+  | `Unsupported import: ${string}`;
 
 type RunRequest = Readonly<{
   token: number;
@@ -97,7 +99,7 @@ const initialDrafts = (): Drafts =>
 
 const dependenciesFor = (source: string): PlaygroundDependencies => {
   const resolution = resolvePlaygroundDependencies(source);
-  if (!resolution.ok) {
+  if (resolution.kind !== 'ready') {
     throw new Error('A bundled playground example has invalid imports.');
   }
   return resolution.dependencies;
@@ -644,25 +646,42 @@ const SandboxSession = forwardRef<SandboxHandle, SandboxSessionProps>(
     { dependencies, initialCode, theme, ...contentsProps },
     forwardedRef
   ) {
-    const [{ customSetup, files }] = useState(() => ({
-      customSetup: { entry: '/runner.ts', dependencies },
-      files: {
-        '/index.ts': { code: initialCode, active: true },
-        '/execution.ts': { code: '', hidden: true },
-        '/runner.ts': {
-          code: runtimeSource(Object.keys(dependencies)),
-          hidden: true,
+    const [{ customSetup, files }] = useState(() => {
+      const registryDependencies = Object.fromEntries(
+        Object.entries(dependencies).filter(
+          ([, version]) => version === 'latest'
+        )
+      );
+      const localFiles = Object.fromEntries(
+        favyDiSourceFiles.map(({ sandboxPath, code }) => [
+          sandboxPath,
+          { code, hidden: true },
+        ])
+      );
+      return {
+        customSetup: {
+          entry: '/runner.ts',
+          dependencies: registryDependencies,
         },
-        '/vite.config.js': {
-          code: 'export default { server: { hmr: false } };',
-          hidden: true,
+        files: {
+          ...localFiles,
+          '/index.ts': { code: initialCode, active: true },
+          '/execution.ts': { code: '', hidden: true },
+          '/runner.ts': {
+            code: runtimeSource(Object.keys(dependencies)),
+            hidden: true,
+          },
+          '/vite.config.js': {
+            code: "export default { resolve: { alias: [{ find: /^@favy\\/di$/, replacement: '/favy-di/index.ts' }] }, server: { hmr: false } };",
+            hidden: true,
+          },
+          '/index.html': {
+            code: '<!doctype html><script type="module" src="/runner.ts"></script>',
+            hidden: true,
+          },
         },
-        '/index.html': {
-          code: '<!doctype html><script type="module" src="/runner.ts"></script>',
-          hidden: true,
-        },
-      },
-    }));
+      };
+    });
 
     return (
       <SandpackProvider
@@ -694,6 +713,7 @@ export function Playground(): JSX.Element {
     initialResetGenerations
   );
   const [status, setStatus] = useState<PlaygroundStatus>('Loading editor');
+  const [importsBlocked, setImportsBlocked] = useState(false);
   const [runRequest, setRunRequest] = useState<RunRequest | null>(null);
   const [theme, setTheme] = useState<PlaygroundTheme>('light');
   const sandboxRef = useRef<SandboxHandle>(null);
@@ -705,9 +725,11 @@ export function Playground(): JSX.Element {
   const selectedIdRef = useRef(selectedId);
   const dependenciesRef = useRef(dependencies);
   const readySandboxKeyRef = useRef<string>();
+  const importsBlockedRef = useRef(importsBlocked);
   runRequestRef.current = runRequest;
   selectedIdRef.current = selectedId;
   dependenciesRef.current = dependencies;
+  importsBlockedRef.current = importsBlocked;
 
   const sandboxKey = keyFor(dependencies[selectedId]);
   const sandboxKeyRef = useRef(sandboxKey);
@@ -718,11 +740,12 @@ export function Playground(): JSX.Element {
   const codeIdentity = `${selectedId}:${resetGeneration[selectedId]}`;
   const typingVersions = Object.fromEntries(
     Object.entries(dependencies[selectedId]).filter(
-      ([name]) => name !== '@favy/di'
+      ([, version]) => version === 'latest'
     )
   );
   const runDisabled =
     runRequest !== null ||
+    importsBlocked ||
     status === 'Preparing dependencies' ||
     status === 'Running';
   const runLabel =
@@ -755,7 +778,12 @@ export function Playground(): JSX.Element {
   const handleSandboxReady = useCallback((readyKey: string) => {
     if (sandboxKeyRef.current !== readyKey) return;
     readySandboxKeyRef.current = readyKey;
-    if (runRequestRef.current?.sandboxKey !== readyKey) setStatus('Ready');
+    if (
+      !importsBlockedRef.current &&
+      runRequestRef.current?.sandboxKey !== readyKey
+    ) {
+      setStatus('Ready');
+    }
   }, []);
 
   const updateDependencies = useCallback(
@@ -777,10 +805,18 @@ export function Playground(): JSX.Element {
     (scanSelectedId: PlaygroundExampleId, code: string) => {
       if (selectedIdRef.current !== scanSelectedId) return;
       const resolution = resolvePlaygroundDependencies(code);
-      if (!resolution.ok) {
-        setStatus('Checking imports');
+      if (resolution.kind !== 'ready') {
+        importsBlockedRef.current = true;
+        setImportsBlocked(true);
+        setStatus(
+          resolution.kind === 'unsupported'
+            ? `Unsupported import: ${resolution.specifier}`
+            : 'Checking imports'
+        );
         return;
       }
+      importsBlockedRef.current = false;
+      setImportsBlocked(false);
       if (
         dependencySignature(resolution.dependencies) ===
         dependencySignature(dependenciesRef.current[scanSelectedId])
@@ -819,6 +855,8 @@ export function Playground(): JSX.Element {
     (code: string) => {
       const editSelectedId = selectedIdRef.current;
       setDrafts((current) => ({ ...current, [editSelectedId]: code }));
+      importsBlockedRef.current = false;
+      setImportsBlocked(false);
       setStatus('Checking imports');
       cancelScan();
       deferredScan.current = undefined;
@@ -847,6 +885,8 @@ export function Playground(): JSX.Element {
       restoreSnapshot.current = undefined;
       runRequestRef.current = null;
       setRunRequest(null);
+      importsBlockedRef.current = false;
+      setImportsBlocked(false);
       selectedIdRef.current = nextId;
       setSelectedId(nextId);
       setStatus(
@@ -864,6 +904,8 @@ export function Playground(): JSX.Element {
     restoreSnapshot.current = undefined;
     runRequestRef.current = null;
     setRunRequest(null);
+    importsBlockedRef.current = false;
+    setImportsBlocked(false);
     setDrafts((current) => ({
       ...current,
       [selectedId]: playgroundExampleById[selectedId].source,
@@ -887,10 +929,18 @@ export function Playground(): JSX.Element {
     const code = sandboxRef.current?.readCode() ?? drafts[selectedId];
     setDrafts((current) => ({ ...current, [selectedId]: code }));
     const resolution = resolvePlaygroundDependencies(code);
-    if (!resolution.ok) {
-      setStatus('Checking imports');
+    if (resolution.kind !== 'ready') {
+      importsBlockedRef.current = true;
+      setImportsBlocked(true);
+      setStatus(
+        resolution.kind === 'unsupported'
+          ? `Unsupported import: ${resolution.specifier}`
+          : 'Checking imports'
+      );
       return;
     }
+    importsBlockedRef.current = false;
+    setImportsBlocked(false);
     const currentDependencies = dependenciesRef.current[selectedId];
     const nextDependencies = resolution.dependencies;
     const changed =

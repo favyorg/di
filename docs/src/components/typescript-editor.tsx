@@ -14,17 +14,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import hktSource from '../../../di/src/lib/hkt.ts?raw';
-import indexSource from '../../../di/src/index.ts?raw';
-import makeModuleSource from '../../../di/src/lib/makeModule.ts?raw';
-import moduleSource from '../../../di/src/lib/module.ts?raw';
-
-const favyDiSources = [
-  ['src/index.ts', indexSource],
-  ['src/lib/hkt.ts', hktSource],
-  ['src/lib/makeModule.ts', makeModuleSource],
-  ['src/lib/module.ts', moduleSource],
-] as const;
+import { favyDiSourceFiles } from './playground/favy-di-sources';
 
 const ambientTypes = `
 declare module '@jest/globals' {
@@ -53,8 +43,8 @@ const configureTypeScript = (monaco: Monaco): void => {
     noEmit: true,
   });
 
-  for (const [file, source] of favyDiSources) {
-    defaults.addExtraLib(source, `file:///node_modules/@favy/di/${file}`);
+  for (const { packagePath, code } of favyDiSourceFiles) {
+    defaults.addExtraLib(code, `file:///node_modules/@favy/di/${packagePath}`);
   }
   defaults.addExtraLib(
     '{"types":"src/index.ts"}',

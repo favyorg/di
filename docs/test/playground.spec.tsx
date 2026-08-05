@@ -11,6 +11,32 @@ import {
 import { Playground } from '../src/components/playground/playground';
 import { playgroundExampleById } from '../src/components/playground/playground-examples';
 
+jest.mock(
+  '../../di/src/lib/hkt.ts?raw',
+  () => ({ __esModule: true, default: 'export type HKT = unknown;' }),
+  { virtual: true }
+);
+jest.mock(
+  '../../di/src/index.ts?raw',
+  () => ({
+    __esModule: true,
+    default:
+      'export type DefaultModuleFactory = { readonly kind: "favy" };' +
+      ' export declare const Module: DefaultModuleFactory;',
+  }),
+  { virtual: true }
+);
+jest.mock(
+  '../../di/src/lib/makeModule.ts?raw',
+  () => ({ __esModule: true, default: 'export const makeModule = {};' }),
+  { virtual: true }
+);
+jest.mock(
+  '../../di/src/lib/module.ts?raw',
+  () => ({ __esModule: true, default: 'export const module = {};' }),
+  { virtual: true }
+);
+
 type MockSandpackMessage =
   | { type: 'done'; compilatonError: boolean }
   | {
@@ -552,6 +578,7 @@ it('prewarms dependencies through hidden runner files', () => {
 
   const { customSetup, files, options } = mockProviderProps[0];
   expect(customSetup.entry).toBe('/runner.ts');
+  expect(customSetup.dependencies).toEqual({});
   expect(options).toEqual({
     activeFile: '/index.ts',
     autorun: true,
@@ -567,8 +594,26 @@ it('prewarms dependencies through hidden runner files', () => {
   expect(files['/runner.ts'].code).toContain(
     "globalThis.addEventListener('message'"
   );
+  expect(files['/favy-di/index.ts']).toEqual({
+    code:
+      'export type DefaultModuleFactory = { readonly kind: "favy" };' +
+      ' export declare const Module: DefaultModuleFactory;',
+    hidden: true,
+  });
+  expect(files['/favy-di/lib/hkt.ts']).toEqual({
+    code: 'export type HKT = unknown;',
+    hidden: true,
+  });
+  expect(files['/favy-di/lib/makeModule.ts']).toEqual({
+    code: 'export const makeModule = {};',
+    hidden: true,
+  });
+  expect(files['/favy-di/lib/module.ts']).toEqual({
+    code: 'export const module = {};',
+    hidden: true,
+  });
   expect(files['/vite.config.js']).toEqual({
-    code: 'export default { server: { hmr: false } };',
+    code: "export default { resolve: { alias: [{ find: /^@favy\\/di$/, replacement: '/favy-di/index.ts' }] }, server: { hmr: false } };",
     hidden: true,
   });
   expect(files['/index.html']).toEqual({
@@ -847,13 +892,10 @@ it('waits 1000 ms before remounting for a valid new import', () => {
   });
 
   act(() => jest.advanceTimersByTime(999));
-  expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
+  expect(mountEvents()).toEqual(['mount:']);
 
   act(() => jest.advanceTimersByTime(1));
-  expect(mountEvents()).toEqual([
-    'mount:@favy/di@3.0.0',
-    'mount:@favy/di@3.0.0|lodash@latest',
-  ]);
+  expect(mountEvents()).toEqual(['mount:', 'mount:lodash@latest']);
   expect(mockMaximumMountedProviders).toBe(1);
   expect(mockMaximumMountedClients).toBe(1);
 });
@@ -867,8 +909,9 @@ it('passes validated non-favy versions to automatic typings', () => {
   expect(latestTypingVersions()).toEqual({ zod: 'latest' });
 });
 
-it('keeps the last valid dependency generation for an incomplete import', () => {
-  render(<Playground />);
+it('keeps the prepared provider mounted for an incomplete import', () => {
+  renderReadyPlayground();
+  const mounts = mountEvents();
 
   fireEvent.change(editor(), {
     target: {
@@ -877,9 +920,31 @@ it('keeps the last valid dependency generation for an incomplete import', () => 
   });
   act(() => jest.advanceTimersByTime(1000));
 
-  expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
+  expect(screen.getByRole('status').textContent).toBe('Checking imports');
+  expect(
+    (screen.getByRole('button', { name: 'Run code' }) as HTMLButtonElement)
+      .disabled
+  ).toBe(true);
+  expect(mountEvents()).toEqual(mounts);
+  expect(updateEvents()).toHaveLength(0);
   expect(mockMountedProviders).toBe(1);
   expect(mockMountedClients).toBe(1);
+});
+
+it('shows an unsupported import without remounting or throwing', () => {
+  renderReadyPlayground();
+  const mounts = mountEvents();
+  fireEvent.change(editor(), { target: { value: "import '_hidden';" } });
+  act(() => jest.advanceTimersByTime(1_000));
+  expect(screen.getByRole('status').textContent).toContain(
+    'Unsupported import: _hidden'
+  );
+  expect(
+    (screen.getByRole('button', { name: 'Run code' }) as HTMLButtonElement)
+      .disabled
+  ).toBe(true);
+  expect(mountEvents()).toEqual(mounts);
+  expect(updateEvents()).toHaveLength(0);
 });
 
 it.each([
@@ -897,7 +962,7 @@ it.each([
   await act(async () => jest.runAllTimersAsync());
 
   expect(updateEvents()).toEqual([]);
-  expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
+  expect(mountEvents()).toEqual(['mount:']);
   expect(screen.getByRole('status').textContent).toBe('Checking imports');
 });
 
@@ -1079,16 +1144,13 @@ it('defers a matured dependency remount until the active run settles', () => {
   });
   act(() => jest.advanceTimersByTime(1_000));
 
-  expect(mountEvents()).toEqual(['mount:@favy/di@3.0.0']);
+  expect(mountEvents()).toEqual(['mount:']);
   expect(updateEvents()).toHaveLength(1);
   expect(screen.getByRole('status').textContent).toBe('Checking imports');
 
   emitConsole('debug', '__FAVY_PLAYGROUND_DONE__:1');
 
-  expect(mountEvents()).toEqual([
-    'mount:@favy/di@3.0.0',
-    'mount:@favy/di@3.0.0|lodash@latest',
-  ]);
+  expect(mountEvents()).toEqual(['mount:', 'mount:lodash@latest']);
   expect(updateEvents()).toHaveLength(1);
   expect(mockMaximumMountedProviders).toBe(1);
 });
@@ -1433,12 +1495,12 @@ it('flushes a pending scan, remounts, and runs exactly once', async () => {
   emitSandpackMessage({ type: 'done', compilatonError: false });
   await act(async () => jest.runAllTimersAsync());
 
-  const dependencyMount = 'mount:@favy/di@3.0.0|lodash@latest';
+  const dependencyMount = 'mount:lodash@latest';
   expect(mockEvents.indexOf(dependencyMount)).toBeLessThan(
     mockEvents.findIndex((event) => event.startsWith('update:'))
   );
   expect(updateEvents()).toHaveLength(1);
-  expect(updateEvents()[0]).toContain('@favy/di@3.0.0|lodash@latest');
+  expect(updateEvents()[0]).toContain('update:lodash@latest:');
   expect(mockMaximumMountedProviders).toBe(1);
 });
 

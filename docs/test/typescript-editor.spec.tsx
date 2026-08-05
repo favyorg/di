@@ -13,6 +13,7 @@ import {
   TypeScriptEditor,
   type TypeScriptEditorHandle,
 } from '../src/components/typescript-editor';
+import { favyDiSourceFiles } from '../src/components/playground/favy-di-sources';
 
 type MockPosition = Readonly<{ lineNumber: number; column: number }>;
 type MockSelection = Readonly<{
@@ -355,6 +356,20 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   document.documentElement.removeAttribute('data-theme');
+});
+
+it('maps the checked-out package sources to Monaco and Sandpack paths', () => {
+  expect(
+    favyDiSourceFiles.map(({ packagePath, sandboxPath }) => [
+      packagePath,
+      sandboxPath,
+    ])
+  ).toEqual([
+    ['src/index.ts', '/favy-di/index.ts'],
+    ['src/lib/hkt.ts', '/favy-di/lib/hkt.ts'],
+    ['src/lib/makeModule.ts', '/favy-di/lib/makeModule.ts'],
+    ['src/lib/module.ts', '/favy-di/lib/module.ts'],
+  ]);
 });
 
 it('keeps the fallback until Monaco is ready', async () => {

@@ -4,6 +4,10 @@ import type {
   SandpackMessage,
 } from '@codesandbox/sandpack-client';
 import ts from 'typescript';
+import {
+  isNpmPackageName,
+  resolvePlaygroundDependencies,
+} from '../src/components/playground/playground-dependencies';
 import { playgroundExamples } from '../src/components/playground/playground-examples';
 import {
   RUN_COMPLETE_PREFIX,
@@ -24,7 +28,7 @@ const workspace = path.resolve(__dirname, '../..');
 const setup: SandboxSetup = {
   entry: '/runner.ts',
   template: 'node',
-  dependencies: { '@favy/di': '3.0.0' },
+  dependencies: {},
   files: {
     '/index.ts': { code: 'console.log("old")', active: true },
     '/execution.ts': { code: 'export {};', hidden: true },
@@ -170,10 +174,31 @@ it('warms dependencies with encoded static imports only', () => {
   expect(source).not.toContain('/index.ts');
 });
 
-it('warms valid package names whose segments begin with hyphens', () => {
-  expect(warmupSource(['-foo', '@scope/-foo', '@-scope/foo'])).toBe(
-    'import "-foo";\nimport "@scope/-foo";\nimport "@-scope/foo";'
+it.each([
+  ['-foo', true],
+  ['@scope/-foo', true],
+  ['@-scope/foo', true],
+  ['a'.repeat(214), true],
+  ['_hidden', false],
+  ['pkg?raw', false],
+  ['@scope', false],
+  ['a'.repeat(215), false],
+])('uses one warmup-safe package domain for %s', (name, valid) => {
+  expect(isNpmPackageName(name)).toBe(valid);
+  if (valid) {
+    expect(warmupSource([name])).toBe(`import ${JSON.stringify(name)};`);
+  } else {
+    expect(() => warmupSource([name])).toThrow(TypeError);
+  }
+});
+
+it('never resolves a dependency that warmup rejects', () => {
+  const result = resolvePlaygroundDependencies(
+    "import '@favy/di'; import '@scope/pkg/subpath'; import 'lodash/fp';"
   );
+  expect(result.kind).toBe('ready');
+  if (result.kind !== 'ready') throw new Error('expected ready dependencies');
+  expect(() => warmupSource(Object.keys(result.dependencies))).not.toThrow();
 });
 
 it.each([
