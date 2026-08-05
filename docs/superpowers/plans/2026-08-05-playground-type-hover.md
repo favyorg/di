@@ -171,7 +171,7 @@ git commit -m "fix(docs): restore TypeScript example hover"
 - Modify: `docs/test/typescript-editor.spec.tsx`
 - Modify: `docs/astro.config.mjs`
 - Modify: `docs/package.json`
-- Modify: `package-lock.json`
+- Modify: `docs/package-lock.json`
 
 **Interfaces:**
 - Consumes `TypeScriptEditor`, `TypeScriptEditorHandle`, and `TypeScriptEditorSnapshot` from Task 1.
@@ -293,7 +293,7 @@ Expected: all existing runtime behavior and the new Monaco adapter/typing tests 
 - [ ] **Step 7: Commit Task 2**
 
 ```bash
-git add docs/src/components/typescript-editor.tsx docs/src/components/playground/playground.tsx docs/src/components/playground/playground.css docs/test/typescript-editor.spec.tsx docs/test/playground.spec.tsx docs/astro.config.mjs docs/package.json package-lock.json
+git add docs/src/components/typescript-editor.tsx docs/src/components/playground/playground.tsx docs/src/components/playground/playground.css docs/test/typescript-editor.spec.tsx docs/test/playground.spec.tsx docs/astro.config.mjs docs/package.json docs/package-lock.json
 git commit -m "feat(docs): add playground type hover"
 ```
 
