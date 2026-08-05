@@ -79,6 +79,8 @@ type SandboxHandle = {
 type Drafts = Record<PlaygroundExampleId, string>;
 type DependencyMap = Record<PlaygroundExampleId, PlaygroundDependencies>;
 type ResetGenerations = Record<PlaygroundExampleId, number>;
+type ImportBlockStatus = 'Checking imports' | `Unsupported import: ${string}`;
+type ImportBlockMap = Partial<Record<PlaygroundExampleId, ImportBlockStatus>>;
 type PlaygroundTheme = 'light' | 'dark';
 type ConsoleLog = Readonly<{
   id?: string;
@@ -726,6 +728,7 @@ export function Playground(): JSX.Element {
   const dependenciesRef = useRef(dependencies);
   const readySandboxKeyRef = useRef<string>();
   const importsBlockedRef = useRef(importsBlocked);
+  const importBlocksRef = useRef<ImportBlockMap>({});
   runRequestRef.current = runRequest;
   selectedIdRef.current = selectedId;
   dependenciesRef.current = dependencies;
@@ -786,6 +789,10 @@ export function Playground(): JSX.Element {
     }
   }, []);
 
+  const handleSandboxStatus = useCallback((nextStatus: PlaygroundStatus) => {
+    if (!importsBlockedRef.current) setStatus(nextStatus);
+  }, []);
+
   const updateDependencies = useCallback(
     (
       updateSelectedId: PlaygroundExampleId,
@@ -806,15 +813,17 @@ export function Playground(): JSX.Element {
       if (selectedIdRef.current !== scanSelectedId) return;
       const resolution = resolvePlaygroundDependencies(code);
       if (resolution.kind !== 'ready') {
-        importsBlockedRef.current = true;
-        setImportsBlocked(true);
-        setStatus(
+        const nextStatus: ImportBlockStatus =
           resolution.kind === 'unsupported'
             ? `Unsupported import: ${resolution.specifier}`
-            : 'Checking imports'
-        );
+            : 'Checking imports';
+        importBlocksRef.current[scanSelectedId] = nextStatus;
+        importsBlockedRef.current = true;
+        setImportsBlocked(true);
+        setStatus(nextStatus);
         return;
       }
+      delete importBlocksRef.current[scanSelectedId];
       importsBlockedRef.current = false;
       setImportsBlocked(false);
       if (
@@ -855,6 +864,7 @@ export function Playground(): JSX.Element {
     (code: string) => {
       const editSelectedId = selectedIdRef.current;
       setDrafts((current) => ({ ...current, [editSelectedId]: code }));
+      delete importBlocksRef.current[editSelectedId];
       importsBlockedRef.current = false;
       setImportsBlocked(false);
       setStatus('Checking imports');
@@ -885,14 +895,17 @@ export function Playground(): JSX.Element {
       restoreSnapshot.current = undefined;
       runRequestRef.current = null;
       setRunRequest(null);
-      importsBlockedRef.current = false;
-      setImportsBlocked(false);
+      const importBlock = importBlocksRef.current[nextId];
+      importsBlockedRef.current = importBlock !== undefined;
+      setImportsBlocked(importBlock !== undefined);
       selectedIdRef.current = nextId;
       setSelectedId(nextId);
       setStatus(
-        readySandboxKeyRef.current === keyFor(dependenciesRef.current[nextId])
-          ? 'Ready'
-          : 'Preparing runtime'
+        importBlock ??
+          (readySandboxKeyRef.current ===
+          keyFor(dependenciesRef.current[nextId])
+            ? 'Ready'
+            : 'Preparing runtime')
       );
     },
     [cancelScan, selectedId]
@@ -904,6 +917,7 @@ export function Playground(): JSX.Element {
     restoreSnapshot.current = undefined;
     runRequestRef.current = null;
     setRunRequest(null);
+    delete importBlocksRef.current[selectedId];
     importsBlockedRef.current = false;
     setImportsBlocked(false);
     setDrafts((current) => ({
@@ -930,15 +944,17 @@ export function Playground(): JSX.Element {
     setDrafts((current) => ({ ...current, [selectedId]: code }));
     const resolution = resolvePlaygroundDependencies(code);
     if (resolution.kind !== 'ready') {
-      importsBlockedRef.current = true;
-      setImportsBlocked(true);
-      setStatus(
+      const nextStatus: ImportBlockStatus =
         resolution.kind === 'unsupported'
           ? `Unsupported import: ${resolution.specifier}`
-          : 'Checking imports'
-      );
+          : 'Checking imports';
+      importBlocksRef.current[selectedId] = nextStatus;
+      importsBlockedRef.current = true;
+      setImportsBlocked(true);
+      setStatus(nextStatus);
       return;
     }
+    delete importBlocksRef.current[selectedId];
     importsBlockedRef.current = false;
     setImportsBlocked(false);
     const currentDependencies = dependenciesRef.current[selectedId];
@@ -1091,7 +1107,7 @@ export function Playground(): JSX.Element {
             onCodeChange={handleCodeChange}
             onReady={handleSandboxReady}
             onRunSettled={handleRunSettled}
-            onStatus={setStatus}
+            onStatus={handleSandboxStatus}
           />
         </div>
       </div>

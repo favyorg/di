@@ -948,6 +948,37 @@ it('shows an unsupported import without remounting or throwing', () => {
 });
 
 it.each([
+  ['unsupported', "import '_hidden';", 'Unsupported import: _hidden'],
+  ['incomplete', "import value from '", 'Checking imports'],
+])(
+  'keeps a saved %s draft blocked after switching away and back',
+  (_, source, expectedStatus) => {
+    renderReadyPlayground();
+    const runButton = screen.getByRole('button', { name: 'Run code' });
+    fireEvent.change(editor(), { target: { value: source } });
+
+    act(() => jest.advanceTimersByTime(999));
+    expect((runButton as HTMLButtonElement).disabled).toBe(false);
+
+    act(() => jest.advanceTimersByTime(1));
+    expect((runButton as HTMLButtonElement).disabled).toBe(true);
+    const mounts = mountEvents();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+    expect(editor().value).toBe(playgroundExampleById.composition.source);
+    fireEvent.click(screen.getByRole('button', { name: 'Basic module' }));
+
+    expect(editor().value).toBe(source);
+    expect(screen.getByRole('status').textContent).toBe(expectedStatus);
+    expect((runButton as HTMLButtonElement).disabled).toBe(true);
+    expect(mountEvents()).toEqual(mounts);
+    expect(updateEvents()).toHaveLength(0);
+    expect(mockMountedProviders).toBe(1);
+    expect(mockMountedClients).toBe(1);
+  }
+);
+
+it.each([
   ['incomplete', "import value from '"],
   ['malformed', "import { value as } from 'lodash';"],
 ])('does not run when the immediate import scan is %s', async (_, source) => {
