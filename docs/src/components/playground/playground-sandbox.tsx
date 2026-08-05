@@ -15,7 +15,9 @@ import { favyDiSourceFiles } from './favy-di-sources';
 import type { PlaygroundDependencies } from './playground-dependencies';
 import {
   frameHtmlSource,
+  isPlaygroundSourceWithinLimit,
   preparationLabel,
+  PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER,
   runtimeCancelCommand,
   runtimePrepareCommand,
   runtimeRelayRecord,
@@ -85,6 +87,13 @@ type RunLedger = Readonly<{
   infrastructureRetries: InfrastructureRetries;
 }>;
 
+type OutputBudget = {
+  acceptedEvents: number;
+  acceptedBytes: number;
+  closed: boolean;
+  seenEventIds: Set<number>;
+};
+
 type RunLifecycle =
   | { phase: 'idle' }
   | {
@@ -144,6 +153,26 @@ const PREPARATION_TIMEOUT_MS = 120_000;
 const COMMIT_TIMEOUT_MS = 10_000;
 const EXECUTION_TIMEOUT_MS = 30_000;
 const CANCELLATION_TIMEOUT_MS = 1_000;
+const MAX_OUTPUT_EVENTS = 199;
+const MAX_OUTPUT_BYTES = 65_536;
+
+const utf8Bytes = (value: string): number => {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined) break;
+    bytes +=
+      codePoint <= 0x7f
+        ? 1
+        : codePoint <= 0x7ff
+        ? 2
+        : codePoint <= 0xffff
+        ? 3
+        : 4;
+    if (codePoint > 0xffff) index += 1;
+  }
+  return bytes;
+};
 
 const clearTimer = (timer: MutableRefObject<number | undefined>): void => {
   if (timer.current === undefined) return;
@@ -194,6 +223,7 @@ const SandboxController = ({
   const commitTimer = useRef<number>();
   const executionTimer = useRef<number>();
   const cancellationTimer = useRef<number>();
+  const outputBudget = useRef<OutputBudget>();
   const runLedgerRef = useRef(runLedger);
   const sandboxKeyRef = useRef(sandboxKey);
   const listenRef = useRef(listen);
@@ -231,6 +261,54 @@ const SandboxController = ({
     clearTimer(cancellationTimer);
   }, []);
 
+  const clearOutputBudget = useCallback((): void => {
+    outputBudget.current?.seenEventIds.clear();
+    outputBudget.current = undefined;
+  }, []);
+
+  const resetOutputBudget = useCallback((): void => {
+    clearOutputBudget();
+    outputBudget.current = {
+      acceptedEvents: 0,
+      acceptedBytes: 0,
+      closed: false,
+      seenEventIds: new Set<number>(),
+    };
+  }, [clearOutputBudget]);
+
+  const acceptOutputEvent = useCallback(
+    (
+      eventId: number,
+      data: readonly PlaygroundConsoleValue[],
+      runToken: number
+    ): boolean => {
+      const budget = outputBudget.current;
+      if (!budget || budget.closed || budget.seenEventIds.has(eventId)) {
+        return false;
+      }
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(data);
+      } catch {
+        return false;
+      }
+      const bytes = utf8Bytes(serialized);
+      if (
+        budget.acceptedEvents >= MAX_OUTPUT_EVENTS ||
+        budget.acceptedBytes + bytes > MAX_OUTPUT_BYTES
+      ) {
+        budget.closed = true;
+        onOutputRef.current({ type: 'truncated', runToken });
+        return false;
+      }
+      budget.acceptedEvents += 1;
+      budget.acceptedBytes += bytes;
+      budget.seenEventIds.add(eventId);
+      return true;
+    },
+    []
+  );
+
   const transition = useCallback(
     (next: RunLifecycle): void => {
       clearAllTimers();
@@ -263,16 +341,18 @@ const SandboxController = ({
       status: PlaygroundSandboxStatus
     ): void => {
       if (lifecycle.current !== run) return;
+      clearOutputBudget();
       transition({ phase: 'idle' });
       onStatusRef.current(status);
       onControllerSettledRef.current(run.request, settlement);
     },
-    [transition]
+    [clearOutputBudget, transition]
   );
 
   const restartBeforeExecution = useCallback((): void => {
     const run = lifecycle.current;
     if (run.phase !== 'queued' && run.phase !== 'committing') return;
+    clearOutputBudget();
     transition({ phase: 'idle' });
     if (run.infrastructureRetries === 0) {
       onStatusRef.current('Preparing runtime');
@@ -287,7 +367,7 @@ const SandboxController = ({
       runToken: run.request.runToken,
       outcome: 'runtime-unavailable',
     });
-  }, [transition]);
+  }, [clearOutputBudget, transition]);
   restartBeforeExecutionRef.current = restartBeforeExecution;
 
   const ensurePreparationWatchdog = useCallback(
@@ -336,6 +416,7 @@ const SandboxController = ({
         expectedContent,
       };
       transition(committing);
+      resetOutputBudget();
       onOutputRef.current({ type: 'reset', runToken: run.request.runToken });
       onPhaseChangeRef.current(run.request.runToken, 'committing');
       commitTimer.current = window.setTimeout(() => {
@@ -347,7 +428,7 @@ const SandboxController = ({
       restartBeforeExecutionRef.current();
     }
     return true;
-  }, [transition]);
+  }, [resetOutputBudget, transition]);
   tryCommitRef.current = tryCommit;
 
   const queueEligibleRequest = useCallback((): void => {
@@ -426,6 +507,10 @@ const SandboxController = ({
       }
 
       if (relay.kind === 'output') {
+        const data = relay.method === 'clear' ? [] : relay.data;
+        if (!acceptOutputEvent(relay.eventId, data, run.request.runToken)) {
+          return;
+        }
         if (relay.method === 'clear') {
           onOutputRef.current({
             type: 'clear',
@@ -443,6 +528,11 @@ const SandboxController = ({
       }
 
       if (relay.kind === 'error') {
+        if (
+          !acceptOutputEvent(relay.eventId, [relay.error], run.request.runToken)
+        ) {
+          return;
+        }
         run.failed = true;
         onOutputRef.current({
           type: 'append',
@@ -472,7 +562,7 @@ const SandboxController = ({
         run.failed ? 'Failed' : 'Ready'
       );
     },
-    [queueEligibleRequest, settle]
+    [acceptOutputEvent, queueEligibleRequest, settle]
   );
 
   handleMessageRef.current = (message): void => {
@@ -506,6 +596,7 @@ const SandboxController = ({
       executionTimer.current = window.setTimeout(() => {
         executionTimer.current = undefined;
         if (lifecycle.current !== executing) return;
+        clearOutputBudget();
         transition({ phase: 'idle' });
         onStatusRef.current('Failed');
         onRestartAfterExecutionRef.current(executing.request);
@@ -568,7 +659,13 @@ const SandboxController = ({
     []
   );
 
-  useEffect(() => () => clearAllTimers(), [clearAllTimers]);
+  useEffect(
+    () => () => {
+      clearAllTimers();
+      clearOutputBudget();
+    },
+    [clearAllTimers, clearOutputBudget]
+  );
 
   useEffect(() => {
     queueEligibleRequest();
@@ -603,11 +700,18 @@ const SandboxController = ({
     cancellationTimer.current = window.setTimeout(() => {
       cancellationTimer.current = undefined;
       if (lifecycle.current !== cancelling) return;
+      clearOutputBudget();
       transition({ phase: 'idle' });
       onStatusRef.current('Preparing runtime');
       onCancellationTimeoutRef.current(cancelling.request);
     }, CANCELLATION_TIMEOUT_MS);
-  }, [cancelRunToken, postRuntimeCommand, settle, transition]);
+  }, [
+    cancelRunToken,
+    clearOutputBudget,
+    postRuntimeCommand,
+    settle,
+    transition,
+  ]);
 
   return (
     <iframe
@@ -641,6 +745,9 @@ export function PlaygroundSandbox({
   runLedgerRef.current = runLedger;
   onSettledRef.current = onSettled;
   const [{ customSetup, files }] = useState(() => {
+    const sandboxInitialCode = isPlaygroundSourceWithinLimit(initialCode)
+      ? initialCode
+      : PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER;
     const registryDependencies = Object.fromEntries(
       Object.entries(dependencies).filter(([, version]) => version === 'latest')
     );
@@ -657,7 +764,7 @@ export function PlaygroundSandbox({
       },
       files: {
         ...localFiles,
-        '/index.ts': { code: initialCode, active: true },
+        '/index.ts': { code: sandboxInitialCode, active: true },
         '/execution.ts': { code: '', hidden: true },
         '/runner.ts': { code: runtimeSource(), hidden: true },
         '/warmup.ts': {

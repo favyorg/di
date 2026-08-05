@@ -271,6 +271,15 @@ const acknowledgeExecutionWrite = (): void =>
     content: updatedExecution(),
   });
 
+const beginExecution = (runToken: number): number => {
+  bootRuntime();
+  const sessionToken = activeSessionToken();
+  emitRuntimeReady(sessionToken);
+  acknowledgeExecutionWrite();
+  expect(lastRuntimeCommand()).toMatchObject({ action: 'run', runToken });
+  return sessionToken;
+};
+
 beforeEach(() => {
   jest.useFakeTimers();
   mockProviderProps = [];
@@ -412,6 +421,233 @@ it('creates isolated runtime files and installs registry dependencies only', () 
   expect((files['/vite.config.js'] as { code: string }).code).toContain(
     'hmr: false'
   );
+});
+
+it('uses a fixed small sandbox file when initial source is oversized', () => {
+  const oversized = 'a'.repeat(65_537);
+
+  renderSandbox({ initialCode: oversized });
+
+  const indexFile = mockProviderProps.at(-1)?.files['/index.ts'];
+  expect(indexFile).toEqual({
+    code: '// Source is too large to load into the sandbox.',
+    active: true,
+  });
+  expect(JSON.stringify(mockProviderProps.at(-1)?.files)).not.toContain(
+    oversized
+  );
+  expect(mockUpdatedSetups).toEqual([]);
+});
+
+it('accepts 199 unique output events before one terminal truncation update', () => {
+  const { handlers } = renderSandbox({ runRequest: request(9) });
+  const sessionToken = beginExecution(9);
+
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: -1,
+    method: 'log',
+    data: ['invalid'],
+  });
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 198,
+    method: 'info',
+    data: Array.from({ length: 20 }, (_, index) => index),
+  });
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 198,
+    method: 'log',
+    data: ['duplicate'],
+  });
+  emitRuntimeRelay({
+    kind: 'error',
+    sessionToken,
+    runToken: 9,
+    eventId: 197,
+    error: 'Error: counted failure',
+  });
+  for (let eventId = 196; eventId >= 1; eventId -= 1) {
+    emitRuntimeRelay({
+      kind: 'output',
+      sessionToken,
+      runToken: 9,
+      eventId,
+      method: 'log',
+      data: [eventId],
+    });
+  }
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 0,
+    method: 'clear',
+    data: [],
+  });
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 198,
+    method: 'warn',
+    data: ['duplicate after clear'],
+  });
+  expect(
+    handlers.onOutput.mock.calls
+      .map(([update]) => update)
+      .filter(({ type }) => type === 'truncated')
+  ).toEqual([]);
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 199,
+    method: 'warn',
+    data: ['overflow'],
+  });
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 200,
+    method: 'log',
+    data: ['after closure'],
+  });
+  emitRuntimeRelay({
+    kind: 'error',
+    sessionToken,
+    runToken: 9,
+    eventId: 201,
+    error: 'after closure',
+  });
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 202,
+    method: 'clear',
+    data: [],
+  });
+
+  const visibleUpdates = handlers.onOutput.mock.calls
+    .map(([update]) => update)
+    .filter(({ type }) => type !== 'reset');
+  expect(visibleUpdates).toHaveLength(200);
+  expect(visibleUpdates[0]).toEqual({
+    type: 'append',
+    runToken: 9,
+    method: 'info',
+    data: Array.from({ length: 20 }, (_, index) => index),
+  });
+  expect(visibleUpdates.filter(({ type }) => type === 'append')).toHaveLength(
+    198
+  );
+  expect(visibleUpdates.filter(({ type }) => type === 'clear')).toHaveLength(1);
+  expect(visibleUpdates.filter(({ type }) => type === 'truncated')).toEqual([
+    { type: 'truncated', runToken: 9 },
+  ]);
+
+  emitRuntimeRelay({
+    kind: 'complete',
+    sessionToken,
+    runToken: 9,
+  });
+  expect(handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 9,
+    outcome: 'completed',
+    failed: true,
+  });
+});
+
+it('accepts exactly 65536 serialized UTF-8 output bytes before closing', () => {
+  const { handlers } = renderSandbox({ runRequest: request(9) });
+  const sessionToken = beginExecution(9);
+  const exactBudget = [
+    ...Array(15).fill('🙂'.repeat(1_024)),
+    'a'.repeat(4_047),
+  ];
+  expect(Buffer.byteLength(JSON.stringify(exactBudget), 'utf8')).toBe(65_536);
+
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 0,
+    method: 'log',
+    data: exactBudget,
+  });
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 1,
+    method: 'clear',
+    data: [],
+  });
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 2,
+    method: 'log',
+    data: ['after closure'],
+  });
+
+  expect(handlers.onOutput.mock.calls.map(([update]) => update)).toEqual([
+    { type: 'reset', runToken: 9 },
+    { type: 'append', runToken: 9, method: 'log', data: exactBudget },
+    { type: 'truncated', runToken: 9 },
+  ]);
+});
+
+it('resets accepted event IDs for each run', () => {
+  const handlers = callbacks();
+  const props: PlaygroundSandboxProps = {
+    sandboxKey: 'favy-local|lodash-latest',
+    dependencies: { '@favy/di': 'local', lodash: 'latest' },
+    initialCode: 'console.log("initial");',
+    theme: 'light',
+    runRequest: request(1),
+    cancelRunToken: null,
+    ...handlers,
+  };
+  const view = render(<PlaygroundSandbox {...props} />);
+  const sessionToken = beginExecution(1);
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 1,
+    eventId: 42,
+    method: 'log',
+    data: ['first run'],
+  });
+  emitRuntimeRelay({ kind: 'complete', sessionToken, runToken: 1 });
+
+  view.rerender(<PlaygroundSandbox {...props} runRequest={request(2)} />);
+  acknowledgeExecutionWrite();
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 2,
+    eventId: 42,
+    method: 'log',
+    data: ['second run'],
+  });
+
+  expect(handlers.onOutput.mock.calls.map(([update]) => update)).toEqual([
+    { type: 'reset', runToken: 1 },
+    { type: 'append', runToken: 1, method: 'log', data: ['first run'] },
+    { type: 'reset', runToken: 2 },
+    { type: 'append', runToken: 2, method: 'log', data: ['second run'] },
+  ]);
 });
 
 it('forwards matching run output and settles a failed run once', () => {

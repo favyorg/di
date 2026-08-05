@@ -9,6 +9,7 @@ import {
   within,
 } from '@testing-library/react';
 import { Playground } from '../src/components/playground/playground';
+import * as playgroundDependencies from '../src/components/playground/playground-dependencies';
 import { playgroundExampleById } from '../src/components/playground/playground-examples';
 import type {
   PlaygroundOutputUpdate,
@@ -203,6 +204,7 @@ afterEach(() => {
   jest.clearAllTimers();
   jest.useRealTimers();
   delete document.documentElement.dataset.theme;
+  jest.restoreAllMocks();
 });
 
 it('renders deterministic light loading markup before hydration', () => {
@@ -377,6 +379,88 @@ it('keeps the prepared dependency session for an incomplete import', () => {
   ).toBe(true);
   expect(mockSandboxMounts).toEqual(mounts);
   expect(mockMountedSandboxes).toBe(1);
+});
+
+it('keeps oversized source editable without parsing or running it', () => {
+  const resolveSpy = jest.spyOn(
+    playgroundDependencies,
+    'resolvePlaygroundDependencies'
+  );
+  renderReadyPlayground();
+  resolveSpy.mockClear();
+  const oversized = 'a'.repeat(65_537);
+
+  edit(oversized);
+
+  expect(editor().value).toBe(oversized);
+  expect(screen.getByRole('status').textContent).toContain(
+    'Source is too large (64 KiB maximum)'
+  );
+  expect(
+    (screen.getByRole('button', { name: 'Run code' }) as HTMLButtonElement)
+      .disabled
+  ).toBe(true);
+  expect(latestTypingVersions()).toBeUndefined();
+  expect(latestSandbox().initialCode).toBe(
+    '// Source is too large to load into the sandbox.'
+  );
+
+  act(() => jest.advanceTimersByTime(1_000));
+  fireEvent.keyDown(editor(), { key: 'Enter', ctrlKey: true });
+
+  expect(resolveSpy).not.toHaveBeenCalled();
+  expect(latestSandbox().runRequest).toBeNull();
+  expect(mockSandboxMounts).toEqual(['@favy/di@local']);
+});
+
+it('restores an oversized draft without loading it into a new sandbox', () => {
+  renderReadyPlayground();
+  edit(`${playgroundExampleById.basic.source}\nimport 'lodash';`);
+  act(() => jest.advanceTimersByTime(1_000));
+  emitReady();
+  const oversized = `import '_hidden';\n${'a'.repeat(65_537)}`;
+
+  edit(oversized);
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Basic module' }));
+
+  expect(editor().value).toBe(oversized);
+  expect(screen.getByRole('status').textContent).toBe(
+    'Source is too large (64 KiB maximum)'
+  );
+  expect(latestSandbox().initialCode).toBe(
+    '// Source is too large to load into the sandbox.'
+  );
+  expect(latestSandbox().initialCode).not.toContain(oversized);
+  expect(mockSandboxMounts).toEqual([
+    '@favy/di@local',
+    '@favy/di@local|lodash@latest',
+    '@favy/di@local',
+    '@favy/di@local|lodash@latest',
+  ]);
+});
+
+it('resumes the one-second dependency scan after oversized source is corrected', () => {
+  const resolveSpy = jest.spyOn(
+    playgroundDependencies,
+    'resolvePlaygroundDependencies'
+  );
+  renderReadyPlayground();
+  edit('a'.repeat(65_537));
+  resolveSpy.mockClear();
+  const corrected = `${playgroundExampleById.basic.source}\nimport 'lodash';`;
+
+  edit(corrected);
+  act(() => jest.advanceTimersByTime(999));
+  expect(resolveSpy).not.toHaveBeenCalled();
+
+  act(() => jest.advanceTimersByTime(1));
+  expect(resolveSpy).toHaveBeenCalledTimes(1);
+  expect(resolveSpy).toHaveBeenCalledWith(corrected);
+  expect(mockSandboxMounts).toEqual([
+    '@favy/di@local',
+    '@favy/di@local|lodash@latest',
+  ]);
 });
 
 it('shows an unsupported import without replacing the prepared session', () => {

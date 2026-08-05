@@ -11,6 +11,7 @@ import {
 import { playgroundExamples } from '../src/components/playground/playground-examples';
 import {
   frameHtmlSource,
+  isPlaygroundSourceWithinLimit,
   preparationLabel,
   runtimeCancelCommand,
   runtimePrepareCommand,
@@ -240,6 +241,17 @@ afterEach(() => {
   document
     .querySelectorAll(`${WARMUP_SELECTOR}, ${EXECUTION_SELECTOR}`)
     .forEach((frame) => frame.remove());
+});
+
+it('accepts exactly 64 KiB of UTF-8 source and rejects the next code point', () => {
+  expect(isPlaygroundSourceWithinLimit('a'.repeat(65_536))).toBe(true);
+  expect(isPlaygroundSourceWithinLimit('é'.repeat(32_768))).toBe(true);
+  expect(isPlaygroundSourceWithinLimit('€'.repeat(21_845) + 'a')).toBe(true);
+  expect(isPlaygroundSourceWithinLimit('🙂'.repeat(16_384))).toBe(true);
+  expect(isPlaygroundSourceWithinLimit('a'.repeat(65_536) + '🙂')).toBe(false);
+  expect(isPlaygroundSourceWithinLimit('é'.repeat(32_768) + 'é')).toBe(false);
+  expect(isPlaygroundSourceWithinLimit('€'.repeat(21_845) + 'aa')).toBe(false);
+  expect(isPlaygroundSourceWithinLimit('🙂'.repeat(16_384) + 'a')).toBe(false);
 });
 
 it('warms dependencies with encoded static imports only', () => {

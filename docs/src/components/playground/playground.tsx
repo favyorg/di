@@ -23,6 +23,10 @@ import {
   type PlaygroundExampleId,
 } from './playground-examples';
 import {
+  isPlaygroundSourceWithinLimit,
+  PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER,
+} from './playground-runtime';
+import {
   PlaygroundSandbox,
   type PlaygroundOutputUpdate,
   type PlaygroundRunPhase,
@@ -38,6 +42,7 @@ type PlaygroundStatus =
   | 'Checking imports'
   | 'Preparing dependencies'
   | PlaygroundSandboxStatus
+  | 'Source is too large (64 KiB maximum)'
   | `Unsupported import: ${string}`
   | 'Failed — runtime unavailable'
   | 'Failed — runtime restarted';
@@ -60,6 +65,8 @@ type PendingEditorRestore = Readonly<{
 type PendingTransition =
   | { type: 'select'; id: PlaygroundExampleId }
   | { type: 'reset'; id: PlaygroundExampleId };
+
+const SOURCE_TOO_LARGE_STATUS = 'Source is too large (64 KiB maximum)';
 
 const initialDrafts = (): Drafts =>
   Object.fromEntries(
@@ -152,13 +159,19 @@ export function Playground(): JSX.Element {
   const codeIdentity = `${selectedId}:${resetGeneration[selectedId]}`;
   const codeIdentityRef = useRef(codeIdentity);
   codeIdentityRef.current = codeIdentity;
-  const typingVersions = Object.fromEntries(
-    Object.entries(dependencies[selectedId]).filter(
-      ([, version]) => version === 'latest'
-    )
-  );
+  const selectedSource = drafts[selectedId];
+  const sourceWithinLimit = isPlaygroundSourceWithinLimit(selectedSource);
+  const typingVersions = sourceWithinLimit
+    ? Object.fromEntries(
+        Object.entries(dependencies[selectedId]).filter(
+          ([, version]) => version === 'latest'
+        )
+      )
+    : undefined;
+  const visibleStatus = sourceWithinLimit ? status : SOURCE_TOO_LARGE_STATUS;
   const runDisabled =
     runRequest !== null ||
+    !sourceWithinLimit ||
     importsBlocked ||
     status === 'Preparing dependencies' ||
     status === 'Running';
@@ -259,6 +272,10 @@ export function Playground(): JSX.Element {
   const applyDependencyScan = useCallback(
     (scanSelectedId: PlaygroundExampleId, code: string) => {
       if (selectedIdRef.current !== scanSelectedId) return;
+      if (!isPlaygroundSourceWithinLimit(code)) {
+        setStatus(SOURCE_TOO_LARGE_STATUS);
+        return;
+      }
       const resolution = resolvePlaygroundDependencies(code);
       if (resolution.kind !== 'ready') {
         const nextStatus: ImportBlockStatus =
@@ -299,9 +316,13 @@ export function Playground(): JSX.Element {
       delete importBlocksRef.current[editSelectedId];
       importsBlockedRef.current = false;
       setImportsBlocked(false);
-      setStatus('Checking imports');
       cancelScan();
       deferredScan.current = undefined;
+      if (!isPlaygroundSourceWithinLimit(code)) {
+        setStatus(SOURCE_TOO_LARGE_STATUS);
+        return;
+      }
+      setStatus('Checking imports');
       scanTimer.current = window.setTimeout(() => {
         scanTimer.current = undefined;
         const activeRequest = runRequestRef.current;
@@ -332,17 +353,24 @@ export function Playground(): JSX.Element {
       deferredScan.current = undefined;
       pendingEditorRestore.current = undefined;
       setConsoleLines([]);
-      const importBlock = importBlocksRef.current[nextId];
+      const nextSourceWithinLimit = isPlaygroundSourceWithinLimit(
+        drafts[nextId]
+      );
+      const importBlock = nextSourceWithinLimit
+        ? importBlocksRef.current[nextId]
+        : undefined;
       importsBlockedRef.current = importBlock !== undefined;
       setImportsBlocked(importBlock !== undefined);
       selectedIdRef.current = nextId;
       setSelectedId(nextId);
       setStatus(
-        importBlock ??
-          (readySandboxKeyRef.current ===
-          keyFor(dependenciesRef.current[nextId])
-            ? 'Ready'
-            : 'Preparing runtime')
+        !nextSourceWithinLimit
+          ? SOURCE_TOO_LARGE_STATUS
+          : importBlock ??
+              (readySandboxKeyRef.current ===
+              keyFor(dependenciesRef.current[nextId])
+                ? 'Ready'
+                : 'Preparing runtime')
       );
     },
     [cancelScan, drafts]
@@ -460,6 +488,13 @@ export function Playground(): JSX.Element {
     deferredScan.current = undefined;
     const code = editorRef.current?.readValue() ?? drafts[selectedId];
     setDrafts((current) => ({ ...current, [selectedId]: code }));
+    if (!isPlaygroundSourceWithinLimit(code)) {
+      delete importBlocksRef.current[selectedId];
+      importsBlockedRef.current = false;
+      setImportsBlocked(false);
+      setStatus(SOURCE_TOO_LARGE_STATUS);
+      return;
+    }
     const resolution = resolvePlaygroundDependencies(code);
     if (resolution.kind !== 'ready') {
       const nextStatus: ImportBlockStatus =
@@ -615,7 +650,7 @@ export function Playground(): JSX.Element {
             Shortcut: <kbd>Ctrl/⌘ + Enter</kbd>
           </span>
           <span className="playground__status" role="status" aria-live="polite">
-            {status}
+            {visibleStatus}
           </span>
         </div>
         <div className="playground__sandbox">
@@ -623,7 +658,11 @@ export function Playground(): JSX.Element {
             key={sandboxKey}
             sandboxKey={sandboxKey}
             dependencies={dependencies[selectedId]}
-            initialCode={drafts[selectedId]}
+            initialCode={
+              sourceWithinLimit
+                ? selectedSource
+                : PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER
+            }
             theme={theme}
             runRequest={runRequest}
             cancelRunToken={cancelRunToken}

@@ -8,6 +8,25 @@ import { isNpmPackageName } from './playground-dependencies';
 const RUNTIME_MESSAGE_TYPE = '__FAVY_PLAYGROUND_RUNTIME__';
 const RUNTIME_RELAY_MARKER = '__FAVY_PLAYGROUND_RELAY__';
 
+export const MAX_PLAYGROUND_SOURCE_BYTES = 65_536;
+export const PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER =
+  '// Source is too large to load into the sandbox.';
+
+const codePointUtf8Bytes = (codePoint: number): number =>
+  codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+
+export const isPlaygroundSourceWithinLimit = (source: string): boolean => {
+  let bytes = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const codePoint = source.codePointAt(index);
+    if (codePoint === undefined) break;
+    bytes += codePointUtf8Bytes(codePoint);
+    if (bytes > MAX_PLAYGROUND_SOURCE_BYTES) return false;
+    if (codePoint > 0xffff) index += 1;
+  }
+  return true;
+};
+
 type ConsoleRecord = Readonly<{
   method?: unknown;
   data?: readonly unknown[];
@@ -131,14 +150,7 @@ const utf8Bytes = (value: string): number => {
   for (let index = 0; index < value.length; index += 1) {
     const codePoint = value.codePointAt(index);
     if (codePoint === undefined) break;
-    bytes +=
-      codePoint <= 0x7f
-        ? 1
-        : codePoint <= 0x7ff
-        ? 2
-        : codePoint <= 0xffff
-        ? 3
-        : 4;
+    bytes += codePointUtf8Bytes(codePoint);
     if (codePoint > 0xffff) index += 1;
   }
   return bytes;
