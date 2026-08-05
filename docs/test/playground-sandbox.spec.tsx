@@ -567,6 +567,58 @@ it('accepts 199 unique output events before one terminal truncation update', () 
   });
 });
 
+it('never inserts the event ID rejected by the 199-event boundary', () => {
+  const { handlers } = renderSandbox({ runRequest: request(9) });
+  const sessionToken = beginExecution(9);
+  const acceptedEventIds = Array.from(
+    { length: 199 },
+    (_, index) => 10_000 + index
+  );
+  const addSpy = jest.spyOn(Set.prototype, 'add');
+  let budgetAdds: Array<{ eventId: number; eventIds: Set<number> }> = [];
+
+  try {
+    for (const eventId of acceptedEventIds) {
+      emitRuntimeRelay({
+        kind: 'output',
+        sessionToken,
+        runToken: 9,
+        eventId,
+        method: 'log',
+        data: [],
+      });
+    }
+    emitRuntimeRelay({
+      kind: 'output',
+      sessionToken,
+      runToken: 9,
+      eventId: 10_199,
+      method: 'log',
+      data: [],
+    });
+    budgetAdds = addSpy.mock.calls.flatMap(([value], index) =>
+      typeof value === 'number' && value >= 10_000 && value <= 10_199
+        ? [
+            {
+              eventId: value,
+              eventIds: addSpy.mock.contexts[index] as Set<number>,
+            },
+          ]
+        : []
+    );
+  } finally {
+    addSpy.mockRestore();
+  }
+
+  expect(budgetAdds.map(({ eventId }) => eventId)).toEqual(acceptedEventIds);
+  expect(new Set(budgetAdds.map(({ eventIds }) => eventIds)).size).toBe(1);
+  expect(budgetAdds.at(-1)?.eventIds.size).toBe(199);
+  expect(handlers.onOutput).toHaveBeenLastCalledWith({
+    type: 'truncated',
+    runToken: 9,
+  });
+});
+
 it('accepts exactly 65536 serialized UTF-8 output bytes before closing', () => {
   const { handlers } = renderSandbox({ runRequest: request(9) });
   const sessionToken = beginExecution(9);
@@ -608,7 +660,42 @@ it('accepts exactly 65536 serialized UTF-8 output bytes before closing', () => {
   ]);
 });
 
-it('resets accepted event IDs for each run', () => {
+it('accounts for error bytes before emitting the terminal truncation update', () => {
+  const { handlers } = renderSandbox({ runRequest: request(9) });
+  const sessionToken = beginExecution(9);
+  const nearlyFullBudget = [
+    ...Array(15).fill('🙂'.repeat(1_024)),
+    'a'.repeat(4_045),
+  ];
+  expect(Buffer.byteLength(JSON.stringify(nearlyFullBudget), 'utf8')).toBe(
+    65_534
+  );
+  expect(Buffer.byteLength(JSON.stringify(['x']), 'utf8')).toBe(5);
+
+  emitRuntimeRelay({
+    kind: 'output',
+    sessionToken,
+    runToken: 9,
+    eventId: 0,
+    method: 'log',
+    data: nearlyFullBudget,
+  });
+  emitRuntimeRelay({
+    kind: 'error',
+    sessionToken,
+    runToken: 9,
+    eventId: 1,
+    error: 'x',
+  });
+
+  expect(handlers.onOutput.mock.calls.map(([update]) => update)).toEqual([
+    { type: 'reset', runToken: 9 },
+    { type: 'append', runToken: 9, method: 'log', data: nearlyFullBudget },
+    { type: 'truncated', runToken: 9 },
+  ]);
+});
+
+it('resets saturated event, byte, and ID budgets after settlement', () => {
   const handlers = callbacks();
   const props: PlaygroundSandboxProps = {
     sandboxKey: 'favy-local|lodash-latest',
@@ -621,14 +708,31 @@ it('resets accepted event IDs for each run', () => {
   };
   const view = render(<PlaygroundSandbox {...props} />);
   const sessionToken = beginExecution(1);
+  const firstPayload = [
+    ...Array(15).fill('🙂'.repeat(1_024)),
+    'a'.repeat(3_651),
+  ];
+  expect(
+    Buffer.byteLength(JSON.stringify(firstPayload), 'utf8') + 198 * 2
+  ).toBe(65_536);
   emitRuntimeRelay({
     kind: 'output',
     sessionToken,
     runToken: 1,
-    eventId: 42,
+    eventId: 0,
     method: 'log',
-    data: ['first run'],
+    data: firstPayload,
   });
+  for (let eventId = 1; eventId < 199; eventId += 1) {
+    emitRuntimeRelay({
+      kind: 'output',
+      sessionToken,
+      runToken: 1,
+      eventId,
+      method: 'clear',
+      data: [],
+    });
+  }
   emitRuntimeRelay({ kind: 'complete', sessionToken, runToken: 1 });
 
   view.rerender(<PlaygroundSandbox {...props} runRequest={request(2)} />);
@@ -637,14 +741,15 @@ it('resets accepted event IDs for each run', () => {
     kind: 'output',
     sessionToken,
     runToken: 2,
-    eventId: 42,
+    eventId: 0,
     method: 'log',
     data: ['second run'],
   });
 
-  expect(handlers.onOutput.mock.calls.map(([update]) => update)).toEqual([
-    { type: 'reset', runToken: 1 },
-    { type: 'append', runToken: 1, method: 'log', data: ['first run'] },
+  const secondRunUpdates = handlers.onOutput.mock.calls
+    .map(([update]) => update)
+    .filter(({ runToken }) => runToken === 2);
+  expect(secondRunUpdates).toEqual([
     { type: 'reset', runToken: 2 },
     { type: 'append', runToken: 2, method: 'log', data: ['second run'] },
   ]);

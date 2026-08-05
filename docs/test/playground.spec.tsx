@@ -11,6 +11,7 @@ import {
 import { Playground } from '../src/components/playground/playground';
 import * as playgroundDependencies from '../src/components/playground/playground-dependencies';
 import { playgroundExampleById } from '../src/components/playground/playground-examples';
+import * as playgroundRuntime from '../src/components/playground/playground-runtime';
 import type {
   PlaygroundOutputUpdate,
   PlaygroundRunPhase,
@@ -26,6 +27,7 @@ let mockMountedSandboxes = 0;
 let mockMaximumMountedSandboxes = 0;
 let mockVisibleSandpackEditors = 0;
 let mockTypeScriptEditorProps: any[] = [];
+let mockEditorReadValue: string | undefined;
 
 jest.mock('../src/components/playground/playground-sandbox', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -71,7 +73,10 @@ jest.mock('../src/components/typescript-editor', () => {
       React.useImperativeHandle(
         ref,
         () => ({
-          readValue: () => textareaRef.current?.value ?? valueRef.current,
+          readValue: () =>
+            mockEditorReadValue ??
+            textareaRef.current?.value ??
+            valueRef.current,
           capture: () => {
             const textarea = textareaRef.current;
             if (!textarea) return undefined;
@@ -196,6 +201,7 @@ beforeEach(() => {
   mockMaximumMountedSandboxes = 0;
   mockVisibleSandpackEditors = 0;
   mockTypeScriptEditorProps = [];
+  mockEditorReadValue = undefined;
   document.documentElement.dataset.theme = 'light';
 });
 
@@ -410,6 +416,57 @@ it('keeps oversized source editable without parsing or running it', () => {
 
   expect(resolveSpy).not.toHaveBeenCalled();
   expect(latestSandbox().runRequest).toBeNull();
+  expect(mockSandboxMounts).toEqual(['@favy/di@local']);
+});
+
+it('rechecks the imperative Run snapshot before dependency resolution', () => {
+  const resolveSpy = jest.spyOn(
+    playgroundDependencies,
+    'resolvePlaygroundDependencies'
+  );
+  renderReadyPlayground();
+  resolveSpy.mockClear();
+  const runButton = screen.getByRole('button', { name: 'Run code' });
+  expect((runButton as HTMLButtonElement).disabled).toBe(false);
+  mockEditorReadValue = 'a'.repeat(65_537);
+
+  fireEvent.click(runButton);
+
+  expect(resolveSpy).not.toHaveBeenCalled();
+  expect(latestSandbox().runRequest).toBeNull();
+  expect(latestSandbox().dependencies).toEqual({ '@favy/di': 'local' });
+  expect(mockSandboxMounts).toEqual(['@favy/di@local']);
+});
+
+it('revalidates a scheduled scan at apply time when source is oversized', () => {
+  const resolveSpy = jest.spyOn(
+    playgroundDependencies,
+    'resolvePlaygroundDependencies'
+  );
+  const sourceLimitSpy = jest.spyOn(
+    playgroundRuntime,
+    'isPlaygroundSourceWithinLimit'
+  );
+  renderReadyPlayground();
+  resolveSpy.mockClear();
+  sourceLimitSpy.mockReturnValueOnce(true);
+  const timerSpy = jest.spyOn(window, 'setTimeout');
+  const oversized = `import 'lodash';\n${'a'.repeat(65_537)}`;
+
+  edit(oversized);
+  const scanCallback = timerSpy.mock.calls.at(-1)?.[0];
+  if (typeof scanCallback !== 'function') {
+    throw new Error('The eligible edit did not schedule a dependency scan.');
+  }
+  expect(editor().value).toBe(oversized);
+  expect(screen.getByRole('status').textContent).toBe(
+    'Source is too large (64 KiB maximum)'
+  );
+
+  act(() => scanCallback());
+
+  expect(resolveSpy).not.toHaveBeenCalled();
+  expect(latestSandbox().dependencies).toEqual({ '@favy/di': 'local' });
   expect(mockSandboxMounts).toEqual(['@favy/di@local']);
 });
 
