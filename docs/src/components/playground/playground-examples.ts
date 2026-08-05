@@ -48,7 +48,7 @@ const Timestamp = Module<ClockLive>()(
   ({ Clock }) => \`Built at \${Clock.now()}\`,
 );
 
-const FixedClock: ReturnType<typeof Clock> = {
+const FixedClock = {
   now: () => '2000-01-01T00:00:00.000Z',
 };
 
