@@ -50,7 +50,12 @@ type MockProviderProps = Readonly<{
 
 let mockProviderProps: MockProviderProps[] = [];
 let mockRuntimeCommands: unknown[] = [];
+let mockRuntimeCommandAttempts: unknown[] = [];
 let mockUpdatedSetups: any[] = [];
+let mockGetClientErrors: Error[] = [];
+let mockPostMessageErrors: Partial<
+  Record<'prepare' | 'run' | 'cancel', Error[]>
+> = {};
 let mockEmitSandpack: ((message: MockSandpackMessage) => void) | undefined;
 let mockMountedProviders = 0;
 let mockMountedControllers = 0;
@@ -135,6 +140,12 @@ jest.mock('@codesandbox/sandpack-react', () => {
       if (!runtime) throw new Error('Controller did not render its iframe.');
       const postMessage = runtime.postMessage;
       runtime.postMessage = (message: unknown): void => {
+        mockRuntimeCommandAttempts.push(message);
+        const action = (message as { action?: unknown })?.action;
+        if (action === 'prepare' || action === 'run' || action === 'cancel') {
+          const error = mockPostMessageErrors[action]?.shift();
+          if (error) throw error;
+        }
         mockRuntimeCommands.push(message);
       };
       return () => {
@@ -145,7 +156,11 @@ jest.mock('@codesandbox/sandpack-react', () => {
 
     return {
       iframe,
-      getClient: () => context.client,
+      getClient: () => {
+        const error = mockGetClientErrors.shift();
+        if (error) throw error;
+        return context.client;
+      },
       listen: (listener: (message: MockSandpackMessage) => void) =>
         context.listen(listener),
     };
@@ -260,7 +275,10 @@ beforeEach(() => {
   jest.useFakeTimers();
   mockProviderProps = [];
   mockRuntimeCommands = [];
+  mockRuntimeCommandAttempts = [];
   mockUpdatedSetups = [];
+  mockGetClientErrors = [];
+  mockPostMessageErrors = {};
   mockEmitSandpack = undefined;
   mockMountedProviders = 0;
   mockMountedControllers = 0;
@@ -892,6 +910,183 @@ it('settles cancellation once when completion races its acknowledgement', () => 
     runToken: 7,
     outcome: 'cancelled',
   });
+});
+
+it('bounds throwing clients with the shared pre-execution retry budget', () => {
+  mockGetClientErrors = [
+    new Error('first client failure'),
+    new Error('second client failure'),
+  ];
+  const runRequest = request(7);
+  const { handlers } = renderSandbox({ runRequest });
+  bootRuntime();
+  const firstSession = activeSessionToken();
+  const firstRuntime = document.querySelector(
+    'iframe.playground__runtime-client'
+  );
+
+  expect(() => emitRuntimeReady()).not.toThrow();
+
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+  expect(document.querySelector('iframe.playground__runtime-client')).not.toBe(
+    firstRuntime
+  );
+  bootRuntime();
+  expect(activeSessionToken()).not.toBe(firstSession);
+
+  expect(() => emitRuntimeReady()).not.toThrow();
+
+  expect(handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'runtime-unavailable',
+  });
+  expect(
+    handlers.onPhaseChange.mock.calls.filter(([, phase]) => phase === 'queued')
+  ).toEqual([
+    [7, 'queued'],
+    [7, 'queued'],
+  ]);
+  expect(updatedExecutions()).toHaveLength(0);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+it('bounds throwing preparation command delivery with the shared retry budget', () => {
+  mockPostMessageErrors.prepare = [
+    new Error('first prepare delivery failure'),
+    new Error('second prepare delivery failure'),
+  ];
+  const runRequest = request(7);
+  const { handlers } = renderSandbox({ runRequest });
+  const firstRuntime = document.querySelector(
+    'iframe.playground__runtime-client'
+  );
+
+  expect(() => bootRuntime()).not.toThrow();
+
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+  expect(document.querySelector('iframe.playground__runtime-client')).not.toBe(
+    firstRuntime
+  );
+
+  expect(() => bootRuntime()).not.toThrow();
+
+  const attempts = mockRuntimeCommandAttempts.filter(
+    (command: any) => command.action === 'prepare'
+  ) as Array<{ action: 'prepare'; sessionToken: number }>;
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]?.sessionToken).toBeGreaterThan(
+    attempts[0]?.sessionToken ?? Number.MAX_SAFE_INTEGER
+  );
+  expect(handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'runtime-unavailable',
+  });
+  expect(
+    handlers.onPhaseChange.mock.calls.filter(([, phase]) => phase === 'queued')
+  ).toEqual([
+    [7, 'queued'],
+    [7, 'queued'],
+  ]);
+  expect(updatedExecutions()).toHaveLength(0);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+it('bounds throwing run command delivery before execution starts', () => {
+  mockPostMessageErrors.run = [
+    new Error('first run delivery failure'),
+    new Error('second run delivery failure'),
+  ];
+  const runRequest = request(7);
+  const { handlers } = renderSandbox({ runRequest });
+  bootRuntime();
+  emitRuntimeReady();
+  const firstExecution = updatedExecution();
+  const firstRuntime = document.querySelector(
+    'iframe.playground__runtime-client'
+  );
+
+  expect(() => acknowledgeExecutionWrite()).not.toThrow();
+
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+  expect(document.querySelector('iframe.playground__runtime-client')).not.toBe(
+    firstRuntime
+  );
+  bootRuntime();
+  emitRuntimeReady();
+  const secondExecution = updatedExecution();
+  expect(secondExecution).not.toBe(firstExecution);
+  expect(firstExecution).toContain('console.log(7);');
+  expect(secondExecution).toContain('console.log(7);');
+  expect(firstExecution).toContain('// run:7');
+  expect(secondExecution).toContain('// run:7');
+
+  expect(() => acknowledgeExecutionWrite()).not.toThrow();
+
+  expect(handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'runtime-unavailable',
+  });
+  expect(
+    mockRuntimeCommands.filter((command: any) => command.action === 'run')
+  ).toHaveLength(0);
+  expect(
+    handlers.onPhaseChange.mock.calls.filter(
+      ([, phase]) => phase === 'executing'
+    )
+  ).toHaveLength(0);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+it('uses the cancellation watchdog when cancel command delivery throws', () => {
+  mockPostMessageErrors.cancel = [new Error('cancel delivery failure')];
+  const runRequest = request(7);
+  const view = renderSandbox({ runRequest });
+  bootRuntime();
+  emitRuntimeReady();
+  acknowledgeExecutionWrite();
+  const preparedSession = activeSessionToken();
+  const firstRuntime = document.querySelector(
+    'iframe.playground__runtime-client'
+  );
+
+  expect(() =>
+    view.rerender(
+      <PlaygroundSandbox {...view.props} cancelRunToken={7}>
+        <span>Visible workspace</span>
+      </PlaygroundSandbox>
+    )
+  ).not.toThrow();
+
+  expect(mockRuntimeCommandAttempts.at(-1)).toEqual({
+    type: '__FAVY_PLAYGROUND_RUNTIME__',
+    action: 'cancel',
+    sessionToken: preparedSession,
+    runToken: 7,
+  });
+  expect(view.handlers.onSettled).not.toHaveBeenCalled();
+  act(() => jest.advanceTimersByTime(999));
+  expect(view.handlers.onSettled).not.toHaveBeenCalled();
+
+  act(() => jest.advanceTimersByTime(1));
+
+  expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(view.handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'cancelled',
+  });
+  expect(document.querySelector('iframe.playground__runtime-client')).not.toBe(
+    firstRuntime
+  );
+  emitRuntimeRelay({
+    kind: 'cancelled',
+    sessionToken: preparedSession,
+    runToken: 7,
+  });
+  expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(jest.getTimerCount()).toBe(0);
 });
 
 it('keeps one controller listener under StrictMode and clears every timer on cleanup', () => {

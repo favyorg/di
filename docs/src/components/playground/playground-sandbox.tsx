@@ -241,10 +241,17 @@ const SandboxController = ({
 
   const postRuntimeCommand = useCallback(
     (command: ReturnType<typeof runtimePrepareCommand>): boolean => {
-      const runtime = iframe.current;
-      if (!runtime?.contentWindow) return false;
-      runtime.contentWindow.postMessage(command, runtimeTargetOrigin(runtime));
-      return true;
+      try {
+        const runtime = iframe.current;
+        if (!runtime?.contentWindow) return false;
+        runtime.contentWindow.postMessage(
+          command,
+          runtimeTargetOrigin(runtime)
+        );
+        return true;
+      } catch {
+        return false;
+      }
     },
     [iframe]
   );
@@ -306,13 +313,13 @@ const SandboxController = ({
     if (run.phase !== 'queued' || !sessionReady.current) return false;
     const currentSessionToken = sessionToken.current;
     if (currentSessionToken === undefined) return false;
-    const client = getClientRef.current();
-    if (!client) {
-      restartBeforeExecutionRef.current();
-      return true;
-    }
 
     try {
+      const client = getClientRef.current();
+      if (!client) {
+        restartBeforeExecutionRef.current();
+        return true;
+      }
       const nextSetup = setupForRun(
         client.sandboxSetup,
         run.request.code,
