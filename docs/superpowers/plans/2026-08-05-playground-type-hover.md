@@ -14,7 +14,8 @@
 - Register both Monaco TypeScript modules before creating any TypeScript model: `vs/basic-languages/typescript/typescript.contribution` and `vs/language/typescript/monaco.contribution`.
 - Load local `@favy/di` sources exactly once per browser page; bundled HKT hover must require no registry or CDN request.
 - Preserve first-paint highlighted playground fallback, drafts, Reset, example switching, dependency debounce, focus/selection restoration, keyboard Run, and accessible editor naming.
-- Use `monaco-editor-auto-typings/custom-editor`; debounce external declarations by `1_000` ms, cache them in local storage, and dispose them with the playground editor.
+- Use `monaco-editor-auto-typings/custom-editor`; debounce external declarations by `1_000` ms, cache them through one shared local-storage cache, and dispose the editor listener on unmount. The package does not cancel in-flight fetches or dispose declaration models, so late results must be harmless and version-map changes must recreate the dependency-keyed editor instead of relying on `setVersions()` to reload.
+- Keep automatic-typing declarations under `file:///node_modules`, disable the package's same-value model refresh, and prevent it from mutating shared Monaco compiler defaults. Both local `@favy/di` and one external package must resolve under the explicit shared compiler configuration.
 - Monaco/TypeScript initialization may run in parallel with runtime warmup but must never be included in warm Run timing or trigger a repeated download during Run.
 - Never touch or stop the user's server on port 4321. Use the branch server on 4324 for new browser verification until final handoff.
 - Do not stage `.superpowers/` and do not add any `Co-Authored-By` trailer.
@@ -168,6 +169,9 @@ git commit -m "fix(docs): restore TypeScript example hover"
 - Modify: `docs/test/playground.spec.tsx`
 - Modify: `docs/src/components/typescript-editor.tsx`
 - Modify: `docs/test/typescript-editor.spec.tsx`
+- Modify: `docs/astro.config.mjs`
+- Modify: `docs/package.json`
+- Modify: `package-lock.json`
 
 **Interfaces:**
 - Consumes `TypeScriptEditor`, `TypeScriptEditorHandle`, and `TypeScriptEditorSnapshot` from Task 1.
@@ -202,7 +206,7 @@ it('passes validated non-favy versions to automatic typings', () => {
 });
 ```
 
-Retain the existing draft, Reset, example switch, queued Run, keyboard shortcut, and selection/focus assertions; make them operate through the shared editor mock. Add a rejection test proving an auto-typing failure leaves editing and Run enabled.
+Retain the existing draft, Reset, example switch, queued Run, keyboard shortcut, and selection/focus assertions; make them operate through the shared editor mock. Add both a rejected-create test and an `onError` acquisition test proving auto-typing failures leave editing and Run enabled. Cover a late create result by verifying it is immediately disposed after editor cleanup.
 
 - [ ] **Step 2: Verify playground RED**
 
@@ -241,7 +245,11 @@ Use `TypeScriptEditorHandle.readValue()` and `.capture()` in `SandboxHandle`; ca
 
 Add `typingVersions` to `SandboxContentsProps`, derive it in `Playground` from the selected example's validated active dependencies, remove `@favy/di`, and pass the rest through `SandboxSession` to the editor. The Sandpack provider remains keyed exactly as before.
 
-- [ ] **Step 4: Add automatic typings to the shared editor**
+- [ ] **Step 4: Add the browser-safe automatic-typings integration**
+
+Declare `path-browserify@1.0.1` directly in `docs/package.json`, update the lockfile, and alias Vite's `path` import to `path-browserify` in `docs/astro.config.mjs`. `custom-editor` avoids a second Monaco instance but still imports Node's `path` at runtime, so a successful TypeScript build without this alias is not sufficient.
+
+Before wiring acquisition, configure the shared Monaco defaults with `moduleResolution: NodeJs`, `allowSyntheticDefaultImports: true`, and `noEmit: true`. Keep the four raw local sources at their existing `file:///node_modules/@favy/di/src/...` URIs, add `file:///node_modules/@favy/di/package.json` with `{"types":"src/index.ts"}`, and remove the ambient `declare module '@favy/di'` re-export (keep the unrelated Jest ambient declarations). The re-export shadows the real virtual package under Node resolution and produces TS2305; `noEmit` prevents TS5055 compiler-option diagnostics for virtual package metadata. Set `dontAdaptEditorOptions: true`; auto-typings must not mutate global defaults used by ordinary documentation editors.
 
 When `typingVersions` is present and Monaco has mounted, dynamically import from `monaco-editor-auto-typings/custom-editor` and initialize:
 
@@ -252,12 +260,18 @@ const autoTypes = await AutoTypings.create(editor, {
   onlySpecifiedPackages: true,
   preloadPackages: true,
   shareCache: true,
-  sourceCache: new LocalStorageCache(),
+  sourceCache: sharedLocalStorageCache,
   debounceDuration: 1_000,
+  fileRootPath: 'file:///',
+  dontAdaptEditorOptions: true,
+  dontRefreshModelValueAfterResolvement: true,
+  onError: () => {},
 });
 ```
 
-Call `setVersions()` when the validated map changes. Dispose the instance on editor unmount and ignore a late `create()` result after cleanup. Catch acquisition failures without changing playground runtime status. Never include `@favy/di` in `typingVersions` because its local source model is authoritative.
+Create the `LocalStorageCache` once per page after the dynamic import. Type the lifecycle value as `Awaited<ReturnType<typeof AutoTypings.create>>`, because `create()` returns the core implementation rather than the custom-editor subclass. Initialize from the latest validated versions; dependency membership/version changes already remount the keyed sandbox/editor, so do not rely on `setVersions()` to acquire a package it previously rejected. Dispose the instance on editor unmount and immediately dispose a late `create()` result after cleanup. Catch dynamic-import/create rejection and handle acquisition through `onError`, without changing playground runtime status. Never call `clear()` during cleanup and never include `@favy/di` in `typingVersions` because its local source model is authoritative.
+
+Add a focused worker/unit assertion proving both `@favy/di` and a representative external declaration under `file:///node_modules` resolve with non-empty quick-info and no semantic missing-export/module diagnostics.
 
 - [ ] **Step 5: Adapt playground CSS without changing layout**
 
@@ -270,6 +284,7 @@ npx nx test docs --skip-nx-cache --runInBand --testPathPattern='(typescript-edit
 npx nx test docs --skip-nx-cache --runInBand
 npx tsc -p docs/tsconfig.spec.json --noEmit
 npx nx run docs:check --skip-nx-cache
+npx nx run docs:build --skip-nx-cache
 git diff --check
 ```
 
@@ -278,7 +293,7 @@ Expected: all existing runtime behavior and the new Monaco adapter/typing tests 
 - [ ] **Step 7: Commit Task 2**
 
 ```bash
-git add docs/src/components/typescript-editor.tsx docs/src/components/playground/playground.tsx docs/src/components/playground/playground.css docs/test/typescript-editor.spec.tsx docs/test/playground.spec.tsx
+git add docs/src/components/typescript-editor.tsx docs/src/components/playground/playground.tsx docs/src/components/playground/playground.css docs/test/typescript-editor.spec.tsx docs/test/playground.spec.tsx docs/astro.config.mjs docs/package.json package-lock.json
 git commit -m "feat(docs): add playground type hover"
 ```
 
