@@ -811,6 +811,39 @@ await new Promise((resolve) => setTimeout(resolve, 750));`;
     );
     await run.click();
     await executionFrameElement.waitFor({ state: 'attached', timeout: 10_000 });
+    const [executionFrameSource, executionRunAttribute] = await Promise.all([
+      executionFrameElement.getAttribute('src'),
+      executionFrameElement.getAttribute('data-favy-playground-execution'),
+    ]);
+    assert.ok(
+      executionFrameSource,
+      'Nested execution frame should have a source'
+    );
+    const executionFrameUrl = new URL(
+      executionFrameSource,
+      `${externalViteOrigin}/`
+    );
+    assert.equal(executionFrameUrl.origin, externalViteOrigin);
+    assert.equal(executionFrameUrl.pathname, '/frame.html');
+    assert.equal(executionFrameUrl.hash, '');
+    const executionQuery = executionFrameUrl.search.match(
+      /^\?mode=run&session=(\d+)&run=(\d+)$/
+    );
+    assert.ok(
+      executionQuery,
+      `Unexpected nested execution frame query: ${executionFrameUrl.search}`
+    );
+    const [, sessionToken, runToken] = executionQuery;
+    for (const [name, token] of [
+      ['session', sessionToken],
+      ['run', runToken],
+    ]) {
+      assert.ok(
+        Number.isSafeInteger(Number(token)) && Number(token) >= 0,
+        `Invalid ${name} token: ${token}`
+      );
+    }
+    assert.equal(runToken, executionRunAttribute);
     assert.equal(
       await executionFrameElement.getAttribute('sandbox'),
       'allow-scripts'

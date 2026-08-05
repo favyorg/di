@@ -1,12 +1,44 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 const smokeModule = new URL('./docs-pages-smoke.mjs', import.meta.url);
 
-if (process.env.DOCS_URL) {
-  await import(smokeModule.href);
-} else {
+export const inspectAstroStartupOutput = (chunks, expectedOrigin) => {
+  const output = stripVTControlCharacters(chunks.join(''));
+  const lastCompleteLine = output.lastIndexOf('\n');
+  if (lastCompleteLine === -1) return { status: 'pending' };
+
+  for (const line of output.slice(0, lastCompleteLine).split(/\r?\n/)) {
+    const localUrl = line.match(/^\s*(?:┃\s*)?Local\s*:?\s+(\S+)\s*$/)?.[1];
+    if (localUrl === undefined) continue;
+
+    let actualOrigin;
+    try {
+      actualOrigin = new URL(localUrl).origin;
+    } catch {
+      return {
+        status: 'rejected',
+        expectedOrigin,
+        actualOrigin: localUrl,
+      };
+    }
+
+    return actualOrigin === expectedOrigin
+      ? { status: 'confirmed', origin: actualOrigin }
+      : { status: 'rejected', expectedOrigin, actualOrigin };
+  }
+
+  return { status: 'pending' };
+};
+
+const runDocsSmoke = async () => {
+  if (process.env.DOCS_URL) {
+    await import(smokeModule.href);
+    return;
+  }
+
   const host = '127.0.0.1';
   const configuredPort = process.env.DOCS_SMOKE_PORT ?? '4399';
   const portNumber = Number(configuredPort);
@@ -50,9 +82,19 @@ if (process.env.DOCS_URL) {
     {
       cwd: docsRoot,
       env: process.env,
-      stdio: 'inherit',
+      stdio: ['inherit', 'pipe', 'pipe'],
     }
   );
+  preview.stdout.pipe(process.stdout, { end: false });
+  preview.stderr.pipe(process.stderr, { end: false });
+
+  const startupOutput = [];
+  let startupInspection = { status: 'pending' };
+  preview.stdout.on('data', (chunk) => {
+    if (startupInspection.status !== 'pending') return;
+    startupOutput.push(String(chunk));
+    startupInspection = inspectAstroStartupOutput(startupOutput, origin);
+  });
 
   let previewExited = false;
   const previewExit = new Promise((resolve) => {
@@ -74,6 +116,12 @@ if (process.env.DOCS_URL) {
       await delay(Math.min(100, Math.max(0, deadline - Date.now())));
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
+      if (startupInspection.status === 'rejected') {
+        throw new Error(
+          `Astro preview reported Local origin ${startupInspection.actualOrigin}, expected ${startupInspection.expectedOrigin}.`
+        );
+      }
+      if (startupInspection.status !== 'confirmed') continue;
       try {
         const response = await fetch(origin, {
           signal: AbortSignal.timeout(Math.min(1_000, remaining)),
@@ -140,4 +188,11 @@ if (process.env.DOCS_URL) {
     process.removeListener('SIGINT', handleSigint);
     process.removeListener('SIGTERM', handleSigterm);
   }
+};
+
+if (
+  process.argv[1] !== undefined &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
+  await runDocsSmoke();
 }
