@@ -77,6 +77,11 @@ export default defineConfig({
     rehypePlugins: [rehypeMermaid],
   },
   vite: {
+    resolve: {
+      alias: {
+        path: 'path-browserify',
+      },
+    },
     ssr: {
       noExternal: ['monaco-editor'],
     },

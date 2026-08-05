@@ -27,10 +27,6 @@ const favyDiSources = [
 ] as const;
 
 const ambientTypes = `
-declare module '@favy/di' {
-  export * from "file:///node_modules/@favy/di/src/index.ts";
-}
-
 declare module '@jest/globals' {
   export const beforeEach: any;
   export const describe: any;
@@ -52,11 +48,18 @@ const configureTypeScript = (monaco: Monaco): void => {
     ...defaults.getCompilerOptions(),
     strict: true,
     strictFunctionTypes: true,
+    moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+    allowSyntheticDefaultImports: true,
+    noEmit: true,
   });
 
   for (const [file, source] of favyDiSources) {
     defaults.addExtraLib(source, `file:///node_modules/@favy/di/${file}`);
   }
+  defaults.addExtraLib(
+    '{"types":"src/index.ts"}',
+    'file:///node_modules/@favy/di/package.json'
+  );
   defaults.addExtraLib(
     ambientTypes,
     'file:///node_modules/@favy/di/ambient.d.ts'
@@ -102,6 +105,14 @@ const prepareMonaco = (): Promise<void> => {
 };
 
 type MountedEditor = Parameters<OnMount>[0];
+type AutoTypingsModule =
+  typeof import('monaco-editor-auto-typings/custom-editor');
+type AutoTypingsInstance = Awaited<
+  ReturnType<AutoTypingsModule['AutoTypings']['create']>
+>;
+type AutoTypingsCache = InstanceType<AutoTypingsModule['LocalStorageCache']>;
+
+let sharedLocalStorageCache: AutoTypingsCache | undefined;
 
 export type TypeScriptEditorSnapshot = Readonly<{
   hadFocus: boolean;
@@ -124,6 +135,7 @@ export type TypeScriptEditorProps = Readonly<{
   fallback: ReactNode;
   readOnly?: boolean;
   onReady?(): void;
+  typingVersions?: Readonly<Record<string, string>>;
 }>;
 
 const restoreEditorSnapshot = (
@@ -163,16 +175,21 @@ const TypeScriptEditorComponent = forwardRef<
     fallback,
     readOnly = false,
     onReady,
+    typingVersions,
   },
   ref
 ) {
   const editorRef = useRef<MountedEditor>();
   const monacoRef = useRef<Monaco>();
   const pendingRestoreRef = useRef<TypeScriptEditorSnapshot>();
+  const autoTypesRef = useRef<AutoTypingsInstance>();
+  const autoTypesGenerationRef = useRef(0);
+  const typingVersionsRef = useRef(typingVersions);
   const valueRef = useRef(value);
   const [isReady, setIsReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   valueRef.current = value;
+  typingVersionsRef.current = typingVersions;
 
   useEffect(() => {
     let cancelled = false;
@@ -199,6 +216,9 @@ const TypeScriptEditorComponent = forwardRef<
 
     return () => {
       cancelled = true;
+      autoTypesGenerationRef.current += 1;
+      autoTypesRef.current?.dispose();
+      autoTypesRef.current = undefined;
       editorRef.current = undefined;
       monacoRef.current = undefined;
       pendingRestoreRef.current = undefined;
@@ -249,6 +269,48 @@ const TypeScriptEditorComponent = forwardRef<
       if (pendingRestore) {
         restoreEditorSnapshot(editor, monaco, pendingRestore);
         pendingRestoreRef.current = undefined;
+      }
+      const versions = typingVersionsRef.current;
+      if (versions) {
+        const generation = ++autoTypesGenerationRef.current;
+        autoTypesRef.current?.dispose();
+        autoTypesRef.current = undefined;
+        void (async () => {
+          const { AutoTypings, LocalStorageCache } = await import(
+            'monaco-editor-auto-typings/custom-editor'
+          );
+          if (
+            autoTypesGenerationRef.current !== generation ||
+            editorRef.current !== editor
+          ) {
+            return;
+          }
+          sharedLocalStorageCache ??= new LocalStorageCache();
+          const autoTypes: Awaited<ReturnType<typeof AutoTypings.create>> =
+            await AutoTypings.create(editor, {
+              monaco,
+              versions: { ...versions },
+              onlySpecifiedPackages: true,
+              preloadPackages: true,
+              shareCache: true,
+              sourceCache: sharedLocalStorageCache,
+              debounceDuration: 1_000,
+              fileRootPath: 'file:///',
+              dontAdaptEditorOptions: true,
+              dontRefreshModelValueAfterResolvement: true,
+              onError: () => {},
+            });
+          if (
+            autoTypesGenerationRef.current !== generation ||
+            editorRef.current !== editor
+          ) {
+            autoTypes.dispose();
+            return;
+          }
+          autoTypesRef.current = autoTypes;
+        })().catch(() => {
+          // Type acquisition must never block editing or playground runtime.
+        });
       }
       onReady?.();
     },

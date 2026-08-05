@@ -13,8 +13,12 @@ import {
   SandpackProvider,
   useActiveCode,
   useSandpackClient,
-  type CodeEditorRef,
 } from '@codesandbox/sandpack-react';
+import {
+  TypeScriptEditor,
+  type TypeScriptEditorHandle,
+  type TypeScriptEditorSnapshot,
+} from '../typescript-editor';
 import {
   dependencySignature,
   resolvePlaygroundDependencies,
@@ -48,12 +52,6 @@ type PlaygroundStatus =
   | 'Running'
   | 'Failed';
 
-type EditorSnapshot = Readonly<{
-  hadFocus: boolean;
-  anchor: number;
-  head: number;
-}>;
-
 type RunRequest = Readonly<{
   token: number;
   sandboxKey: string;
@@ -73,7 +71,7 @@ type DeferredScan = Readonly<{
 
 type SandboxHandle = {
   readCode(): string;
-  captureEditor(): EditorSnapshot | undefined;
+  captureEditor(): TypeScriptEditorSnapshot | undefined;
 };
 
 type Drafts = Record<PlaygroundExampleId, string>;
@@ -137,8 +135,9 @@ type SandboxContentsProps = Readonly<{
   activeCode: string;
   codeIdentity: string;
   sandboxKey: string;
+  typingVersions: Readonly<Record<string, string>>;
   runRequest: RunRequest | null;
-  restoreSnapshot: EditorSnapshot | undefined;
+  restoreSnapshot: TypeScriptEditorSnapshot | undefined;
   onCodeChange(code: string): void;
   onReady(sandboxKey: string): void;
   onRunSettled(token: number): void;
@@ -151,6 +150,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
       activeCode,
       codeIdentity,
       sandboxKey,
+      typingVersions,
       runRequest,
       restoreSnapshot,
       onCodeChange,
@@ -162,7 +162,7 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
   ) {
     const { code, updateCode } = useActiveCode();
     const { iframe, getClient, listen } = useSandpackClient();
-    const editorRef = useRef<CodeEditorRef>(null);
+    const editorRef = useRef<TypeScriptEditorHandle>(null);
     const [consoleLines, setConsoleLines] = useState<readonly string[]>([]);
     const liveCode = useRef(code);
     const previousCode = useRef(code);
@@ -474,13 +474,8 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     useImperativeHandle(
       forwardedRef,
       () => ({
-        readCode: () => liveCode.current,
-        captureEditor: () => {
-          const view = editorRef.current?.getCodemirror();
-          if (!view) return undefined;
-          const { anchor, head } = view.state.selection.main;
-          return { hadFocus: view.hasFocus, anchor, head };
-        },
+        readCode: () => editorRef.current?.readValue() ?? liveCode.current,
+        captureEditor: () => editorRef.current?.capture(),
       }),
       []
     );
@@ -496,25 +491,8 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
     }, [code]);
 
     useEffect(() => {
-      const view = editorRef.current?.getCodemirror();
-      if (view) {
-        const editorLabel = 'TypeScript playground editor';
-        view.dom.parentElement?.setAttribute('aria-label', editorLabel);
-        view.contentDOM.setAttribute('aria-label', editorLabel);
-      }
       if (!restoreSnapshot) return;
-      const timer = window.setTimeout(() => {
-        const view = editorRef.current?.getCodemirror();
-        if (!view) return;
-        view.dispatch({
-          selection: {
-            anchor: restoreSnapshot.anchor,
-            head: restoreSnapshot.head,
-          },
-        });
-        if (restoreSnapshot.hadFocus) view.focus();
-      }, 0);
-      return () => window.clearTimeout(timer);
+      editorRef.current?.restore(restoreSnapshot);
     }, [restoreSnapshot]);
 
     useEffect(() => {
@@ -604,12 +582,23 @@ const SandboxContents = forwardRef<SandboxHandle, SandboxContentsProps>(
         >
           <h2 id="playground-code-heading">Code</h2>
           <div className="playground__editor">
-            <SandpackCodeEditor
+            <TypeScriptEditor
               ref={editorRef}
-              initMode="immediate"
-              showLineNumbers
-              showRunButton={false}
-              showTabs={false}
+              value={code}
+              onChange={(nextCode) => updateCode(nextCode, false)}
+              height="100%"
+              modelPath="file:///playground/index.ts"
+              ariaLabel="TypeScript playground editor"
+              typingVersions={typingVersions}
+              fallback={
+                <SandpackCodeEditor
+                  initMode="immediate"
+                  readOnly
+                  showLineNumbers
+                  showRunButton={false}
+                  showTabs={false}
+                />
+              }
             />
           </div>
         </section>
@@ -710,7 +699,7 @@ export function Playground(): JSX.Element {
   const sandboxRef = useRef<SandboxHandle>(null);
   const scanTimer = useRef<number>();
   const deferredScan = useRef<DeferredScan>();
-  const restoreSnapshot = useRef<EditorSnapshot>();
+  const restoreSnapshot = useRef<TypeScriptEditorSnapshot>();
   const runCounter = useRef(0);
   const runRequestRef = useRef(runRequest);
   const selectedIdRef = useRef(selectedId);
@@ -727,6 +716,11 @@ export function Playground(): JSX.Element {
     readySandboxKeyRef.current = undefined;
   }
   const codeIdentity = `${selectedId}:${resetGeneration[selectedId]}`;
+  const typingVersions = Object.fromEntries(
+    Object.entries(dependencies[selectedId]).filter(
+      ([name]) => name !== '@favy/di'
+    )
+  );
   const runDisabled =
     runRequest !== null ||
     status === 'Preparing dependencies' ||
@@ -1038,6 +1032,7 @@ export function Playground(): JSX.Element {
             activeCode={drafts[selectedId]}
             codeIdentity={codeIdentity}
             sandboxKey={sandboxKey}
+            typingVersions={typingVersions}
             dependencies={dependencies[selectedId]}
             initialCode={drafts[selectedId]}
             theme={theme}

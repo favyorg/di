@@ -227,6 +227,8 @@ html:not([data-has-hero]):has(.playground-page) {
 .playground__editor,
 .playground__console,
 .playground__editor .sp-code-editor,
+.playground__editor .monaco-editor,
+.playground__editor .monaco-editor .overflow-guard,
 .playground__console .sp-console-list {
   min-inline-size: 0;
   max-inline-size: 100%;
@@ -290,6 +292,12 @@ astro-island[ssr] .playground .sp-syntax-comment {
   outline-offset: -3px;
 }
 
+.playground__editor .monaco-editor,
+.playground__editor .monaco-editor .margin,
+.playground__editor .monaco-editor-background {
+  background: var(--docs-surface-raised);
+}
+
 .playground__console {
   block-size: 12rem;
   overflow: hidden;
@@ -314,7 +322,7 @@ astro-island[ssr] .playground .sp-syntax-comment {
   display: none;
 }
 
-.playground__editor > .sp-stack,
+.playground__editor > :is(.sp-stack, section),
 .playground__console > .sp-stack {
   block-size: 100%;
 }

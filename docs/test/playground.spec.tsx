@@ -78,6 +78,8 @@ let mockEmitMessage: ((message: MockSandpackMessage) => void) | undefined;
 let mockChangeHookIdentities: (() => void) | undefined;
 let mockActiveListenerCount = 0;
 let mockRuntimeMessages: unknown[] = [];
+let mockVisibleSandpackEditors = 0;
+let mockTypeScriptEditorProps: any[] = [];
 
 jest.mock('@codesandbox/sandpack-react', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -206,56 +208,10 @@ jest.mock('@codesandbox/sandpack-react', () => {
     );
   };
 
-  const SandpackCodeEditor = React.forwardRef<any, any>(
-    function MockSandpackCodeEditor(_props, ref) {
-      const { code, setCode } = useMockSandpack();
-      const editorDomRef = React.useRef<any>(null);
-      const textareaRef = React.useRef<any>(null);
-
-      React.useImperativeHandle(ref, () => ({
-        getCodemirror: () => {
-          const editorDom = editorDomRef.current;
-          const textarea = textareaRef.current;
-          if (!editorDom || !textarea) return undefined;
-          return {
-            contentDOM: textarea,
-            dom: editorDom,
-            get hasFocus() {
-              return globalThis.document.activeElement === textarea;
-            },
-            state: {
-              selection: {
-                main: {
-                  anchor: textarea.selectionStart,
-                  head: textarea.selectionEnd,
-                },
-              },
-            },
-            dispatch: (mockTransaction: any) =>
-              textarea.setSelectionRange(
-                mockTransaction.selection.anchor,
-                mockTransaction.selection.head
-              ),
-            focus: () => textarea.focus(),
-          };
-        },
-      }));
-
-      return (
-        <div aria-label="Code Editor for index.ts" role="textbox" tabIndex={0}>
-          <div ref={editorDomRef}>
-            <textarea
-              ref={textareaRef}
-              aria-label="Code Editor for index.ts"
-              tabIndex={-1}
-              value={code}
-              onChange={(event) => setCode(event.currentTarget.value)}
-            />
-          </div>
-        </div>
-      );
-    }
-  );
+  const SandpackCodeEditor = () => {
+    mockVisibleSandpackEditors += 1;
+    return <pre>Sandpack editor fallback</pre>;
+  };
 
   return {
     SandpackCodeEditor,
@@ -332,16 +288,77 @@ jest.mock('@codesandbox/sandpack-react', () => {
   };
 });
 
+jest.mock('../src/components/typescript-editor', () => {
+  const React = jest.requireActual<typeof import('react')>('react');
+
+  const TypeScriptEditor = React.forwardRef<any, any>(
+    function MockTypeScriptEditor(props, ref) {
+      const { ariaLabel, onChange, value } = props;
+      const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+      const valueRef = React.useRef(value);
+      valueRef.current = value;
+      mockTypeScriptEditorProps.push(props);
+
+      React.useImperativeHandle(
+        ref,
+        () => ({
+          readValue: () => textareaRef.current?.value ?? valueRef.current,
+          capture: () => {
+            const textarea = textareaRef.current;
+            if (!textarea) return undefined;
+            const backward = textarea.selectionDirection === 'backward';
+            return {
+              hadFocus: globalThis.document.activeElement === textarea,
+              anchor: backward
+                ? textarea.selectionEnd
+                : textarea.selectionStart,
+              head: backward ? textarea.selectionStart : textarea.selectionEnd,
+            };
+          },
+          restore: ({ hadFocus, anchor, head }: any) => {
+            const textarea = textareaRef.current;
+            if (!textarea) return;
+            textarea.setSelectionRange(
+              Math.min(anchor, head),
+              Math.max(anchor, head),
+              anchor > head ? 'backward' : 'forward'
+            );
+            if (hadFocus) textarea.focus();
+          },
+        }),
+        []
+      );
+
+      return (
+        <textarea
+          ref={textareaRef}
+          aria-label={ariaLabel}
+          value={value}
+          onChange={(event) => onChange?.(event.currentTarget.value)}
+        />
+      );
+    }
+  );
+
+  return { TypeScriptEditor };
+});
+
 const editor = (): HTMLTextAreaElement => {
-  const textarea = screen
-    .getAllByRole('textbox')
-    .find(
-      (element): element is HTMLTextAreaElement =>
-        element instanceof HTMLTextAreaElement
-    );
-  if (!textarea) throw new Error('Missing mocked CodeMirror content editor');
-  return textarea;
+  const element = screen.getByRole('textbox', {
+    name: 'TypeScript playground editor',
+  });
+  if (!(element instanceof HTMLTextAreaElement)) {
+    throw new Error('Missing mocked TypeScript content editor');
+  }
+  return element;
 };
+
+const edit = (code: string): void => {
+  fireEvent.change(editor(), { target: { value: code } });
+};
+
+const latestTypingVersions = (): Record<string, string> | undefined =>
+  mockTypeScriptEditorProps.at(-1)?.typingVersions;
 
 const mountEvents = (): string[] =>
   mockEvents.filter((event) => event.startsWith('mount:'));
@@ -423,6 +440,8 @@ beforeEach(() => {
   mockChangeHookIdentities = undefined;
   mockActiveListenerCount = 0;
   mockRuntimeMessages = [];
+  mockVisibleSandpackEditors = 0;
+  mockTypeScriptEditorProps = [];
   document.documentElement.dataset.theme = 'light';
 });
 
@@ -758,15 +777,14 @@ it('marks the controls busy while a run is active', () => {
   ).toBe('true');
 });
 
-it('gives both CodeMirror textboxes a stable accessible name', () => {
+it('uses the controlled TypeScript editor and keeps Sandpack as runtime only', () => {
   render(<Playground />);
 
   expect(
-    screen.queryByRole('textbox', { name: 'Code Editor for index.ts' })
-  ).toBeNull();
-  expect(
-    screen.getAllByRole('textbox', { name: 'TypeScript playground editor' })
-  ).toHaveLength(2);
+    screen.getByRole('textbox', { name: 'TypeScript playground editor' })
+  ).toBeTruthy();
+  expect(mockVisibleSandpackEditors).toBe(0);
+  expect(mockMountedProviders).toBe(1);
 });
 
 it('stays ready through StrictMode effect replay', () => {
@@ -838,6 +856,15 @@ it('waits 1000 ms before remounting for a valid new import', () => {
   ]);
   expect(mockMaximumMountedProviders).toBe(1);
   expect(mockMaximumMountedClients).toBe(1);
+});
+
+it('passes validated non-favy versions to automatic typings', () => {
+  render(<Playground />);
+  edit("import { z } from 'zod';\nvoid z.string();");
+
+  act(() => jest.advanceTimersByTime(1_000));
+
+  expect(latestTypingVersions()).toEqual({ zod: 'latest' });
 });
 
 it('keeps the last valid dependency generation for an incomplete import', () => {
