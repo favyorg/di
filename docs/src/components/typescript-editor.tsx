@@ -15,6 +15,10 @@ import {
   useState,
 } from 'react';
 import { favyDiSourceFiles } from './playground/favy-di-sources';
+import {
+  createAutoTypingsGeneration,
+  type AutoTypingsGeneration,
+} from './typescript-editor-typings';
 
 const ambientTypes = `
 declare module '@jest/globals' {
@@ -97,10 +101,13 @@ const prepareMonaco = (): Promise<void> => {
 type MountedEditor = Parameters<OnMount>[0];
 type AutoTypingsModule =
   typeof import('monaco-editor-auto-typings/custom-editor');
-type AutoTypingsInstance = Awaited<
-  ReturnType<AutoTypingsModule['AutoTypings']['create']>
->;
 type AutoTypingsCache = InstanceType<AutoTypingsModule['LocalStorageCache']>;
+
+type ActiveAutoTypingsGeneration = Readonly<{
+  editor: MountedEditor;
+  signature: string;
+  generation: AutoTypingsGeneration;
+}>;
 
 let sharedLocalStorageCache: AutoTypingsCache | undefined;
 
@@ -127,6 +134,17 @@ export type TypeScriptEditorProps = Readonly<{
   onReady?(): void;
   typingVersions?: Readonly<Record<string, string>>;
 }>;
+
+const canonicalTypingVersions = (
+  versions: Readonly<Record<string, string>> | undefined
+): Readonly<Record<string, string>> | undefined =>
+  versions === undefined
+    ? undefined
+    : Object.fromEntries(
+        Object.entries(versions).sort(([left], [right]) =>
+          left.localeCompare(right)
+        )
+      );
 
 const restoreEditorSnapshot = (
   editor: MountedEditor | undefined,
@@ -172,14 +190,82 @@ const TypeScriptEditorComponent = forwardRef<
   const editorRef = useRef<MountedEditor>();
   const monacoRef = useRef<Monaco>();
   const pendingRestoreRef = useRef<TypeScriptEditorSnapshot>();
-  const autoTypesRef = useRef<AutoTypingsInstance>();
-  const autoTypesGenerationRef = useRef(0);
-  const typingVersionsRef = useRef(typingVersions);
+  const activeAutoTypesRef = useRef<ActiveAutoTypingsGeneration>();
+  const autoTypesRequestRef = useRef(0);
+  const sortedTypingVersions = canonicalTypingVersions(typingVersions);
+  const typingVersionsSignature =
+    sortedTypingVersions === undefined
+      ? undefined
+      : JSON.stringify(sortedTypingVersions);
+  const typingVersionsRef = useRef(sortedTypingVersions);
+  const typingVersionsSignatureRef = useRef(typingVersionsSignature);
   const valueRef = useRef(value);
   const [isReady, setIsReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   valueRef.current = value;
-  typingVersionsRef.current = typingVersions;
+  typingVersionsRef.current = sortedTypingVersions;
+  typingVersionsSignatureRef.current = typingVersionsSignature;
+
+  const synchronizeAutoTypings = useCallback(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    const signature = typingVersionsSignatureRef.current;
+    const current = activeAutoTypesRef.current;
+
+    if (
+      current &&
+      current.editor === editor &&
+      current.signature === signature
+    ) {
+      return;
+    }
+
+    const request = ++autoTypesRequestRef.current;
+    current?.generation.invalidate();
+    activeAutoTypesRef.current = undefined;
+    const versions = typingVersionsRef.current;
+    if (!editor || !monaco || signature === undefined || !versions) return;
+
+    void (async () => {
+      try {
+        const { AutoTypings, LocalStorageCache } = await import(
+          'monaco-editor-auto-typings/custom-editor'
+        );
+        if (
+          autoTypesRequestRef.current !== request ||
+          editorRef.current !== editor ||
+          monacoRef.current !== monaco ||
+          typingVersionsSignatureRef.current !== signature
+        ) {
+          return;
+        }
+
+        sharedLocalStorageCache ??= new LocalStorageCache();
+        const generation = createAutoTypingsGeneration({
+          monaco,
+          sourceCache: sharedLocalStorageCache,
+        });
+        activeAutoTypesRef.current = { editor, signature, generation };
+        const autoTypes = await AutoTypings.create(editor, {
+          monaco: generation.monaco,
+          versions: { ...versions },
+          onlySpecifiedPackages: true,
+          preloadPackages: true,
+          shareCache: false,
+          sourceCache: generation.sourceCache,
+          sourceResolver: generation.sourceResolver,
+          debounceDuration: 0,
+          fileRootPath: 'file:///',
+          dontAdaptEditorOptions: true,
+          dontRefreshModelValueAfterResolvement: true,
+          onError: () => {},
+        });
+        autoTypes.dispose();
+      } catch {
+        // Type acquisition must never block editing or playground runtime.
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -206,15 +292,19 @@ const TypeScriptEditorComponent = forwardRef<
 
     return () => {
       cancelled = true;
-      autoTypesGenerationRef.current += 1;
-      autoTypesRef.current?.dispose();
-      autoTypesRef.current = undefined;
+      autoTypesRequestRef.current += 1;
+      activeAutoTypesRef.current?.generation.invalidate();
+      activeAutoTypesRef.current = undefined;
       editorRef.current = undefined;
       monacoRef.current = undefined;
       pendingRestoreRef.current = undefined;
       observer.disconnect();
     };
   }, []);
+
+  useEffect(() => {
+    synchronizeAutoTypings();
+  }, [synchronizeAutoTypings, typingVersionsSignature]);
 
   useImperativeHandle(
     ref,
@@ -260,51 +350,10 @@ const TypeScriptEditorComponent = forwardRef<
         restoreEditorSnapshot(editor, monaco, pendingRestore);
         pendingRestoreRef.current = undefined;
       }
-      const versions = typingVersionsRef.current;
-      if (versions) {
-        const generation = ++autoTypesGenerationRef.current;
-        autoTypesRef.current?.dispose();
-        autoTypesRef.current = undefined;
-        void (async () => {
-          const { AutoTypings, LocalStorageCache } = await import(
-            'monaco-editor-auto-typings/custom-editor'
-          );
-          if (
-            autoTypesGenerationRef.current !== generation ||
-            editorRef.current !== editor
-          ) {
-            return;
-          }
-          sharedLocalStorageCache ??= new LocalStorageCache();
-          const autoTypes: Awaited<ReturnType<typeof AutoTypings.create>> =
-            await AutoTypings.create(editor, {
-              monaco,
-              versions: { ...versions },
-              onlySpecifiedPackages: true,
-              preloadPackages: true,
-              shareCache: true,
-              sourceCache: sharedLocalStorageCache,
-              debounceDuration: 1_000,
-              fileRootPath: 'file:///',
-              dontAdaptEditorOptions: true,
-              dontRefreshModelValueAfterResolvement: true,
-              onError: () => {},
-            });
-          if (
-            autoTypesGenerationRef.current !== generation ||
-            editorRef.current !== editor
-          ) {
-            autoTypes.dispose();
-            return;
-          }
-          autoTypesRef.current = autoTypes;
-        })().catch(() => {
-          // Type acquisition must never block editing or playground runtime.
-        });
-      }
+      synchronizeAutoTypings();
       onReady?.();
     },
-    [onReady]
+    [onReady, synchronizeAutoTypings]
   );
 
   if (!isReady) return fallback;

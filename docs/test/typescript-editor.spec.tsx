@@ -1,5 +1,7 @@
 import React, { createRef } from 'react';
 import ts from 'typescript';
+import type { Monaco } from '@monaco-editor/react';
+import type { SourceCache, SourceResolver } from 'monaco-editor-auto-typings';
 import {
   act,
   cleanup,
@@ -30,6 +32,30 @@ type MockEditorState = {
   value: string;
 };
 
+type Deferred<T> = Readonly<{
+  promise: Promise<T>;
+  resolve(value: T): void;
+}>;
+
+type MockCreatedModel = Readonly<{
+  dispose: jest.Mock<void, []>;
+  getValue(): string;
+}>;
+
+type GenerationOptions = Readonly<{
+  monaco: Monaco;
+  sourceCache: SourceCache;
+  sourceResolver: SourceResolver;
+}>;
+
+const deferred = <T,>(): Deferred<T> => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
 const mockAddExtraLib = jest.fn();
 const mockSetCompilerOptions = jest.fn();
 const mockSetDiagnosticsOptions = jest.fn();
@@ -37,9 +63,29 @@ const mockEditorStates: MockEditorState[] = [];
 const mockAutoTypesDispose = jest.fn();
 const mockAutoTypesCreate = jest.fn();
 const mockCacheClear = jest.fn();
+const mockCacheGetFile = jest.fn();
+const mockCacheStoreFile = jest.fn();
 const mockLocalStorageCache = jest.fn().mockImplementation(() => ({
   clear: mockCacheClear,
+  getFile: mockCacheGetFile,
+  storeFile: mockCacheStoreFile,
 }));
+const mockMonacoModels = new Map<unknown, MockCreatedModel>();
+const mockMonacoCreateModel = jest.fn(
+  (content: string, _language: string, uri: unknown): MockCreatedModel => {
+    const model: MockCreatedModel = {
+      dispose: jest.fn(() => {
+        mockMonacoModels.delete(uri);
+      }),
+      getValue: () => content,
+    };
+    mockMonacoModels.set(uri, model);
+    return model;
+  }
+);
+const mockMonacoGetModel = jest.fn(
+  (uri: unknown) => mockMonacoModels.get(uri) ?? null
+);
 
 const mockOffsetAt = (value: string, position: MockPosition): number => {
   const lines = value.split('\n');
@@ -72,6 +118,10 @@ class MockMonacoSelection implements MockSelection {
 
 const mockMonaco = {
   Selection: MockMonacoSelection,
+  editor: {
+    createModel: mockMonacoCreateModel,
+    getModel: mockMonacoGetModel,
+  },
   languages: {
     typescript: {
       ModuleResolutionKind: { NodeJs: 2 },
@@ -344,18 +394,109 @@ const renderTypingHarness = (
   return { ...render(<Harness />), onRun, ref };
 };
 
+const originalFetch = globalThis.fetch;
+
+const arrangePendingGeneration = (label: string) => {
+  const pendingFetch = deferred<Response>();
+  const pendingCacheRead = deferred<string | undefined>();
+  const pendingModelWrite = deferred<void>();
+  const fetchSource = jest.fn(
+    (_input: RequestInfo | URL, _init?: RequestInit) => pendingFetch.promise
+  ) as unknown as typeof globalThis.fetch;
+  globalThis.fetch = fetchSource;
+  mockCacheGetFile.mockImplementationOnce(() => pendingCacheRead.promise);
+
+  const unownedUri = { path: `/unowned-${label}.d.ts` } as never;
+  const ownedUri = { path: `/owned-${label}.d.ts` } as never;
+  const lateUri = { path: `/late-${label}.d.ts` } as never;
+  const unownedModel = mockMonaco.editor.createModel(
+    'export type Unowned = true',
+    'typescript',
+    unownedUri
+  );
+  let ownedModel: MockCreatedModel | undefined;
+  let resolverResult: Promise<string | undefined> | undefined;
+  let cacheResult: Promise<string | undefined> | undefined;
+  let lateModelResult: Promise<unknown> | undefined;
+  let lateStoreResult: Promise<void> | undefined;
+
+  mockAutoTypesCreate.mockImplementationOnce(
+    async (_editor: unknown, options: GenerationOptions) => {
+      ownedModel = options.monaco.editor.createModel(
+        'export type Owned = true',
+        'typescript',
+        ownedUri
+      ) as unknown as MockCreatedModel;
+      resolverResult = options.sourceResolver.resolveSourceFile(
+        'pkg',
+        '1',
+        'index.d.ts'
+      );
+      cacheResult = options.sourceCache.getFile('pkg@1/index.d.ts');
+      lateModelResult = pendingModelWrite.promise.then(() =>
+        options.monaco.editor.createModel(
+          'export type Late = true',
+          'typescript',
+          lateUri
+        )
+      );
+      lateStoreResult = resolverResult.then(async (source) => {
+        if (source) {
+          await options.sourceCache.storeFile('pkg@1/index.d.ts', source);
+        }
+      });
+      return { dispose: mockAutoTypesDispose };
+    }
+  );
+
+  return {
+    fetchSource,
+    pendingCacheRead,
+    pendingFetch,
+    pendingModelWrite,
+    unownedModel,
+    get ownedModel() {
+      return ownedModel;
+    },
+    async finishLateWork() {
+      const fetchedResponse = {
+        ok: true,
+        status: 200,
+        text: jest.fn(async () => 'export type Old = true'),
+      } as unknown as Response;
+      pendingFetch.resolve(fetchedResponse);
+      pendingCacheRead.resolve('export type CachedOld = true');
+      pendingModelWrite.resolve(undefined);
+      return {
+        cache: await cacheResult,
+        model: await lateModelResult,
+        resolver: await resolverResult,
+        store: await lateStoreResult,
+        text: fetchedResponse.text,
+      };
+    },
+  };
+};
+
 beforeEach(() => {
   mockAutoTypesDispose.mockReset();
   mockAutoTypesCreate.mockReset().mockResolvedValue({
     dispose: mockAutoTypesDispose,
   });
   mockCacheClear.mockReset();
+  mockCacheGetFile.mockReset().mockResolvedValue(undefined);
+  mockCacheStoreFile.mockReset().mockResolvedValue(undefined);
   mockLocalStorageCache.mockClear();
+  mockMonacoCreateModel.mockClear();
+  mockMonacoGetModel.mockClear();
+  mockMonacoModels.clear();
+  globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
   cleanup();
   document.documentElement.removeAttribute('data-theme');
+  globalThis.fetch = originalFetch;
 });
 
 it('maps the checked-out package sources to Monaco and Sandpack paths', () => {
@@ -419,7 +560,7 @@ it('queues the latest restore until mount and clamps its offsets', async () => {
   expect(mockEditorHasFocus()).toBe(true);
 });
 
-it('initializes automatic typings with one shared cache and disposes listeners', async () => {
+it('initializes guarded automatic typings with one shared backing cache', async () => {
   const zodVersions = { zod: 'latest' } as const;
   const lodashVersions = { lodash: 'latest' } as const;
   const result = render(
@@ -439,12 +580,11 @@ it('initializes automatic typings with one shared cache and disposes listeners',
   const firstOptions = mockAutoTypesCreate.mock.calls[0][1];
   const secondOptions = mockAutoTypesCreate.mock.calls[1][1];
   expect(firstOptions).toMatchObject({
-    monaco: mockMonaco,
     versions: { zod: 'latest' },
     onlySpecifiedPackages: true,
     preloadPackages: true,
-    shareCache: true,
-    debounceDuration: 1_000,
+    shareCache: false,
+    debounceDuration: 0,
     fileRootPath: 'file:///',
     dontAdaptEditorOptions: true,
     dontRefreshModelValueAfterResolvement: true,
@@ -452,12 +592,157 @@ it('initializes automatic typings with one shared cache and disposes listeners',
   });
   expect(firstOptions.versions).not.toBe(zodVersions);
   expect(secondOptions.versions).toEqual({ lodash: 'latest' });
-  expect(firstOptions.sourceCache).toBe(secondOptions.sourceCache);
+  expect(firstOptions.monaco).not.toBe(mockMonaco);
+  expect(firstOptions.monaco.editor).not.toBe(mockMonaco.editor);
+  expect(firstOptions.monaco.languages).toBe(mockMonaco.languages);
+  expect(firstOptions.sourceCache).not.toBe(secondOptions.sourceCache);
+  expect(firstOptions.sourceResolver).toBeDefined();
+  expect(secondOptions.sourceResolver).toBeDefined();
   expect(mockLocalStorageCache).toHaveBeenCalledTimes(1);
+  await firstOptions.sourceCache.storeFile('first', 'first content');
+  await secondOptions.sourceCache.storeFile('second', 'second content');
+  expect(mockCacheStoreFile).toHaveBeenNthCalledWith(
+    1,
+    'first',
+    'first content'
+  );
+  expect(mockCacheStoreFile).toHaveBeenNthCalledWith(
+    2,
+    'second',
+    'second content'
+  );
+  await waitFor(() => expect(mockAutoTypesDispose).toHaveBeenCalledTimes(2));
 
   result.unmount();
   expect(mockAutoTypesDispose).toHaveBeenCalledTimes(2);
   expect(mockCacheClear).not.toHaveBeenCalled();
+});
+
+it('reacquires only for a distinct sorted typing-version signature', async () => {
+  const result = render(
+    <TypeScriptEditor
+      {...props}
+      typingVersions={{ zod: '3.0.0', lodash: '4.0.0' }}
+    />
+  );
+
+  await editorTextarea();
+  await waitFor(() => expect(mockAutoTypesCreate).toHaveBeenCalledTimes(1));
+  result.rerender(
+    <TypeScriptEditor
+      {...props}
+      value="const edited = true"
+      typingVersions={{ lodash: '4.0.0', zod: '3.0.0' }}
+    />
+  );
+  await act(async () => flushDynamicImports());
+
+  expect(mockAutoTypesCreate).toHaveBeenCalledTimes(1);
+
+  result.rerender(
+    <TypeScriptEditor
+      {...props}
+      value="const edited again = true"
+      typingVersions={{ zod: '3.1.0', lodash: '4.0.0' }}
+    />
+  );
+  await waitFor(() => expect(mockAutoTypesCreate).toHaveBeenCalledTimes(2));
+  expect(mockAutoTypesCreate.mock.calls[1][1].versions).toEqual({
+    lodash: '4.0.0',
+    zod: '3.1.0',
+  });
+
+  result.rerender(
+    <TypeScriptEditor
+      {...props}
+      value="const finalEdit = true"
+      typingVersions={{ lodash: '4.0.0', zod: '3.1.0' }}
+    />
+  );
+  await act(async () => flushDynamicImports());
+  expect(mockAutoTypesCreate).toHaveBeenCalledTimes(2);
+});
+
+it('invalidates acquisition when typing versions become unavailable', async () => {
+  const result = render(
+    <TypeScriptEditor {...props} typingVersions={{ zod: '3.0.0' }} />
+  );
+
+  await editorTextarea();
+  await waitFor(() => expect(mockAutoTypesCreate).toHaveBeenCalledTimes(1));
+  const firstOptions = mockAutoTypesCreate.mock
+    .calls[0][1] as GenerationOptions;
+  const ownedModel = firstOptions.monaco.editor.createModel(
+    'export type Version = "old"',
+    'typescript',
+    { path: '/node_modules/zod/index.d.ts' } as never
+  ) as unknown as MockCreatedModel;
+
+  result.rerender(<TypeScriptEditor {...props} typingVersions={undefined} />);
+  await act(async () => flushDynamicImports());
+
+  expect(mockAutoTypesCreate).toHaveBeenCalledTimes(1);
+  expect(ownedModel.dispose).toHaveBeenCalledTimes(1);
+
+  result.rerender(
+    <TypeScriptEditor {...props} typingVersions={{ zod: '3.0.0' }} />
+  );
+  await waitFor(() => expect(mockAutoTypesCreate).toHaveBeenCalledTimes(2));
+});
+
+it('invalidates pending resolver, cache, and model work on version change', async () => {
+  const race = arrangePendingGeneration('version-change');
+  const result = render(
+    <TypeScriptEditor {...props} typingVersions={{ pkg: '1' }} />
+  );
+
+  await editorTextarea();
+  await waitFor(() => expect(mockAutoTypesCreate).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mockAutoTypesDispose).toHaveBeenCalledTimes(1));
+  const fetchSignal = (race.fetchSource as unknown as jest.Mock).mock
+    .calls[0][1].signal as AbortSignal;
+
+  result.rerender(
+    <TypeScriptEditor {...props} typingVersions={{ pkg: '2' }} />
+  );
+  await waitFor(() => expect(mockAutoTypesCreate).toHaveBeenCalledTimes(2));
+
+  expect(fetchSignal.aborted).toBe(true);
+  const late = await race.finishLateWork();
+  expect(late.resolver).toBeUndefined();
+  expect(late.cache).toBeUndefined();
+  expect(late.model).toBeUndefined();
+  expect(late.text).not.toHaveBeenCalled();
+  expect(mockCacheStoreFile).not.toHaveBeenCalled();
+  expect(mockMonacoCreateModel).toHaveBeenCalledTimes(2);
+  expect(race.ownedModel?.dispose).toHaveBeenCalledTimes(1);
+  expect(race.unownedModel.dispose).not.toHaveBeenCalled();
+});
+
+it('invalidates pending resolver, cache, and model work on unmount', async () => {
+  const race = arrangePendingGeneration('unmount');
+  const result = render(
+    <TypeScriptEditor {...props} typingVersions={{ pkg: '1' }} />
+  );
+
+  await editorTextarea();
+  await waitFor(() => expect(mockAutoTypesCreate).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mockAutoTypesDispose).toHaveBeenCalledTimes(1));
+  const fetchSignal = (race.fetchSource as unknown as jest.Mock).mock
+    .calls[0][1].signal as AbortSignal;
+
+  result.unmount();
+
+  expect(fetchSignal.aborted).toBe(true);
+  const late = await race.finishLateWork();
+  expect(late.resolver).toBeUndefined();
+  expect(late.cache).toBeUndefined();
+  expect(late.model).toBeUndefined();
+  expect(late.text).not.toHaveBeenCalled();
+  expect(mockCacheStoreFile).not.toHaveBeenCalled();
+  expect(mockMonacoCreateModel).toHaveBeenCalledTimes(2);
+  expect(race.ownedModel?.dispose).toHaveBeenCalledTimes(1);
+  expect(race.unownedModel.dispose).not.toHaveBeenCalled();
 });
 
 it('keeps editing and Run enabled when automatic typing creation rejects', async () => {
