@@ -8,6 +8,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type MutableRefObject,
   type PropsWithChildren,
 } from 'react';
 import { favyDiSourceFiles } from './favy-di-sources';
@@ -15,6 +16,7 @@ import type { PlaygroundDependencies } from './playground-dependencies';
 import {
   frameHtmlSource,
   preparationLabel,
+  runtimeCancelCommand,
   runtimePrepareCommand,
   runtimeRelayRecord,
   runtimeRunCommand,
@@ -76,24 +78,58 @@ export type PlaygroundSandboxProps = PropsWithChildren<{
   onStatus(status: PlaygroundSandboxStatus): void;
 }>;
 
-type ActiveRun = {
+type InfrastructureRetries = 0 | 1;
+
+type RunLedger = Readonly<{
   request: PlaygroundRunRequest;
-  phase: PlaygroundRunPhase;
-  expectedContent?: string;
-  failed: boolean;
-};
+  infrastructureRetries: InfrastructureRetries;
+}>;
+
+type RunLifecycle =
+  | { phase: 'idle' }
+  | {
+      phase: 'queued';
+      request: PlaygroundRunRequest;
+      infrastructureRetries: InfrastructureRetries;
+    }
+  | {
+      phase: 'committing';
+      request: PlaygroundRunRequest;
+      infrastructureRetries: InfrastructureRetries;
+      sessionToken: number;
+      expectedContent: string;
+    }
+  | {
+      phase: 'executing';
+      request: PlaygroundRunRequest;
+      infrastructureRetries: InfrastructureRetries;
+      sessionToken: number;
+      failed: boolean;
+    }
+  | {
+      phase: 'cancelling';
+      request: PlaygroundRunRequest;
+      sessionToken: number;
+    };
 
 type SandboxControllerProps = Pick<
   PlaygroundSandboxProps,
   | 'sandboxKey'
-  | 'runRequest'
   | 'cancelRunToken'
   | 'onReady'
   | 'onPhaseChange'
   | 'onOutput'
-  | 'onSettled'
   | 'onStatus'
->;
+> & {
+  runLedger: RunLedger | null;
+  onRestartBeforeExecution(ledger: RunLedger): void;
+  onRestartAfterExecution(request: PlaygroundRunRequest): void;
+  onCancellationTimeout(request: PlaygroundRunRequest): void;
+  onControllerSettled(
+    request: PlaygroundRunRequest,
+    settlement: PlaygroundRunSettlement
+  ): void;
+};
 
 const SANDBOX_OPTIONS = Object.freeze({
   activeFile: '/index.ts',
@@ -103,6 +139,17 @@ const SANDBOX_OPTIONS = Object.freeze({
 
 const VITE_CONFIG_SOURCE =
   "export default { resolve: { alias: [{ find: /^@favy\\/di$/, replacement: '/favy-di/index.ts' }] }, server: { cors: { origin: '*' }, hmr: false } };";
+
+const PREPARATION_TIMEOUT_MS = 120_000;
+const COMMIT_TIMEOUT_MS = 10_000;
+const EXECUTION_TIMEOUT_MS = 30_000;
+const CANCELLATION_TIMEOUT_MS = 1_000;
+
+const clearTimer = (timer: MutableRefObject<number | undefined>): void => {
+  if (timer.current === undefined) return;
+  window.clearTimeout(timer.current);
+  timer.current = undefined;
+};
 
 let nextSessionToken = 0;
 
@@ -127,41 +174,70 @@ const runtimeTargetOrigin = (iframe: HTMLIFrameElement): string => {
 
 const SandboxController = ({
   sandboxKey,
-  runRequest,
+  runLedger,
   cancelRunToken,
   onReady,
   onPhaseChange,
   onOutput,
-  onSettled,
   onStatus,
+  onRestartBeforeExecution,
+  onRestartAfterExecution,
+  onCancellationTimeout,
+  onControllerSettled,
 }: SandboxControllerProps): JSX.Element => {
   const { iframe, getClient, listen } = useSandpackClient();
   const bootHandled = useRef(false);
   const sessionToken = useRef<number>();
   const sessionReady = useRef(false);
-  const activeRun = useRef<ActiveRun>();
-  const runRequestRef = useRef(runRequest);
+  const lifecycle = useRef<RunLifecycle>({ phase: 'idle' });
+  const preparationTimer = useRef<number>();
+  const commitTimer = useRef<number>();
+  const executionTimer = useRef<number>();
+  const cancellationTimer = useRef<number>();
+  const runLedgerRef = useRef(runLedger);
   const sandboxKeyRef = useRef(sandboxKey);
   const listenRef = useRef(listen);
   const getClientRef = useRef(getClient);
   const onReadyRef = useRef(onReady);
   const onPhaseChangeRef = useRef(onPhaseChange);
   const onOutputRef = useRef(onOutput);
-  const onSettledRef = useRef(onSettled);
   const onStatusRef = useRef(onStatus);
+  const onRestartBeforeExecutionRef = useRef(onRestartBeforeExecution);
+  const onRestartAfterExecutionRef = useRef(onRestartAfterExecution);
+  const onCancellationTimeoutRef = useRef(onCancellationTimeout);
+  const onControllerSettledRef = useRef(onControllerSettled);
+  const restartBeforeExecutionRef = useRef<() => void>(() => undefined);
   const tryCommitRef = useRef<() => boolean>(() => false);
   const handleMessageRef = useRef<(message: SandpackMessage) => void>(
     () => undefined
   );
-  runRequestRef.current = runRequest;
+  runLedgerRef.current = runLedger;
   sandboxKeyRef.current = sandboxKey;
   listenRef.current = listen;
   getClientRef.current = getClient;
   onReadyRef.current = onReady;
   onPhaseChangeRef.current = onPhaseChange;
   onOutputRef.current = onOutput;
-  onSettledRef.current = onSettled;
   onStatusRef.current = onStatus;
+  onRestartBeforeExecutionRef.current = onRestartBeforeExecution;
+  onRestartAfterExecutionRef.current = onRestartAfterExecution;
+  onCancellationTimeoutRef.current = onCancellationTimeout;
+  onControllerSettledRef.current = onControllerSettled;
+
+  const clearAllTimers = useCallback((): void => {
+    clearTimer(preparationTimer);
+    clearTimer(commitTimer);
+    clearTimer(executionTimer);
+    clearTimer(cancellationTimer);
+  }, []);
+
+  const transition = useCallback(
+    (next: RunLifecycle): void => {
+      clearAllTimers();
+      lifecycle.current = next;
+    },
+    [clearAllTimers]
+  );
 
   const postRuntimeCommand = useCallback(
     (command: ReturnType<typeof runtimePrepareCommand>): boolean => {
@@ -173,24 +249,66 @@ const SandboxController = ({
     [iframe]
   );
 
-  const settleUnavailable = useCallback((run: ActiveRun): void => {
-    if (activeRun.current !== run) return;
-    activeRun.current = undefined;
+  const settle = useCallback(
+    (
+      run: Exclude<RunLifecycle, { phase: 'idle' }>,
+      settlement: PlaygroundRunSettlement,
+      status: PlaygroundSandboxStatus
+    ): void => {
+      if (lifecycle.current !== run) return;
+      transition({ phase: 'idle' });
+      onStatusRef.current(status);
+      onControllerSettledRef.current(run.request, settlement);
+    },
+    [transition]
+  );
+
+  const restartBeforeExecution = useCallback((): void => {
+    const run = lifecycle.current;
+    if (run.phase !== 'queued' && run.phase !== 'committing') return;
+    transition({ phase: 'idle' });
+    if (run.infrastructureRetries === 0) {
+      onStatusRef.current('Preparing runtime');
+      onRestartBeforeExecutionRef.current({
+        request: run.request,
+        infrastructureRetries: 1,
+      });
+      return;
+    }
     onStatusRef.current('Failed');
-    onSettledRef.current({
+    onControllerSettledRef.current(run.request, {
       runToken: run.request.runToken,
       outcome: 'runtime-unavailable',
     });
-  }, []);
+  }, [transition]);
+  restartBeforeExecutionRef.current = restartBeforeExecution;
+
+  const ensurePreparationWatchdog = useCallback(
+    (run: Extract<RunLifecycle, { phase: 'queued' }>): void => {
+      if (
+        lifecycle.current !== run ||
+        sessionReady.current ||
+        preparationTimer.current !== undefined
+      ) {
+        return;
+      }
+      preparationTimer.current = window.setTimeout(() => {
+        preparationTimer.current = undefined;
+        if (lifecycle.current !== run || sessionReady.current) return;
+        restartBeforeExecutionRef.current();
+      }, PREPARATION_TIMEOUT_MS);
+    },
+    []
+  );
 
   const tryCommit = useCallback((): boolean => {
-    const run = activeRun.current;
-    if (!run || run.phase !== 'queued' || !sessionReady.current) return false;
+    const run = lifecycle.current;
+    if (run.phase !== 'queued' || !sessionReady.current) return false;
     const currentSessionToken = sessionToken.current;
     if (currentSessionToken === undefined) return false;
     const client = getClientRef.current();
     if (!client) {
-      onStatusRef.current('Preparing runtime');
+      restartBeforeExecutionRef.current();
       return true;
     }
 
@@ -202,35 +320,51 @@ const SandboxController = ({
         run.request.runToken
       );
       const expectedContent = nextSetup.files['/execution.ts'].code;
-      run.phase = 'committing';
-      run.expectedContent = expectedContent;
+      client.updateSandbox(nextSetup);
+      const committing: RunLifecycle = {
+        phase: 'committing',
+        request: run.request,
+        infrastructureRetries: run.infrastructureRetries,
+        sessionToken: currentSessionToken,
+        expectedContent,
+      };
+      transition(committing);
       onOutputRef.current({ type: 'reset', runToken: run.request.runToken });
       onPhaseChangeRef.current(run.request.runToken, 'committing');
-      client.updateSandbox(nextSetup);
+      commitTimer.current = window.setTimeout(() => {
+        commitTimer.current = undefined;
+        if (lifecycle.current !== committing) return;
+        restartBeforeExecutionRef.current();
+      }, COMMIT_TIMEOUT_MS);
     } catch {
-      settleUnavailable(run);
+      restartBeforeExecutionRef.current();
     }
     return true;
-  }, [settleUnavailable]);
+  }, [transition]);
   tryCommitRef.current = tryCommit;
 
   const queueEligibleRequest = useCallback((): void => {
-    const request = runRequestRef.current;
-    if (
-      !request ||
-      request.sandboxKey !== sandboxKeyRef.current ||
-      activeRun.current
-    ) {
+    const ledger = runLedgerRef.current;
+    const current = lifecycle.current;
+    if (current.phase !== 'idle') {
+      if (current.phase === 'queued' && ledger?.request === current.request) {
+        ensurePreparationWatchdog(current);
+      }
       return;
     }
-    activeRun.current = {
-      request,
+    if (!ledger || ledger.request.sandboxKey !== sandboxKeyRef.current) return;
+    const queued: RunLifecycle = {
       phase: 'queued',
-      failed: false,
+      request: ledger.request,
+      infrastructureRetries: ledger.infrastructureRetries,
     };
-    onPhaseChangeRef.current(request.runToken, 'queued');
-    if (!tryCommitRef.current()) onStatusRef.current('Preparing runtime');
-  }, []);
+    transition(queued);
+    onPhaseChangeRef.current(ledger.request.runToken, 'queued');
+    if (!tryCommitRef.current()) {
+      ensurePreparationWatchdog(queued);
+      onStatusRef.current('Preparing runtime');
+    }
+  }, [ensurePreparationWatchdog, transition]);
 
   const handleRelay = useCallback(
     (relay: RuntimeRelay): void => {
@@ -245,24 +379,39 @@ const SandboxController = ({
       if (relay.kind === 'ready') {
         if (sessionReady.current) return;
         sessionReady.current = true;
+        clearTimer(preparationTimer);
         onReadyRef.current(sandboxKeyRef.current);
         queueEligibleRequest();
-        if (!tryCommitRef.current() && !activeRun.current) {
+        if (!tryCommitRef.current() && lifecycle.current.phase === 'idle') {
           onStatusRef.current('Ready');
         }
         return;
       }
 
       if (relay.kind === 'prepareError') {
-        const run = activeRun.current;
-        if (run) settleUnavailable(run);
-        else onStatusRef.current('Failed');
+        const run = lifecycle.current;
+        if (run.phase === 'queued' || run.phase === 'committing') {
+          restartBeforeExecutionRef.current();
+        } else if (run.phase === 'idle' && !sessionReady.current) {
+          onStatusRef.current('Failed');
+        }
         return;
       }
 
-      const run = activeRun.current;
+      const run = lifecycle.current;
       if (
-        !run ||
+        run.phase === 'cancelling' &&
+        relay.kind === 'cancelled' &&
+        relay.runToken === run.request.runToken
+      ) {
+        settle(
+          run,
+          { runToken: run.request.runToken, outcome: 'cancelled' },
+          'Ready'
+        );
+        return;
+      }
+      if (
         run.phase !== 'executing' ||
         relay.runToken !== run.request.runToken
       ) {
@@ -298,55 +447,68 @@ const SandboxController = ({
         return;
       }
 
-      activeRun.current = undefined;
       if (relay.kind === 'cancelled') {
-        onStatusRef.current('Ready');
-        onSettledRef.current({
-          runToken: run.request.runToken,
-          outcome: 'cancelled',
-        });
+        settle(
+          run,
+          { runToken: run.request.runToken, outcome: 'cancelled' },
+          'Ready'
+        );
         return;
       }
-      onStatusRef.current(run.failed ? 'Failed' : 'Ready');
-      onSettledRef.current({
-        runToken: run.request.runToken,
-        outcome: 'completed',
-        failed: run.failed,
-      });
+      settle(
+        run,
+        {
+          runToken: run.request.runToken,
+          outcome: 'completed',
+          failed: run.failed,
+        },
+        run.failed ? 'Failed' : 'Ready'
+      );
     },
-    [queueEligibleRequest, settleUnavailable]
+    [queueEligibleRequest, settle]
   );
 
   handleMessageRef.current = (message): void => {
     if (message.type === 'fs/change') {
-      const run = activeRun.current;
+      const run = lifecycle.current;
       if (
-        !run ||
         run.phase !== 'committing' ||
         message.path !== '/execution.ts' ||
         message.content !== run.expectedContent
       ) {
         return;
       }
-      const currentSessionToken = sessionToken.current;
-      if (currentSessionToken === undefined) return;
-      run.phase = 'executing';
-      run.expectedContent = undefined;
       if (
         !postRuntimeCommand(
-          runtimeRunCommand(currentSessionToken, run.request.runToken)
+          runtimeRunCommand(run.sessionToken, run.request.runToken)
         )
       ) {
-        settleUnavailable(run);
+        restartBeforeExecutionRef.current();
         return;
       }
+      const executing: RunLifecycle = {
+        phase: 'executing',
+        request: run.request,
+        infrastructureRetries: run.infrastructureRetries,
+        sessionToken: run.sessionToken,
+        failed: false,
+      };
+      transition(executing);
       onPhaseChangeRef.current(run.request.runToken, 'executing');
       onStatusRef.current('Running');
+      executionTimer.current = window.setTimeout(() => {
+        executionTimer.current = undefined;
+        if (lifecycle.current !== executing) return;
+        transition({ phase: 'idle' });
+        onStatusRef.current('Failed');
+        onRestartAfterExecutionRef.current(executing.request);
+      }, EXECUTION_TIMEOUT_MS);
       return;
     }
 
     const progress = preparationLabel(message);
-    if (progress && activeRun.current?.phase !== 'executing') {
+    const phase = lifecycle.current.phase;
+    if (progress && phase !== 'executing' && phase !== 'cancelling') {
       onStatusRef.current(progress as PlaygroundSandboxStatus);
     }
 
@@ -362,16 +524,22 @@ const SandboxController = ({
       try {
         token = takeSessionToken();
       } catch {
-        const run = activeRun.current;
-        if (run) settleUnavailable(run);
-        else onStatusRef.current('Failed');
+        const run = lifecycle.current;
+        if (run.phase === 'queued' || run.phase === 'committing') {
+          restartBeforeExecutionRef.current();
+        } else {
+          onStatusRef.current('Failed');
+        }
         return;
       }
       sessionToken.current = token;
       if (!postRuntimeCommand(runtimePrepareCommand(token))) {
-        const run = activeRun.current;
-        if (run) settleUnavailable(run);
-        else onStatusRef.current('Failed');
+        const run = lifecycle.current;
+        if (run.phase === 'queued' || run.phase === 'committing') {
+          restartBeforeExecutionRef.current();
+        } else {
+          onStatusRef.current('Failed');
+        }
       }
       return;
     }
@@ -393,24 +561,46 @@ const SandboxController = ({
     []
   );
 
+  useEffect(() => () => clearAllTimers(), [clearAllTimers]);
+
   useEffect(() => {
     queueEligibleRequest();
-  }, [queueEligibleRequest, runRequest]);
+  }, [queueEligibleRequest, runLedger]);
 
   useEffect(() => {
     if (cancelRunToken === null) return;
-    const run = activeRun.current;
+    const run = lifecycle.current;
     if (
-      !run ||
+      run.phase === 'idle' ||
       run.request.runToken !== cancelRunToken ||
-      run.phase === 'executing'
+      run.phase === 'cancelling'
     ) {
       return;
     }
-    activeRun.current = undefined;
-    onSettledRef.current({ runToken: cancelRunToken, outcome: 'cancelled' });
-    onStatusRef.current(sessionReady.current ? 'Ready' : 'Preparing runtime');
-  }, [cancelRunToken]);
+    if (run.phase === 'queued' || run.phase === 'committing') {
+      settle(
+        run,
+        { runToken: cancelRunToken, outcome: 'cancelled' },
+        sessionReady.current ? 'Ready' : 'Preparing runtime'
+      );
+      return;
+    }
+
+    postRuntimeCommand(runtimeCancelCommand(run.sessionToken, cancelRunToken));
+    const cancelling: RunLifecycle = {
+      phase: 'cancelling',
+      request: run.request,
+      sessionToken: run.sessionToken,
+    };
+    transition(cancelling);
+    cancellationTimer.current = window.setTimeout(() => {
+      cancellationTimer.current = undefined;
+      if (lifecycle.current !== cancelling) return;
+      transition({ phase: 'idle' });
+      onStatusRef.current('Preparing runtime');
+      onCancellationTimeoutRef.current(cancelling.request);
+    }, CANCELLATION_TIMEOUT_MS);
+  }, [cancelRunToken, postRuntimeCommand, settle, transition]);
 
   return (
     <iframe
@@ -427,9 +617,22 @@ export function PlaygroundSandbox({
   dependencies,
   initialCode,
   theme,
+  sandboxKey,
+  runRequest,
+  onSettled,
   ...controllerProps
 }: PlaygroundSandboxProps): JSX.Element {
-  const [controllerGeneration] = useState(0);
+  const [controllerGeneration, setControllerGeneration] = useState(0);
+  const [runLedger, setRunLedger] = useState<RunLedger | null>(() =>
+    runRequest?.sandboxKey === sandboxKey
+      ? { request: runRequest, infrastructureRetries: 0 }
+      : null
+  );
+  const runLedgerRef = useRef(runLedger);
+  const observedRunRequest = useRef(runRequest);
+  const onSettledRef = useRef(onSettled);
+  runLedgerRef.current = runLedger;
+  onSettledRef.current = onSettled;
   const [{ customSetup, files }] = useState(() => {
     const registryDependencies = Object.fromEntries(
       Object.entries(dependencies).filter(([, version]) => version === 'latest')
@@ -464,6 +667,94 @@ export function PlaygroundSandbox({
     };
   });
 
+  useEffect(() => {
+    if (observedRunRequest.current === runRequest) return;
+    observedRunRequest.current = runRequest;
+    if (
+      !runRequest ||
+      runRequest.sandboxKey !== sandboxKey ||
+      runLedgerRef.current
+    ) {
+      return;
+    }
+    const nextLedger: RunLedger = {
+      request: runRequest,
+      infrastructureRetries: 0,
+    };
+    runLedgerRef.current = nextLedger;
+    setRunLedger(nextLedger);
+  }, [runRequest, sandboxKey]);
+
+  const settleRun = useCallback(
+    (
+      request: PlaygroundRunRequest,
+      settlement: PlaygroundRunSettlement,
+      restartController: boolean
+    ): void => {
+      if (
+        runLedgerRef.current?.request !== request ||
+        settlement.runToken !== request.runToken
+      ) {
+        return;
+      }
+      runLedgerRef.current = null;
+      setRunLedger(null);
+      if (restartController) {
+        setControllerGeneration((generation) => generation + 1);
+      }
+      onSettledRef.current(settlement);
+    },
+    []
+  );
+
+  const handleRestartBeforeExecution = useCallback(
+    (nextLedger: RunLedger): void => {
+      const current = runLedgerRef.current;
+      if (
+        !current ||
+        current.request !== nextLedger.request ||
+        current.infrastructureRetries !== 0 ||
+        nextLedger.infrastructureRetries !== 1
+      ) {
+        return;
+      }
+      runLedgerRef.current = nextLedger;
+      setRunLedger(nextLedger);
+      setControllerGeneration((generation) => generation + 1);
+    },
+    []
+  );
+
+  const handleRestartAfterExecution = useCallback(
+    (request: PlaygroundRunRequest): void => {
+      settleRun(
+        request,
+        { runToken: request.runToken, outcome: 'runtime-restarted' },
+        true
+      );
+    },
+    [settleRun]
+  );
+
+  const handleCancellationTimeout = useCallback(
+    (request: PlaygroundRunRequest): void => {
+      settleRun(
+        request,
+        { runToken: request.runToken, outcome: 'cancelled' },
+        true
+      );
+    },
+    [settleRun]
+  );
+
+  const handleControllerSettled = useCallback(
+    (
+      request: PlaygroundRunRequest,
+      settlement: PlaygroundRunSettlement
+    ): void => settleRun(request, settlement, false),
+    [settleRun]
+  );
+
   return (
     <SandpackProvider
       template="vite"
@@ -472,7 +763,16 @@ export function PlaygroundSandbox({
       options={SANDBOX_OPTIONS}
       theme={theme}
     >
-      <SandboxController key={controllerGeneration} {...controllerProps} />
+      <SandboxController
+        key={controllerGeneration}
+        sandboxKey={sandboxKey}
+        runLedger={runLedger}
+        onRestartBeforeExecution={handleRestartBeforeExecution}
+        onRestartAfterExecution={handleRestartAfterExecution}
+        onCancellationTimeout={handleCancellationTimeout}
+        onControllerSettled={handleControllerSettled}
+        {...controllerProps}
+      />
       {children}
     </SandpackProvider>
   );

@@ -57,6 +57,9 @@ type PendingEditorRestore = Readonly<{
   codeIdentity: string;
   snapshot: TypeScriptEditorSnapshot;
 }>;
+type PendingTransition =
+  | { type: 'select'; id: PlaygroundExampleId }
+  | { type: 'reset'; id: PlaygroundExampleId };
 
 const initialDrafts = (): Drafts =>
   Object.fromEntries(
@@ -120,12 +123,14 @@ export function Playground(): JSX.Element {
     null
   );
   const [runPhase, setRunPhase] = useState<PlaygroundRunPhase | null>(null);
+  const [cancelRunToken, setCancelRunToken] = useState<number | null>(null);
   const [consoleLines, setConsoleLines] = useState<readonly string[]>([]);
   const [theme, setTheme] = useState<PlaygroundTheme>('light');
   const editorRef = useRef<TypeScriptEditorHandle>(null);
   const scanTimer = useRef<number>();
   const deferredScan = useRef<DeferredScan>();
   const pendingEditorRestore = useRef<PendingEditorRestore>();
+  const pendingTransition = useRef<PendingTransition>();
   const runCounter = useRef(0);
   const runRequestRef = useRef(runRequest);
   const selectedIdRef = useRef(selectedId);
@@ -287,39 +292,6 @@ export function Playground(): JSX.Element {
     [captureEditorForRemount, updateDependencies]
   );
 
-  const handleSettled = useCallback(
-    (settlement: PlaygroundRunSettlement): void => {
-      if (runRequestRef.current?.runToken !== settlement.runToken) return;
-      runRequestRef.current = null;
-      setRunRequest(null);
-      setRunPhase(null);
-      const scan = deferredScan.current;
-      if (scan?.runToken === settlement.runToken) {
-        deferredScan.current = undefined;
-        applyDependencyScan(scan.selectedId, scan.code);
-        return;
-      }
-      if (scanTimer.current !== undefined) {
-        setStatus('Checking imports');
-        return;
-      }
-      if (settlement.outcome === 'runtime-unavailable') {
-        setStatus('Failed — runtime unavailable');
-      } else if (settlement.outcome === 'runtime-restarted') {
-        setStatus('Failed — runtime restarted');
-      } else if (settlement.outcome === 'completed' && settlement.failed) {
-        setStatus('Failed');
-      } else {
-        setStatus(
-          readySandboxKeyRef.current === sandboxKeyRef.current
-            ? 'Ready'
-            : 'Preparing runtime'
-        );
-      }
-    },
-    [applyDependencyScan]
-  );
-
   const handleCodeChange = useCallback(
     (code: string) => {
       const editSelectedId = selectedIdRef.current;
@@ -347,10 +319,10 @@ export function Playground(): JSX.Element {
     [applyDependencyScan, cancelScan]
   );
 
-  const selectExample = useCallback(
+  const applyExampleSelection = useCallback(
     (nextId: PlaygroundExampleId) => {
-      if (nextId === selectedId) return;
       const currentId = selectedIdRef.current;
+      if (nextId === currentId) return;
       const currentCode = editorRef.current?.readValue() ?? drafts[currentId];
       setDrafts((current) => ({
         ...current,
@@ -359,9 +331,6 @@ export function Playground(): JSX.Element {
       cancelScan();
       deferredScan.current = undefined;
       pendingEditorRestore.current = undefined;
-      runRequestRef.current = null;
-      setRunRequest(null);
-      setRunPhase(null);
       setConsoleLines([]);
       const importBlock = importBlocksRef.current[nextId];
       importsBlockedRef.current = importBlock !== undefined;
@@ -376,35 +345,114 @@ export function Playground(): JSX.Element {
             : 'Preparing runtime')
       );
     },
-    [cancelScan, drafts, selectedId]
+    [cancelScan, drafts]
   );
 
-  const resetExample = useCallback(() => {
-    cancelScan();
-    deferredScan.current = undefined;
-    pendingEditorRestore.current = undefined;
-    runRequestRef.current = null;
-    setRunRequest(null);
-    setRunPhase(null);
-    setConsoleLines([]);
-    delete importBlocksRef.current[selectedId];
-    importsBlockedRef.current = false;
-    setImportsBlocked(false);
-    setDrafts((current) => ({
-      ...current,
-      [selectedId]: playgroundExampleById[selectedId].source,
-    }));
-    updateDependencies(selectedId, detectedDependencies[selectedId]);
-    setResetGeneration((current) => ({
-      ...current,
-      [selectedId]: current[selectedId] + 1,
-    }));
-    setStatus(
-      readySandboxKeyRef.current === keyFor(detectedDependencies[selectedId])
-        ? 'Ready'
-        : 'Preparing runtime'
-    );
-  }, [cancelScan, detectedDependencies, selectedId, updateDependencies]);
+  const applyExampleReset = useCallback(
+    (resetId: PlaygroundExampleId): void => {
+      if (selectedIdRef.current !== resetId) return;
+      cancelScan();
+      deferredScan.current = undefined;
+      pendingEditorRestore.current = undefined;
+      setConsoleLines([]);
+      delete importBlocksRef.current[resetId];
+      importsBlockedRef.current = false;
+      setImportsBlocked(false);
+      setDrafts((current) => ({
+        ...current,
+        [resetId]: playgroundExampleById[resetId].source,
+      }));
+      updateDependencies(resetId, detectedDependencies[resetId]);
+      setResetGeneration((current) => ({
+        ...current,
+        [resetId]: current[resetId] + 1,
+      }));
+      setStatus(
+        readySandboxKeyRef.current === keyFor(detectedDependencies[resetId])
+          ? 'Ready'
+          : 'Preparing runtime'
+      );
+    },
+    [cancelScan, detectedDependencies, updateDependencies]
+  );
+
+  const applyTransition = useCallback(
+    (transition: PendingTransition): void => {
+      if (transition.type === 'select') {
+        applyExampleSelection(transition.id);
+      } else {
+        applyExampleReset(transition.id);
+      }
+    },
+    [applyExampleReset, applyExampleSelection]
+  );
+
+  const requestTransition = useCallback(
+    (transition: PendingTransition): void => {
+      const activeRequest = runRequestRef.current;
+      if (activeRequest) {
+        pendingTransition.current = transition;
+        setCancelRunToken(activeRequest.runToken);
+        return;
+      }
+      pendingTransition.current = undefined;
+      setCancelRunToken(null);
+      applyTransition(transition);
+    },
+    [applyTransition]
+  );
+
+  const selectExample = useCallback(
+    (nextId: PlaygroundExampleId): void => {
+      if (nextId === selectedIdRef.current) return;
+      requestTransition({ type: 'select', id: nextId });
+    },
+    [requestTransition]
+  );
+
+  const resetExample = useCallback((): void => {
+    requestTransition({ type: 'reset', id: selectedIdRef.current });
+  }, [requestTransition]);
+
+  const handleSettled = useCallback(
+    (settlement: PlaygroundRunSettlement): void => {
+      if (runRequestRef.current?.runToken !== settlement.runToken) return;
+      runRequestRef.current = null;
+      setRunRequest(null);
+      setRunPhase(null);
+      setCancelRunToken(null);
+      const transition = pendingTransition.current;
+      pendingTransition.current = undefined;
+      if (transition) {
+        applyTransition(transition);
+        return;
+      }
+      const scan = deferredScan.current;
+      if (scan?.runToken === settlement.runToken) {
+        deferredScan.current = undefined;
+        applyDependencyScan(scan.selectedId, scan.code);
+        return;
+      }
+      if (scanTimer.current !== undefined) {
+        setStatus('Checking imports');
+        return;
+      }
+      if (settlement.outcome === 'runtime-unavailable') {
+        setStatus('Failed — runtime unavailable');
+      } else if (settlement.outcome === 'runtime-restarted') {
+        setStatus('Failed — runtime restarted');
+      } else if (settlement.outcome === 'completed' && settlement.failed) {
+        setStatus('Failed');
+      } else {
+        setStatus(
+          readySandboxKeyRef.current === sandboxKeyRef.current
+            ? 'Ready'
+            : 'Preparing runtime'
+        );
+      }
+    },
+    [applyDependencyScan, applyTransition]
+  );
 
   const run = useCallback(() => {
     if (runRequestRef.current || runDisabled) return;
@@ -443,6 +491,8 @@ export function Playground(): JSX.Element {
       return;
     }
     runCounter.current = nextRunToken;
+    pendingTransition.current = undefined;
+    setCancelRunToken(null);
     const request: PlaygroundRunRequest = {
       runToken: nextRunToken,
       sandboxKey: targetKey,
@@ -576,7 +626,7 @@ export function Playground(): JSX.Element {
             initialCode={drafts[selectedId]}
             theme={theme}
             runRequest={runRequest}
-            cancelRunToken={null}
+            cancelRunToken={cancelRunToken}
             onReady={handleSandboxReady}
             onPhaseChange={handlePhaseChange}
             onOutput={handleOutput}

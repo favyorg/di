@@ -1,5 +1,5 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { StrictMode, type ReactNode } from 'react';
 import {
   PlaygroundSandbox,
   type PlaygroundRunRequest,
@@ -55,6 +55,7 @@ let mockEmitSandpack: ((message: MockSandpackMessage) => void) | undefined;
 let mockMountedProviders = 0;
 let mockMountedControllers = 0;
 let mockListenCalls = 0;
+let mockActiveListeners = 0;
 
 jest.mock('@codesandbox/sandpack-react', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -90,7 +91,13 @@ jest.mock('@codesandbox/sandpack-react', () => {
       (listener: (message: MockSandpackMessage) => void) => {
         mockListenCalls += 1;
         listeners.current.add(listener);
-        return () => listeners.current.delete(listener);
+        mockActiveListeners += 1;
+        let subscribed = true;
+        return () => {
+          if (!subscribed) return;
+          subscribed = false;
+          if (listeners.current.delete(listener)) mockActiveListeners -= 1;
+        };
       },
       []
     );
@@ -105,6 +112,7 @@ jest.mock('@codesandbox/sandpack-react', () => {
       return () => {
         mockMountedProviders -= 1;
         if (mockEmitSandpack === emit) mockEmitSandpack = undefined;
+        mockActiveListeners -= listeners.current.size;
         listeners.current.clear();
       };
     }, [emit]);
@@ -177,6 +185,7 @@ const renderSandbox = (overrides: Partial<PlaygroundSandboxProps> = {}) => {
   };
   const view = render(
     <PlaygroundSandbox {...props}>
+      <textarea aria-label="Visible editor" defaultValue="draft" />
       <span>Visible workspace</span>
     </PlaygroundSandbox>
   );
@@ -206,6 +215,16 @@ const emitRuntimeRelay = (relay: Record<string, unknown>): void =>
 const lastRuntimeCommand = (): any => mockRuntimeCommands.at(-1);
 
 const activeSessionToken = (): number => {
+  const command = mockRuntimeCommands
+    .filter((candidate: any) => candidate?.action === 'prepare')
+    .at(-1) as { sessionToken?: unknown } | undefined;
+  if (typeof command?.sessionToken !== 'number') {
+    throw new Error('No prepared runtime session.');
+  }
+  return command.sessionToken;
+};
+
+const firstSessionToken = (): number => {
   const command = mockRuntimeCommands.find(
     (candidate: any) => candidate?.action === 'prepare'
   ) as { sessionToken?: unknown } | undefined;
@@ -221,6 +240,15 @@ const updatedExecution = (): string => {
   return code;
 };
 
+const updatedExecutions = (): string[] =>
+  mockUpdatedSetups.map((setup) => setup.files['/execution.ts']?.code);
+
+const bootRuntime = (): void =>
+  emitSandpack({ type: 'done', compilatonError: false });
+
+const emitRuntimeReady = (sessionToken = activeSessionToken()): void =>
+  emitRuntimeRelay({ kind: 'ready', sessionToken });
+
 const acknowledgeExecutionWrite = (): void =>
   emitSandpack({
     type: 'fs/change',
@@ -229,6 +257,7 @@ const acknowledgeExecutionWrite = (): void =>
   });
 
 beforeEach(() => {
+  jest.useFakeTimers();
   mockProviderProps = [];
   mockRuntimeCommands = [];
   mockUpdatedSetups = [];
@@ -236,9 +265,14 @@ beforeEach(() => {
   mockMountedProviders = 0;
   mockMountedControllers = 0;
   mockListenCalls = 0;
+  mockActiveListeners = 0;
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  jest.clearAllTimers();
+  jest.useRealTimers();
+});
 
 it('prepares one session and runs only after its exact write acknowledgement', () => {
   const { handlers } = renderSandbox({ runRequest: request(7) });
@@ -527,4 +561,364 @@ it('keeps one scoped listener when Sandpack hook wrappers change identity', () =
   expect(mockListenCalls).toBe(1);
   emitSandpack({ type: 'done', compilatonError: false });
   expect(lastRuntimeCommand()).toMatchObject({ action: 'prepare' });
+});
+
+it('keeps a cold request queued past 30 seconds and launches once when ready', () => {
+  const { handlers } = renderSandbox({ runRequest: request(7) });
+  bootRuntime();
+
+  act(() => jest.advanceTimersByTime(31_000));
+
+  expect(updatedExecutions()).toHaveLength(0);
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+
+  emitRuntimeReady();
+
+  expect(updatedExecutions()).toHaveLength(1);
+});
+
+it('retries the first preparation error and settles the second one unavailable', () => {
+  const runRequest = request(7);
+  const { handlers } = renderSandbox({ runRequest });
+  bootRuntime();
+  const firstToken = firstSessionToken();
+
+  emitRuntimeRelay({
+    kind: 'prepareError',
+    sessionToken: firstToken,
+    error: 'first preparation failed',
+  });
+
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+  bootRuntime();
+  expect(activeSessionToken()).not.toBe(firstToken);
+
+  emitRuntimeRelay({
+    kind: 'prepareError',
+    sessionToken: activeSessionToken(),
+    error: 'second preparation failed',
+  });
+
+  expect(handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'runtime-unavailable',
+  });
+});
+
+it('restarts at the exact 120-second preparation boundary with the same request', () => {
+  const runRequest = request(7);
+  const { handlers } = renderSandbox({ runRequest });
+  bootRuntime();
+  const firstToken = firstSessionToken();
+
+  act(() => jest.advanceTimersByTime(119_999));
+  expect(activeSessionToken()).toBe(firstToken);
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+
+  act(() => jest.advanceTimersByTime(1));
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+  bootRuntime();
+  expect(activeSessionToken()).not.toBe(firstToken);
+
+  emitRuntimeReady();
+  acknowledgeExecutionWrite();
+  expect(lastRuntimeCommand()).toMatchObject({
+    action: 'run',
+    runToken: runRequest.runToken,
+  });
+});
+
+it('uses one shared retry budget for preparation and commit failures', () => {
+  const { handlers } = renderSandbox({ runRequest: request(7) });
+  bootRuntime();
+  emitRuntimeRelay({
+    kind: 'prepareError',
+    sessionToken: activeSessionToken(),
+    error: 'preparation failed',
+  });
+  bootRuntime();
+  emitRuntimeReady();
+
+  act(() => jest.advanceTimersByTime(10_000));
+
+  expect(handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'runtime-unavailable',
+  });
+});
+
+it('restarts at the exact 10-second commit boundary', () => {
+  const { handlers } = renderSandbox({ runRequest: request(7) });
+  bootRuntime();
+  emitRuntimeReady();
+  const firstToken = firstSessionToken();
+
+  act(() => jest.advanceTimersByTime(9_999));
+  expect(activeSessionToken()).toBe(firstToken);
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+
+  act(() => jest.advanceTimersByTime(1));
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+  bootRuntime();
+  expect(activeSessionToken()).not.toBe(firstToken);
+});
+
+it('ignores a stale execution write acknowledgement after a commit retry', () => {
+  const { handlers } = renderSandbox({ runRequest: request(7) });
+  bootRuntime();
+  emitRuntimeReady();
+  const staleExecution = updatedExecution();
+
+  act(() => jest.advanceTimersByTime(10_000));
+  bootRuntime();
+  emitRuntimeReady();
+  const retriedExecution = updatedExecution();
+  expect(retriedExecution).not.toBe(staleExecution);
+
+  emitSandpack({
+    type: 'fs/change',
+    path: '/execution.ts',
+    content: staleExecution,
+  });
+  expect(lastRuntimeCommand()).toMatchObject({ action: 'prepare' });
+
+  acknowledgeExecutionWrite();
+  expect(lastRuntimeCommand()).toMatchObject({ action: 'run', runToken: 7 });
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+});
+
+it('restarts at 30 seconds of execution without retrying user code', () => {
+  const runRequest = request(7);
+  const { handlers } = renderSandbox({ runRequest });
+  const editor = screen.getByRole('textbox', { name: 'Visible editor' });
+  bootRuntime();
+  emitRuntimeReady();
+  acknowledgeExecutionWrite();
+  const firstRuntime = document.querySelector(
+    'iframe.playground__runtime-client'
+  );
+
+  act(() => jest.advanceTimersByTime(29_999));
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+  expect(document.querySelector('iframe.playground__runtime-client')).toBe(
+    firstRuntime
+  );
+
+  act(() => jest.advanceTimersByTime(1));
+  expect(handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'runtime-restarted',
+  });
+  expect(document.querySelector('iframe.playground__runtime-client')).not.toBe(
+    firstRuntime
+  );
+  expect(screen.getByRole('textbox', { name: 'Visible editor' })).toBe(editor);
+
+  bootRuntime();
+  emitRuntimeReady();
+  expect(updatedExecutions()).toHaveLength(1);
+  expect(
+    mockRuntimeCommands.filter((command: any) => command.action === 'run')
+  ).toHaveLength(1);
+});
+
+it('cancels a queued request locally and ignores later readiness', () => {
+  const runRequest = request(7);
+  const view = renderSandbox({ runRequest });
+  bootRuntime();
+
+  view.rerender(
+    <PlaygroundSandbox {...view.props} cancelRunToken={7}>
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+
+  expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(view.handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'cancelled',
+  });
+  expect(lastRuntimeCommand()).toMatchObject({ action: 'prepare' });
+
+  emitRuntimeReady();
+  act(() => jest.advanceTimersByTime(120_000));
+  expect(updatedExecutions()).toHaveLength(0);
+  expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
+});
+
+it('cancels a committing request locally and ignores its late acknowledgement', () => {
+  const runRequest = request(7);
+  const view = renderSandbox({ runRequest });
+  bootRuntime();
+  emitRuntimeReady();
+
+  view.rerender(
+    <PlaygroundSandbox {...view.props} cancelRunToken={7}>
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+  acknowledgeExecutionWrite();
+  act(() => jest.advanceTimersByTime(10_000));
+
+  expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(view.handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'cancelled',
+  });
+  expect(
+    mockRuntimeCommands.filter((command: any) => command.action === 'run')
+  ).toHaveLength(0);
+});
+
+it('cancels execution only after the exact runtime acknowledgement', () => {
+  const runRequest = request(7);
+  const view = renderSandbox({ runRequest });
+  bootRuntime();
+  emitRuntimeReady();
+  acknowledgeExecutionWrite();
+  const preparedSession = activeSessionToken();
+  const firstRuntime = document.querySelector(
+    'iframe.playground__runtime-client'
+  );
+
+  view.rerender(
+    <PlaygroundSandbox {...view.props} cancelRunToken={7}>
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+
+  expect(lastRuntimeCommand()).toEqual({
+    type: '__FAVY_PLAYGROUND_RUNTIME__',
+    action: 'cancel',
+    sessionToken: preparedSession,
+    runToken: 7,
+  });
+  expect(view.handlers.onSettled).not.toHaveBeenCalled();
+
+  emitRuntimeRelay({
+    kind: 'cancelled',
+    sessionToken: preparedSession + 1,
+    runToken: 7,
+  });
+  emitRuntimeRelay({
+    kind: 'cancelled',
+    sessionToken: preparedSession,
+    runToken: 8,
+  });
+  expect(view.handlers.onSettled).not.toHaveBeenCalled();
+
+  emitRuntimeRelay({
+    kind: 'cancelled',
+    sessionToken: preparedSession,
+    runToken: 7,
+  });
+
+  expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(view.handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'cancelled',
+  });
+  expect(document.querySelector('iframe.playground__runtime-client')).toBe(
+    firstRuntime
+  );
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+it('remounts at the exact 1000 ms cancellation boundary when acknowledgement is missing', () => {
+  const runRequest = request(7);
+  const view = renderSandbox({ runRequest });
+  bootRuntime();
+  emitRuntimeReady();
+  acknowledgeExecutionWrite();
+  const firstRuntime = document.querySelector(
+    'iframe.playground__runtime-client'
+  );
+
+  view.rerender(
+    <PlaygroundSandbox {...view.props} cancelRunToken={7}>
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+  const workspace = screen.getByText('Visible workspace');
+
+  act(() => jest.advanceTimersByTime(999));
+  expect(view.handlers.onSettled).not.toHaveBeenCalled();
+  expect(document.querySelector('iframe.playground__runtime-client')).toBe(
+    firstRuntime
+  );
+
+  act(() => jest.advanceTimersByTime(1));
+  expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(view.handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'cancelled',
+  });
+  expect(document.querySelector('iframe.playground__runtime-client')).not.toBe(
+    firstRuntime
+  );
+  expect(screen.getByText('Visible workspace')).toBe(workspace);
+});
+
+it('settles cancellation once when completion races its acknowledgement', () => {
+  const runRequest = request(7);
+  const view = renderSandbox({ runRequest });
+  bootRuntime();
+  emitRuntimeReady();
+  acknowledgeExecutionWrite();
+  const preparedSession = activeSessionToken();
+
+  view.rerender(
+    <PlaygroundSandbox {...view.props} cancelRunToken={7}>
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+  emitRuntimeRelay({
+    kind: 'complete',
+    sessionToken: preparedSession,
+    runToken: 7,
+  });
+  emitRuntimeRelay({
+    kind: 'cancelled',
+    sessionToken: preparedSession,
+    runToken: 7,
+  });
+  act(() => jest.advanceTimersByTime(1_000));
+
+  expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(view.handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'cancelled',
+  });
+});
+
+it('keeps one controller listener under StrictMode and clears every timer on cleanup', () => {
+  const handlers = callbacks();
+  const view = render(
+    <StrictMode>
+      <PlaygroundSandbox
+        sandboxKey="favy-local|lodash-latest"
+        dependencies={{ '@favy/di': 'local', lodash: 'latest' }}
+        initialCode={'console.log("initial");'}
+        theme="light"
+        runRequest={request(7)}
+        cancelRunToken={null}
+        {...handlers}
+      />
+    </StrictMode>
+  );
+
+  expect(mockMountedProviders).toBe(1);
+  expect(mockMountedControllers).toBe(1);
+  expect(mockActiveListeners).toBe(1);
+  expect(jest.getTimerCount()).toBe(1);
+
+  view.unmount();
+
+  expect(mockMountedProviders).toBe(0);
+  expect(mockMountedControllers).toBe(0);
+  expect(mockActiveListeners).toBe(0);
+  expect(jest.getTimerCount()).toBe(0);
 });

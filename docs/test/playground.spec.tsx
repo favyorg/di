@@ -555,6 +555,103 @@ it('marks the controls busy while a request is active', () => {
   ).toBe('true');
 });
 
+it('keeps Reset enabled and applies it only after the active request is cancelled', () => {
+  renderReadyPlayground();
+  const draft = `${playgroundExampleById.basic.source}\n// reset after run`;
+  edit(draft);
+  const request = clickRun();
+  const reset = screen.getByRole('button', { name: 'Reset example' });
+
+  expect((reset as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(reset);
+
+  expect(latestSandbox().cancelRunToken).toBe(request.runToken);
+  expect(editor().value).toBe(draft);
+  expect(mockSandboxMounts).toEqual(['@favy/di@local']);
+
+  settle({ runToken: request.runToken, outcome: 'cancelled' });
+
+  expect(editor().value).toBe(playgroundExampleById.basic.source);
+  expect(latestSandbox().runRequest).toBeNull();
+  expect(latestSandbox().cancelRunToken).toBeNull();
+  expect(mockSandboxMounts).toEqual(['@favy/di@local']);
+});
+
+it('defers same-signature navigation until queued cancellation settles', () => {
+  renderReadyPlayground();
+  const request = clickRun();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+
+  expect(latestSandbox().cancelRunToken).toBe(request.runToken);
+  expect(
+    screen.getByRole('button', { name: 'Basic module', pressed: true })
+  ).toBeTruthy();
+  expect(mockSandboxMounts).toEqual(['@favy/di@local']);
+
+  settle({ runToken: request.runToken, outcome: 'cancelled' });
+
+  expect(
+    screen.getByRole('button', { name: 'Composition', pressed: true })
+  ).toBeTruthy();
+  expect(editor().value).toBe(playgroundExampleById.composition.source);
+  expect(mockSandboxMounts).toEqual(['@favy/di@local']);
+});
+
+it('replaces a different dependency session only after active navigation settles', () => {
+  renderReadyPlayground();
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  edit(`${playgroundExampleById.composition.source}\nimport 'lodash';`);
+  act(() => jest.advanceTimersByTime(1_000));
+  emitReady();
+  fireEvent.click(screen.getByRole('button', { name: 'Basic module' }));
+  emitReady();
+  const mountsBeforeRun = [...mockSandboxMounts];
+  const request = clickRun();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+
+  expect(latestSandbox().cancelRunToken).toBe(request.runToken);
+  expect(mockSandboxMounts).toEqual(mountsBeforeRun);
+  expect(
+    screen.getByRole('button', { name: 'Basic module', pressed: true })
+  ).toBeTruthy();
+
+  settle({ runToken: request.runToken, outcome: 'cancelled' });
+
+  expect(mockSandboxMounts).toEqual([
+    ...mountsBeforeRun,
+    '@favy/di@local|lodash@latest',
+  ]);
+  expect(
+    screen.getByRole('button', { name: 'Composition', pressed: true })
+  ).toBeTruthy();
+});
+
+it('applies a pending transition once when completion races cancellation', () => {
+  renderReadyPlayground();
+  const request = clickRun();
+  const sandbox = latestSandbox();
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+
+  act(() => {
+    sandbox.onSettled({
+      runToken: request.runToken,
+      outcome: 'completed',
+      failed: false,
+    });
+    sandbox.onSettled({ runToken: request.runToken, outcome: 'cancelled' });
+  });
+
+  expect(
+    screen.getByRole('button', { name: 'Composition', pressed: true })
+  ).toBeTruthy();
+  expect(editor().value).toBe(playgroundExampleById.composition.source);
+  expect(latestSandbox().runRequest).toBeNull();
+  expect(latestSandbox().cancelRunToken).toBeNull();
+  expect(mockSandboxMounts).toEqual(['@favy/di@local']);
+});
+
 it('defers a matured dependency replacement until the active run settles', () => {
   renderReadyPlayground();
   const request = clickRun();
@@ -590,12 +687,13 @@ it('keeps a pending import scan visible when a run completes first', () => {
   expect(screen.getByRole('status').textContent).toBe('Ready');
 });
 
-it('ignores output from a request cleared by example navigation', () => {
+it('ignores output from a request cleared after example navigation settles', () => {
   renderReadyPlayground();
   const request = clickRun();
   const staleOutput = latestSandbox().onOutput;
 
   fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+  settle({ runToken: request.runToken, outcome: 'cancelled' });
   act(() =>
     staleOutput({
       type: 'append',
