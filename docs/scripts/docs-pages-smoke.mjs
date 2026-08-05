@@ -119,7 +119,11 @@ const assertFocusContrast = async (
     };
   }, indicatorSelector);
   assert.equal(focus.focusVisible, true, `${label} should be focus-visible`);
-  assert.notEqual(focus.outlineStyle, 'none', `${label} should have an outline`);
+  assert.notEqual(
+    focus.outlineStyle,
+    'none',
+    `${label} should have an outline`,
+  );
   assert.ok(
     focus.outlineWidth >= 3,
     `${label} outline was ${focus.outlineWidth}px`,
@@ -128,6 +132,98 @@ const assertFocusContrast = async (
     focus.contrast >= 3,
     `${label} ${theme} focus contrast was ${focus.contrast.toFixed(2)}:1`,
   );
+};
+
+const waitForEditorLayout = (locator) =>
+  locator.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+
+const hoverMonacoToken = async (page, editor, token, lineText) => {
+  await editor.scrollIntoViewIfNeeded();
+  const scrollable = editor
+    .locator('.monaco-scrollable-element.editor-scrollable')
+    .first();
+  await scrollable.waitFor();
+
+  const tokenPoint = () =>
+    editor.locator('.view-line').evaluateAll(
+      (lines, target) => {
+        const normalize = (value) => value.replaceAll('\u00a0', ' ');
+        const line = lines.find((candidate) =>
+          normalize(candidate.textContent ?? '').includes(target.lineText),
+        );
+        if (!line) return null;
+        const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+        let tokenNode;
+        let tokenStart = -1;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const index = node.textContent?.indexOf(target.token) ?? -1;
+          if (index >= 0) {
+            tokenNode = node;
+            tokenStart = index;
+            break;
+          }
+        }
+        if (!tokenNode) return null;
+
+        const range = document.createRange();
+        range.setStart(tokenNode, tokenStart);
+        range.setEnd(tokenNode, tokenStart + target.token.length);
+        const rect = range.getBoundingClientRect();
+        const editorRect = line
+          .closest('.monaco-editor')
+          ?.getBoundingClientRect();
+        if (
+          !editorRect ||
+          rect.width <= 0 ||
+          rect.height <= 0 ||
+          rect.bottom <= editorRect.top ||
+          rect.top >= editorRect.bottom
+        ) {
+          return null;
+        }
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        };
+      },
+      { token, lineText },
+    );
+
+  let point;
+  for (let step = 0; step < 64; step += 1) {
+    await scrollable.evaluate((element, index) => {
+      element.scrollTop = index * Math.max(1, element.clientHeight * 0.5);
+    }, step);
+    await waitForEditorLayout(scrollable);
+    point = await tokenPoint();
+    if (point) break;
+  }
+  assert.ok(
+    point,
+    `Missing Monaco token ${JSON.stringify(token)} on ${JSON.stringify(
+      lineText,
+    )}`,
+  );
+
+  await page.mouse.move(point.x, point.y);
+  const hover = page.locator('.monaco-hover:visible').last();
+  await hover.waitFor({ timeout: 5_000 });
+  const text = (await hover.innerText()).trim();
+  assert.ok(text, `${token} hover should contain quick-info`);
+  return text;
+};
+
+const closeMonacoHover = async (page) => {
+  await page.keyboard.press('Escape');
+  await page.mouse.move(0, 0);
+  await page
+    .locator('.monaco-hover:visible')
+    .waitFor({ state: 'hidden', timeout: 5_000 });
 };
 
 const checkPlayground = async (page) => {
@@ -163,21 +259,18 @@ const checkPlayground = async (page) => {
   const provider = page.locator('.playground__sandbox .sp-wrapper');
   await provider.waitFor({ timeout: 30_000 });
   assert.equal(await provider.count(), 1);
+  const playgroundEditor = page.locator('.playground__editor .monaco-editor');
+  const playgroundInput = playgroundEditor.locator(
+    'textarea.inputarea[role="textbox"][aria-label="TypeScript playground editor"]',
+  );
+  await playgroundEditor.waitFor({ timeout: 30_000 });
+  await playgroundInput.waitFor({ timeout: 30_000 });
+  assert.equal(await playgroundEditor.count(), 1);
+  assert.equal(await playgroundInput.count(), 1);
   assert.equal(
     await page.locator('.playground__editor .sp-code-editor').count(),
-    1,
+    0,
   );
-
-  const outerEditor = page.locator(
-    '[aria-label="TypeScript playground editor"][role="textbox"][tabindex="0"]',
-  );
-  const codeEditor = page.locator(
-    '.cm-content[aria-label="TypeScript playground editor"][contenteditable="true"]',
-  );
-  await outerEditor.waitFor({ timeout: 30_000 });
-  await codeEditor.waitFor({ timeout: 30_000 });
-  assert.equal(await outerEditor.count(), 1);
-  assert.equal(await codeEditor.count(), 1);
 
   for (const [index, name] of exampleNames.entries()) {
     await assertMinimumTargetSize(exampleButtons.nth(index), name);
@@ -202,15 +295,8 @@ const checkPlayground = async (page) => {
     await assertFocusContrast(page, run, 'Run code', theme);
     await assertFocusContrast(
       page,
-      outerEditor,
-      'Outer playground editor',
-      theme,
-      '.playground__editor',
-    );
-    await assertFocusContrast(
-      page,
-      codeEditor,
-      'Inner playground editor',
+      playgroundInput,
+      'Playground editor',
       theme,
       '.playground__editor',
     );
@@ -224,24 +310,53 @@ const checkPlayground = async (page) => {
     false,
   );
 
+  assert.match(
+    await hoverMonacoToken(
+      page,
+      playgroundEditor,
+      'Module',
+      "import { Module } from '@favy/di';",
+    ),
+    /Module/,
+  );
+  await closeMonacoHover(page);
+
+  await exampleButtons.nth(5).click();
+  await page.waitForFunction(() =>
+    document
+      .querySelector('.playground__editor .monaco-editor .view-lines')
+      ?.textContent?.includes('BoxHKT'),
+  );
+  assert.match(
+    await hoverMonacoToken(
+      page,
+      playgroundEditor,
+      'output',
+      'const output = Greeting();',
+    ),
+    /Box|Greeting/,
+  );
+  await closeMonacoHover(page);
+
+  await exampleButtons.first().click();
+  await page.waitForFunction(() => {
+    const editor = document.querySelector('.playground__editor .monaco-editor');
+    const scrollable = editor?.querySelector(
+      '.monaco-scrollable-element.editor-scrollable',
+    );
+    if (scrollable) scrollable.scrollTop = 0;
+    return editor?.querySelector('.view-lines')?.textContent?.includes('Ada!');
+  });
+  await status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 });
+
   const runtime = page.locator('iframe.playground__runtime-client');
   const initialRuntime = await runtime.elementHandle();
   assert.ok(initialRuntime, 'Playground runtime iframe should be attached');
-  const registryRequests = [];
-  const previewReloadRequests = [];
+  const warmRunRequests = [[], []];
+  let activeWarmRun = -1;
   const collectWarmRunRequest = (request) => {
-    const url = new URL(request.url());
-    const { hostname, pathname } = url;
-    if (hostname === 'registry.npmjs.org') {
-      registryRequests.push(request.url());
-    }
-    if (
-      hostname.endsWith('.nodebox.codesandbox.io') &&
-      (pathname === '/' ||
-        pathname === '/runner.ts' ||
-        pathname === '/@vite/client')
-    ) {
-      previewReloadRequests.push(request.url());
+    if (activeWarmRun >= 0) {
+      warmRunRequests[activeWarmRun].push(request.url());
     }
   };
   page.on('request', collectWarmRunRequest);
@@ -301,6 +416,7 @@ const checkPlayground = async (page) => {
         inspect();
       });
 
+      activeWarmRun = runIndex;
       await run.click();
       await page.waitForFunction(
         () => window.__playgroundSmokeRunCycle?.completedAt !== null,
@@ -325,17 +441,51 @@ const checkPlayground = async (page) => {
         true,
         `Run ${runIndex + 1} replaced the outer runtime iframe`,
       );
+      await page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(resolve)),
+      );
+      activeWarmRun = -1;
     }
   } finally {
+    activeWarmRun = -1;
     page.off('request', collectWarmRunRequest);
     await initialRuntime.dispose();
   }
-  assert.deepEqual(registryRequests, []);
-  assert.deepEqual(
-    previewReloadRequests,
-    [],
-    'Warm runs should not reload the outer Vite preview',
-  );
+  for (const [runIndex, requests] of warmRunRequests.entries()) {
+    const registryRequests = requests.filter(
+      (request) => new URL(request).hostname === 'registry.npmjs.org',
+    );
+    const previewReloadRequests = requests.filter((request) => {
+      const { hostname, pathname } = new URL(request);
+      return (
+        hostname.endsWith('.nodebox.codesandbox.io') &&
+        (pathname === '/' ||
+          pathname === '/runner.ts' ||
+          pathname === '/@vite/client')
+      );
+    });
+    const toolingRequests = requests.filter((request) => {
+      const { pathname, search } = new URL(request);
+      return /(?:monaco-editor|@monaco-editor|(?:editor|ts)\.worker(?:[-.][^/?]*)?\.js)/i.test(
+        decodeURIComponent(`${pathname}${search}`),
+      );
+    });
+    assert.deepEqual(
+      registryRequests,
+      [],
+      `Warm Run ${runIndex + 1} should not fetch registry packages`,
+    );
+    assert.deepEqual(
+      previewReloadRequests,
+      [],
+      `Warm Run ${runIndex + 1} should not reload the outer Vite preview`,
+    );
+    assert.deepEqual(
+      toolingRequests,
+      [],
+      `Warm Run ${runIndex + 1} should not load Monaco or workers`,
+    );
+  }
   assert.ok(
     warmDurations.every((duration) => duration < 1_000),
     `Warm playground runs exceeded 1000ms: ${warmDurations.join('ms, ')}ms`,
@@ -346,7 +496,7 @@ const checkPlayground = async (page) => {
       'ms',
   );
 
-  await codeEditor.click();
+  await playgroundInput.focus();
   await page.keyboard.press(
     process.platform === 'darwin' ? 'Meta+A' : 'Control+A',
   );
@@ -388,7 +538,7 @@ const checkPlayground = async (page) => {
     (await consoleOutput.textContent())?.includes('Hello, Ada!'),
     false,
   );
-  await outerEditor.press('Control+Enter');
+  await playgroundInput.press('Control+Enter');
   await consoleOutput
     .getByText('Hello, Ada!', { exact: false })
     .waitFor({ timeout: 60_000 });
@@ -405,7 +555,9 @@ const checkPlayground = async (page) => {
   }
   await exampleSelect.selectOption({ label: 'HKT transform' });
   await page.waitForFunction(() =>
-    document.querySelector('.cm-content')?.textContent?.includes('BoxHKT'),
+    document
+      .querySelector('.playground__editor .monaco-editor .view-lines')
+      ?.textContent?.includes('BoxHKT'),
   );
   assert.equal(
     await page.evaluate(
@@ -417,7 +569,7 @@ const checkPlayground = async (page) => {
     (await consoleOutput.textContent())?.includes('Greeting: hello'),
     false,
   );
-  await outerEditor.press('Meta+Enter');
+  await playgroundInput.press('Meta+Enter');
   await consoleOutput
     .getByText('Greeting: hello', { exact: false })
     .waitFor({ timeout: 60_000 });
@@ -513,7 +665,10 @@ const checkExistingDocumentationPages = async (page, browser) => {
       .locator('.example-contract dt')
       .evaluate((term) => {
         const channels = (value) => {
-          const values = value.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+          const values = value
+            .match(/[\d.]+/g)
+            ?.slice(0, 3)
+            .map(Number);
           if (!values) throw new Error(`Unsupported color: ${value}`);
           return value.startsWith('color(srgb')
             ? values
@@ -621,7 +776,10 @@ const checkExistingDocumentationPages = async (page, browser) => {
           range.setStart(node, index);
           range.setEnd(node, index + 'Module'.length);
           const rect = range.getBoundingClientRect();
-          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+          return {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          };
         }
         node = walker.nextNode();
       }
@@ -717,9 +875,7 @@ const checkExistingDocumentationPages = async (page, browser) => {
             },
           ),
           adjacentEditor:
-            editor?.matches(
-              "astro-island[component-export='Editor']",
-            ) ?? false,
+            editor?.matches("astro-island[component-export='Editor']") ?? false,
         };
       }),
     );
@@ -801,8 +957,7 @@ const checkExistingDocumentationPages = async (page, browser) => {
           ),
         )
         .map(
-          (line) =>
-            line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0,
+          (line) => line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0,
         ),
     );
   assert.deepEqual(partialExampleIndents, [2, 2]);
@@ -821,9 +976,7 @@ const checkExistingDocumentationPages = async (page, browser) => {
     'Mobile docs search button',
   );
   await assertMinimumTargetSize(
-    page
-      .locator('.expressive-code button[title="Copy to clipboard"]')
-      .first(),
+    page.locator('.expressive-code button[title="Copy to clipboard"]').first(),
     'Mobile code copy button',
   );
 
