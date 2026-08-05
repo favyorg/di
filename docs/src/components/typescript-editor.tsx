@@ -111,10 +111,33 @@ type ActiveAutoTypingsGeneration = Readonly<{
 
 let sharedLocalStorageCache: AutoTypingsCache | undefined;
 
+type FocusTracker = {
+  generation: number;
+};
+
+const focusTrackers = new WeakMap<Document, FocusTracker>();
+
+const focusTrackerFor = (document: Document): FocusTracker => {
+  const existing = focusTrackers.get(document);
+  if (existing) return existing;
+
+  const tracker: FocusTracker = { generation: 0 };
+  document.addEventListener('focusin', () => {
+    tracker.generation += 1;
+  });
+  focusTrackers.set(document, tracker);
+  return tracker;
+};
+
 export type TypeScriptEditorSnapshot = Readonly<{
   hadFocus: boolean;
   anchor: number;
   head: number;
+  focusGuard?: Readonly<{
+    document: Document;
+    focusedElement: Element;
+    generation: number;
+  }>;
 }>;
 
 export type TypeScriptEditorHandle = {
@@ -166,7 +189,17 @@ const restoreEditorSnapshot = (
       head.column
     )
   );
-  if (snapshot.hadFocus) editor.focus();
+  const focusGuard = snapshot.focusGuard;
+  if (
+    snapshot.hadFocus &&
+    focusGuard &&
+    focusGuard.generation === focusTrackerFor(focusGuard.document).generation &&
+    !focusGuard.focusedElement.isConnected &&
+    (focusGuard.document.activeElement === focusGuard.document.body ||
+      focusGuard.document.activeElement === null)
+  ) {
+    editor.focus();
+  }
   return true;
 };
 
@@ -316,8 +349,20 @@ const TypeScriptEditorComponent = forwardRef<
         const selection = editor?.getSelection();
         if (!editor || !model || !selection) return undefined;
 
+        const hadFocus = editor.hasTextFocus();
+        const editorDocument = editor.getDomNode()?.ownerDocument;
+        const focusedElement = editorDocument?.activeElement;
+        const focusGuard =
+          hadFocus && editorDocument && focusedElement
+            ? {
+                document: editorDocument,
+                focusedElement,
+                generation: focusTrackerFor(editorDocument).generation,
+              }
+            : undefined;
+
         return {
-          hadFocus: editor.hasTextFocus(),
+          hadFocus,
           anchor: model.getOffsetAt({
             lineNumber: selection.selectionStartLineNumber,
             column: selection.selectionStartColumn,
@@ -326,6 +371,7 @@ const TypeScriptEditorComponent = forwardRef<
             lineNumber: selection.positionLineNumber,
             column: selection.positionColumn,
           }),
+          ...(focusGuard ? { focusGuard } : {}),
         };
       },
       restore: (snapshot) => {

@@ -60,6 +60,7 @@ const mockAddExtraLib = jest.fn();
 const mockSetCompilerOptions = jest.fn();
 const mockSetDiagnosticsOptions = jest.fn();
 const mockEditorStates: MockEditorState[] = [];
+let mockAfterSetSelection: (() => void) | undefined;
 const mockAutoTypesDispose = jest.fn();
 const mockAutoTypesCreate = jest.fn();
 const mockCacheClear = jest.fn();
@@ -170,6 +171,7 @@ jest.mock('@monaco-editor/react', () => {
       };
       const editor = {
         focus: () => state.textarea?.focus(),
+        getDomNode: () => state.textarea,
         getModel: () => model,
         getSelection: (): MockSelection => {
           const anchor = mockPositionAt(state.value, state.anchor);
@@ -198,6 +200,7 @@ jest.mock('@monaco-editor/react', () => {
             Math.max(state.anchor, state.head),
             state.anchor > state.head ? 'backward' : 'forward'
           );
+          mockAfterSetSelection?.();
         },
       };
       onMount(editor, mockMonaco);
@@ -309,8 +312,15 @@ const flushDynamicImports = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-const editorTextarea = () =>
-  screen.findByRole('textbox', { name: 'TypeScript example' });
+const editorTextarea = async (): Promise<HTMLTextAreaElement> => {
+  const element = await screen.findByRole('textbox', {
+    name: 'TypeScript example',
+  });
+  if (!(element instanceof HTMLTextAreaElement)) {
+    throw new Error('Missing mocked TypeScript editor textarea.');
+  }
+  return element;
+};
 
 const mockEditorSelection = () => {
   const state = mockEditorStates[mockEditorStates.length - 1];
@@ -479,6 +489,7 @@ const arrangePendingGeneration = (label: string) => {
 };
 
 beforeEach(() => {
+  mockAfterSetSelection = undefined;
   mockAutoTypesDispose.mockReset();
   mockAutoTypesCreate.mockReset().mockResolvedValue({
     dispose: mockAutoTypesDispose,
@@ -497,6 +508,7 @@ afterEach(() => {
   cleanup();
   document.documentElement.removeAttribute('data-theme');
   globalThis.fetch = originalFetch;
+  jest.restoreAllMocks();
 });
 
 it('maps the checked-out package sources to Monaco and Sandpack paths', () => {
@@ -524,7 +536,39 @@ it('keeps the fallback until Monaco is ready', async () => {
   expect(mockAutoTypesCreate).not.toHaveBeenCalled();
 });
 
-it('forwards controlled edits and restores focus and selection', async () => {
+it('installs one focus-generation tracker per editor document', async () => {
+  const firstRef = createRef<TypeScriptEditorHandle>();
+  const secondRef = createRef<TypeScriptEditorHandle>();
+  const listenerSpy = jest.spyOn(document, 'addEventListener');
+  render(
+    <>
+      <TypeScriptEditor {...props} ref={firstRef} />
+      <TypeScriptEditor
+        {...props}
+        ref={secondRef}
+        ariaLabel="Second TypeScript example"
+        modelPath="file:///docs/second.ts"
+      />
+    </>
+  );
+  const textareas = await screen.findAllByRole('textbox');
+  const registrationsBeforeCapture = listenerSpy.mock.calls.filter(
+    ([type]) => type === 'focusin'
+  ).length;
+
+  textareas[0].focus();
+  firstRef.current?.capture();
+  textareas[1].focus();
+  secondRef.current?.capture();
+
+  expect(
+    listenerSpy.mock.calls.filter(([type]) => type === 'focusin').length -
+      registrationsBeforeCapture
+  ).toBe(1);
+  listenerSpy.mockRestore();
+});
+
+it('forwards controlled edits and restores selection without inferred focus', async () => {
   const onChange = jest.fn();
   const ref = createRef<TypeScriptEditorHandle>();
   render(<TypeScriptEditor {...props} ref={ref} onChange={onChange} />);
@@ -535,14 +579,249 @@ it('forwards controlled edits and restores focus and selection', async () => {
   expect(onChange).toHaveBeenLastCalledWith('const n = 1');
   expect(ref.current?.readValue()).toBe('const n = 1');
 
-  ref.current?.restore({ hadFocus: true, anchor: 6, head: 7 });
+  ref.current?.restore({ hadFocus: false, anchor: 6, head: 7 });
   expect(mockEditorSelection()).toEqual({ anchor: 6, head: 7 });
-  expect(mockEditorHasFocus()).toBe(true);
+  expect(mockEditorHasFocus()).toBe(false);
   expect(ref.current?.capture()).toEqual({
-    hadFocus: true,
+    hadFocus: false,
     anchor: 6,
     head: 7,
   });
+});
+
+it('does not steal focus moved outside before editor replacement', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  const result = render(
+    <>
+      <button type="button">Outside</button>
+      <TypeScriptEditor {...props} ref={ref} />
+    </>
+  );
+  const outgoing = await editorTextarea();
+  outgoing.focus();
+  ref.current?.restore({ hadFocus: false, anchor: 6, head: 11 });
+  const snapshot = ref.current?.capture();
+  if (!snapshot) throw new Error('Expected an editor snapshot.');
+  const outside = screen.getByRole('button', { name: 'Outside' });
+  outside.focus();
+
+  result.rerender(
+    <>
+      <button type="button">Outside</button>
+      <TypeScriptEditor key="replacement" {...props} ref={ref} />
+    </>
+  );
+  ref.current?.restore(snapshot);
+  const replacement = await editorTextarea();
+
+  expect(replacement).not.toBe(outgoing);
+  expect(replacement.selectionStart).toBe(6);
+  expect(replacement.selectionEnd).toBe(11);
+  expect(document.activeElement).toBe(outside);
+});
+
+it('captures a focus guard only while Monaco reports text focus', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  render(<TypeScriptEditor {...props} ref={ref} />);
+  const input = await editorTextarea();
+  type GuardedSnapshot = Readonly<{
+    focusGuard?: Readonly<{
+      document: Document;
+      focusedElement: Element;
+      generation: number;
+    }>;
+  }>;
+
+  const unfocused = ref.current?.capture() as GuardedSnapshot | undefined;
+  expect(unfocused?.focusGuard).toBeUndefined();
+
+  input.focus();
+  const focused = ref.current?.capture() as GuardedSnapshot | undefined;
+  expect(focused?.focusGuard).toEqual({
+    document,
+    focusedElement: input,
+    generation: expect.any(Number),
+  });
+});
+
+it('restores focus and selection when focused editor replacement is uninterrupted', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  const result = render(<TypeScriptEditor {...props} ref={ref} />);
+  const outgoing = await editorTextarea();
+  outgoing.focus();
+  ref.current?.restore({ hadFocus: false, anchor: 4, head: 12 });
+  const snapshot = ref.current?.capture();
+  if (!snapshot) throw new Error('Expected an editor snapshot.');
+
+  result.rerender(<TypeScriptEditor key="replacement" {...props} ref={ref} />);
+  expect(outgoing.isConnected).toBe(false);
+  expect(document.activeElement).toBe(document.body);
+  ref.current?.restore(snapshot);
+  const replacement = await editorTextarea();
+
+  expect(replacement).not.toBe(outgoing);
+  expect(replacement.selectionStart).toBe(4);
+  expect(replacement.selectionEnd).toBe(12);
+  expect(document.activeElement).toBe(replacement);
+});
+
+it('restores selection without focusing when the outgoing editor was unfocused', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  const result = render(
+    <>
+      <button type="button">Outside</button>
+      <TypeScriptEditor {...props} ref={ref} />
+    </>
+  );
+  const outgoing = await editorTextarea();
+  const outside = screen.getByRole('button', { name: 'Outside' });
+  outside.focus();
+  ref.current?.restore({ hadFocus: false, anchor: 5, head: 9 });
+  const snapshot = ref.current?.capture();
+  if (!snapshot) throw new Error('Expected an editor snapshot.');
+
+  result.rerender(
+    <>
+      <button type="button">Outside</button>
+      <TypeScriptEditor key="replacement" {...props} ref={ref} />
+    </>
+  );
+  ref.current?.restore(snapshot);
+  const replacement = await editorTextarea();
+
+  expect(replacement).not.toBe(outgoing);
+  expect(replacement.selectionStart).toBe(5);
+  expect(replacement.selectionEnd).toBe(9);
+  expect(document.activeElement).toBe(outside);
+});
+
+it('requires captured focus intent even when every focus guard still matches', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  const result = render(<TypeScriptEditor {...props} ref={ref} />);
+  const outgoing = await editorTextarea();
+  outgoing.focus();
+  ref.current?.restore({ hadFocus: false, anchor: 5, head: 13 });
+  const snapshot = ref.current?.capture();
+  if (!snapshot?.focusGuard) throw new Error('Expected a guarded snapshot.');
+
+  result.rerender(<TypeScriptEditor key="replacement" {...props} ref={ref} />);
+  expect(outgoing.isConnected).toBe(false);
+  expect(document.activeElement).toBe(document.body);
+  ref.current?.restore({ ...snapshot, hadFocus: false });
+  const replacement = await editorTextarea();
+
+  expect(replacement.selectionStart).toBe(5);
+  expect(replacement.selectionEnd).toBe(13);
+  expect(document.activeElement).toBe(document.body);
+});
+
+it('does not restore focus over an active external element with a matching generation', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  const result = render(
+    <>
+      <button type="button">Outside</button>
+      <TypeScriptEditor {...props} ref={ref} />
+    </>
+  );
+  const outgoing = await editorTextarea();
+  outgoing.focus();
+  ref.current?.restore({ hadFocus: false, anchor: 3, head: 9 });
+  const snapshot = ref.current?.capture();
+  if (!snapshot?.focusGuard) throw new Error('Expected a guarded snapshot.');
+  const outside = screen.getByRole('button', { name: 'Outside' });
+  outside.focus();
+  const currentGenerationSnapshot = {
+    ...snapshot,
+    focusGuard: {
+      ...snapshot.focusGuard,
+      generation: snapshot.focusGuard.generation + 1,
+    },
+  };
+
+  result.rerender(
+    <>
+      <button type="button">Outside</button>
+      <TypeScriptEditor key="replacement" {...props} ref={ref} />
+    </>
+  );
+  ref.current?.restore(currentGenerationSnapshot);
+  const replacement = await editorTextarea();
+
+  expect(outgoing.isConnected).toBe(false);
+  expect(replacement.selectionStart).toBe(3);
+  expect(replacement.selectionEnd).toBe(9);
+  expect(document.activeElement).toBe(outside);
+});
+
+it('does not restore focus while the captured focused element is still connected', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  render(<TypeScriptEditor {...props} ref={ref} />);
+  const input = await editorTextarea();
+  input.focus();
+  ref.current?.restore({ hadFocus: false, anchor: 3, head: 10 });
+  const snapshot = ref.current?.capture();
+  if (!snapshot) throw new Error('Expected an editor snapshot.');
+  input.blur();
+
+  ref.current?.restore(snapshot);
+
+  expect(input.selectionStart).toBe(3);
+  expect(input.selectionEnd).toBe(10);
+  expect(input.isConnected).toBe(true);
+  expect(document.activeElement).toBe(document.body);
+});
+
+it('does not restore focus after an intervening focus target is removed', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  const result = render(<TypeScriptEditor {...props} ref={ref} />);
+  const outgoing = await editorTextarea();
+  outgoing.focus();
+  ref.current?.restore({ hadFocus: false, anchor: 2, head: 8 });
+  const snapshot = ref.current?.capture();
+  if (!snapshot) throw new Error('Expected an editor snapshot.');
+  const intervening = document.createElement('button');
+  document.body.append(intervening);
+  intervening.focus();
+  intervening.remove();
+
+  result.rerender(<TypeScriptEditor key="replacement" {...props} ref={ref} />);
+  ref.current?.restore(snapshot);
+  const replacement = await editorTextarea();
+
+  expect(outgoing.isConnected).toBe(false);
+  expect(replacement.selectionStart).toBe(2);
+  expect(replacement.selectionEnd).toBe(8);
+  expect(document.activeElement).toBe(document.body);
+});
+
+it('checks focus intent immediately after restoring selection', async () => {
+  const ref = createRef<TypeScriptEditorHandle>();
+  const result = render(
+    <>
+      <button type="button">Outside</button>
+      <TypeScriptEditor {...props} ref={ref} />
+    </>
+  );
+  const outgoing = await editorTextarea();
+  outgoing.focus();
+  ref.current?.restore({ hadFocus: false, anchor: 1, head: 7 });
+  const snapshot = ref.current?.capture();
+  if (!snapshot) throw new Error('Expected an editor snapshot.');
+
+  result.rerender(
+    <>
+      <button type="button">Outside</button>
+      <TypeScriptEditor key="replacement" {...props} ref={ref} />
+    </>
+  );
+  const outside = screen.getByRole('button', { name: 'Outside' });
+  mockAfterSetSelection = () => outside.focus();
+  ref.current?.restore(snapshot);
+  const replacement = await editorTextarea();
+
+  expect(replacement.selectionStart).toBe(1);
+  expect(replacement.selectionEnd).toBe(7);
+  expect(document.activeElement).toBe(outside);
 });
 
 it('queues the latest restore until mount and clamps its offsets', async () => {
@@ -557,7 +836,7 @@ it('queues the latest restore until mount and clamps its offsets', async () => {
     anchor: props.value.length,
     head: 0,
   });
-  expect(mockEditorHasFocus()).toBe(true);
+  expect(mockEditorHasFocus()).toBe(false);
 });
 
 it('initializes guarded automatic typings with one shared backing cache', async () => {

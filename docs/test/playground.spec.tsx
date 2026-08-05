@@ -28,6 +28,8 @@ let mockMaximumMountedSandboxes = 0;
 let mockVisibleSandpackEditors = 0;
 let mockTypeScriptEditorProps: any[] = [];
 let mockEditorReadValue: string | undefined;
+let mockEditorCaptures = 0;
+let mockEditorRestores = 0;
 
 jest.mock('../src/components/playground/playground-sandbox', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -78,6 +80,7 @@ jest.mock('../src/components/typescript-editor', () => {
             textareaRef.current?.value ??
             valueRef.current,
           capture: () => {
+            mockEditorCaptures += 1;
             const textarea = textareaRef.current;
             if (!textarea) return undefined;
             const backward = textarea.selectionDirection === 'backward';
@@ -90,6 +93,7 @@ jest.mock('../src/components/typescript-editor', () => {
             };
           },
           restore: ({ hadFocus, anchor, head }: any) => {
+            mockEditorRestores += 1;
             const textarea = textareaRef.current;
             if (!textarea) return;
             textarea.setSelectionRange(
@@ -202,6 +206,8 @@ beforeEach(() => {
   mockVisibleSandpackEditors = 0;
   mockTypeScriptEditorProps = [];
   mockEditorReadValue = undefined;
+  mockEditorCaptures = 0;
+  mockEditorRestores = 0;
   document.documentElement.dataset.theme = 'light';
 });
 
@@ -345,6 +351,26 @@ it('keeps one dependency session across same-signature switch and reset', () => 
 
   expect(mockSandboxMounts).toEqual(mounts);
   expect(mockMaximumMountedSandboxes).toBe(1);
+});
+
+it('keeps normal control focus through reset and example navigation', () => {
+  renderReadyPlayground();
+  const input = editor();
+  const reset = screen.getByRole('button', { name: 'Reset example' });
+  reset.focus();
+
+  fireEvent.click(reset);
+
+  expect(editor()).toBe(input);
+  expect(document.activeElement).toBe(reset);
+  const composition = screen.getByRole('button', { name: 'Composition' });
+  composition.focus();
+  fireEvent.click(composition);
+
+  expect(editor()).toBe(input);
+  expect(document.activeElement).toBe(composition);
+  expect(mockEditorCaptures).toBe(0);
+  expect(mockEditorRestores).toBe(0);
 });
 
 it('waits 1000 ms before replacing the dependency session', () => {
@@ -857,6 +883,34 @@ it('allocates increasing run tokens without replacing the dependency session', (
   expect(mockSandboxMounts).toEqual(['@favy/di@local']);
 });
 
+it('keeps the exact focused editor through a controller-only run and restart', () => {
+  renderReadyPlayground();
+  const input = editor();
+  input.focus();
+  input.setSelectionRange(7, 19, 'backward');
+
+  fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+  const request = activeRequest();
+
+  expect(editor()).toBe(input);
+  expect(document.activeElement).toBe(input);
+  expect(input.selectionStart).toBe(7);
+  expect(input.selectionEnd).toBe(19);
+  expect(input.selectionDirection).toBe('backward');
+  expect(mockEditorCaptures).toBe(0);
+  expect(mockEditorRestores).toBe(0);
+
+  settle({ runToken: request.runToken, outcome: 'runtime-restarted' });
+
+  expect(editor()).toBe(input);
+  expect(document.activeElement).toBe(input);
+  expect(input.selectionStart).toBe(7);
+  expect(input.selectionEnd).toBe(19);
+  expect(input.selectionDirection).toBe('backward');
+  expect(mockEditorCaptures).toBe(0);
+  expect(mockEditorRestores).toBe(0);
+});
+
 it('launches once under StrictMode effect replay', () => {
   render(
     <React.StrictMode>
@@ -882,10 +936,13 @@ it('restores selection and focus after a dependency remount', () => {
   act(() => jest.advanceTimersByTime(1_000));
 
   expect(editor()).not.toBe(input);
+  expect(input.isConnected).toBe(false);
   expect(document.activeElement).toBe(editor());
   expect(editor().selectionStart).toBe(7);
   expect(editor().selectionEnd).toBe(19);
   expect(editor().selectionDirection).toBe('backward');
+  expect(mockEditorCaptures).toBe(1);
+  expect(mockEditorRestores).toBe(1);
 });
 
 it('flushes a pending scan, remounts, and queues exactly once', () => {
