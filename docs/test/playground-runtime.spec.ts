@@ -10,15 +10,8 @@ import {
 } from '../src/components/playground/playground-dependencies';
 import { playgroundExamples } from '../src/components/playground/playground-examples';
 import {
-  RUN_COMPLETE_PREFIX,
-  RUN_OUTPUT_PREFIX,
-  completionToken,
   frameHtmlSource,
-  legacyRuntimeCommand,
-  legacyRuntimeSource,
-  legacySetupForRun,
   preparationLabel,
-  runOutputRecord,
   runtimeCancelCommand,
   runtimePrepareCommand,
   runtimeRelayRecord,
@@ -962,39 +955,6 @@ it('keeps all generated execution files strict-valid and uninstrumented', () => 
     ).toEqual([]);
     expect(source).toBe(`${example.source}\n// session:11\n// run:7\n`);
   }
-});
-
-it('keeps the deployed single-token page helpers behind legacy aliases', () => {
-  expect(legacyRuntimeCommand('prepare', 7)).toEqual({
-    type: MESSAGE_TYPE,
-    action: 'prepare',
-    token: 7,
-  });
-  expect(legacyRuntimeSource(['@favy/di'])).toContain('import "@favy/di";');
-  expect(legacyRuntimeSource([])).toContain('srcdoc');
-  expect(
-    legacySetupForRun(setup, 'console.log("new")', 7).files['/execution.ts']
-      .code
-  ).toBe('console.log("new")\n// run:7\n');
-});
-
-it('keeps legacy page console parsers operational until controller integration', () => {
-  const value = { circular: true };
-  expect(
-    completionToken({ method: 'debug', data: [RUN_COMPLETE_PREFIX + '12'] })
-  ).toBe(12);
-  expect(
-    runOutputRecord({
-      method: 'debug',
-      data: [RUN_OUTPUT_PREFIX + '12', 'log', 'hello', value],
-    })
-  ).toEqual({ token: 12, method: 'log', data: ['hello', value] });
-  expect(
-    runOutputRecord({
-      method: 'debug',
-      data: [RUN_OUTPUT_PREFIX + '12', 'unknown'],
-    })
-  ).toBeUndefined();
 });
 
 it.each([
