@@ -32,12 +32,12 @@ import {
 } from './playground-examples';
 import {
   completionToken,
+  legacyRuntimeCommand as runtimeCommand,
+  legacyRuntimeSource as runtimeSource,
+  legacySetupForRun as setupForRun,
   preparationLabel,
   runErrorRecord,
   runOutputRecord,
-  runtimeCommand,
-  runtimeSource,
-  setupForRun,
 } from './playground-runtime';
 import './playground.css';
 

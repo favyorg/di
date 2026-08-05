@@ -13,16 +13,27 @@ import {
   RUN_COMPLETE_PREFIX,
   RUN_OUTPUT_PREFIX,
   completionToken,
+  frameHtmlSource,
+  legacyRuntimeCommand,
+  legacyRuntimeSource,
+  legacySetupForRun,
   preparationLabel,
   runOutputRecord,
-  runSource,
-  runtimeCommand,
+  runtimeCancelCommand,
+  runtimePrepareCommand,
+  runtimeRelayRecord,
+  runtimeRunCommand,
   runtimeSource,
   setupForRun,
   warmupSource,
+  type PlaygroundConsoleValue,
+  type RuntimeCommand,
+  type RuntimeRelay,
 } from '../src/components/playground/playground-runtime';
 
-const RUN_FRAME_SELECTOR = 'iframe[data-favy-playground-execution]';
+const MESSAGE_TYPE = '__FAVY_PLAYGROUND_RUNTIME__';
+const WARMUP_SELECTOR = 'iframe[data-favy-playground-warmup]';
+const EXECUTION_SELECTOR = 'iframe[data-favy-playground-execution]';
 const workspace = path.resolve(__dirname, '../..');
 
 const setup: SandboxSetup = {
@@ -36,96 +47,31 @@ const setup: SandboxSetup = {
   },
 };
 
-type TestRuntime = Readonly<{
-  parent: Record<string, unknown>;
-  records: unknown[][];
-  runtimeConsole: { debug(...data: unknown[]): void };
+type ConsoleRecord = Readonly<{
+  method?: unknown;
+  data?: readonly unknown[];
 }>;
 
-type TestChild = Window & typeof globalThis & Readonly<{ console: Console }>;
+type RuntimeWindow = Record<string, unknown> & {
+  console: Console;
+  addEventListener(type: string, listener: EventListener): void;
+  dispatchEvent(event: Event): boolean;
+};
 
-type TestRun = Readonly<{
-  frame: HTMLIFrameElement;
-  executeChild(
-    load: (specifier: string, child: TestChild) => Promise<unknown>,
-    now?: () => number
-  ): TestChild;
+type RunnerHarness = Readonly<{
+  parent: object;
+  consoleRecords: ConsoleRecord[];
+  dispatch(command: unknown, source?: object): void;
+  emit(frame: HTMLIFrameElement, relay: object): void;
+  listenerCount(): number;
+  relays(): RuntimeRelay[];
 }>;
 
-const errorMarker = (token: number): string =>
-  `__FAVY_PLAYGROUND_ERROR__:${token}`;
-
-const flushChildTasks = async (): Promise<void> => {
-  await Promise.resolve();
-  await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-};
-
-const createTestRuntime = (): TestRuntime => {
-  const records: unknown[][] = [];
-  const runtimeConsole = {
-    debug: (...data: unknown[]) => records.push(data),
-  };
-  return {
-    parent: { console: runtimeConsole },
-    records,
-    runtimeConsole,
-  };
-};
-
-const startTestRun = (runtime: TestRuntime, token: number): TestRun => {
-  const executableSource = runSource(token).replaceAll('import(', 'load(');
-  const execute = Function(
-    'globalThis',
-    'document',
-    'console',
-    'load',
-    executableSource
-  ) as (
-    runtimeGlobal: Record<string, unknown>,
-    runtimeDocument: Document,
-    runtimeConsole: TestRuntime['runtimeConsole'],
-    loadModule: (specifier: string) => Promise<unknown>
-  ) => void;
-  execute(runtime.parent, document, runtime.runtimeConsole, () =>
-    Promise.resolve()
-  );
-
-  const frames =
-    document.querySelectorAll<HTMLIFrameElement>(RUN_FRAME_SELECTOR);
-  const frame = frames.item(frames.length - 1);
-  if (!frame) throw new Error('Runner did not create an execution iframe.');
-
-  return {
-    frame,
-    executeChild: (load, now = () => performance.now()) => {
-      const child = frame.contentWindow as TestChild | null;
-      if (!child) throw new Error('Execution iframe has no window.');
-      const script = /<script type="module">([\s\S]*)<\/script>/.exec(
-        frame.srcdoc
-      )?.[1];
-      if (!script) throw new Error('Execution iframe has no module bootstrap.');
-      const executeBootstrap = Function(
-        'parent',
-        'window',
-        'globalThis',
-        'performance',
-        'load',
-        script
-      ) as (
-        runtimeParent: Record<string, unknown>,
-        runtimeWindow: TestChild,
-        runtimeGlobal: TestChild,
-        runtimePerformance: { now(): number },
-        loadModule: (specifier: string) => Promise<unknown>
-      ) => void;
-      executeBootstrap(runtime.parent, child, child, { now }, (specifier) =>
-        load(specifier, child)
-      );
-      return child;
-    },
-  };
-};
+type BootstrapHarness = Readonly<{
+  runtime: RuntimeWindow;
+  imports: string[];
+  messages: Array<Readonly<{ record: unknown; targetOrigin: string }>>;
+}>;
 
 const diagnosticsForExecution = (
   id: string,
@@ -162,9 +108,144 @@ const diagnosticsForExecution = (
   return ts.getPreEmitDiagnostics(ts.createProgram([filename], options, host));
 };
 
+const childRecord = (relay: object): object => ({
+  type: MESSAGE_TYPE,
+  ...relay,
+});
+
+const generatedRuntimeSource = (): string => runtimeSource();
+
+const createRunner = (): RunnerHarness => {
+  const listeners = new Set<(event: MessageEvent) => void>();
+  const consoleRecords: ConsoleRecord[] = [];
+  const runtimeConsole = {
+    debug: (...data: unknown[]) => {
+      consoleRecords.push({ method: 'debug', data });
+    },
+  };
+  const runtimeGlobal = {
+    console: runtimeConsole,
+    addEventListener: (
+      type: string,
+      listener: (event: MessageEvent) => void
+    ) => {
+      if (type === 'message') listeners.add(listener);
+    },
+    removeEventListener: (
+      type: string,
+      listener: (event: MessageEvent) => void
+    ) => {
+      if (type === 'message') listeners.delete(listener);
+    },
+  };
+  const parent = {};
+  const source = ts.transpile(generatedRuntimeSource(), {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+  });
+  const execute = Function('globalThis', 'document', 'parent', source) as (
+    runtimeEnvironment: typeof runtimeGlobal,
+    runtimeDocument: Document,
+    runtimeParent: object
+  ) => void;
+  execute(runtimeGlobal, document, parent);
+  const dispatchEvent = (source: object, data: unknown): void => {
+    for (const listener of [...listeners]) {
+      listener({ source, data } as unknown as MessageEvent);
+    }
+  };
+
+  return {
+    parent,
+    consoleRecords,
+    dispatch: (command, source = parent) => dispatchEvent(source, command),
+    emit: (frame, relay) => {
+      const source = frame.contentWindow;
+      if (!source) throw new Error('Runtime frame has no content window.');
+      dispatchEvent(source, childRecord(relay));
+    },
+    listenerCount: () => listeners.size,
+    relays: () =>
+      consoleRecords.flatMap((record) => {
+        const relay = runtimeRelayRecord(record);
+        return relay ? [relay] : [];
+      }),
+  };
+};
+
+const warmupFrame = (): HTMLIFrameElement => {
+  const frame = document.querySelector<HTMLIFrameElement>(WARMUP_SELECTOR);
+  if (!frame) throw new Error('Runner did not create a warmup iframe.');
+  return frame;
+};
+
+const executionFrameOrNull = (): HTMLIFrameElement | null =>
+  document.querySelector<HTMLIFrameElement>(EXECUTION_SELECTOR);
+
+const executionFrame = (): HTMLIFrameElement => {
+  const frame = executionFrameOrNull();
+  if (!frame) throw new Error('Runner did not create an execution iframe.');
+  return frame;
+};
+
+const inlineBootstrap = (): string => {
+  const source = frameHtmlSource();
+  const script = /<script type="module">([\s\S]*)<\/script>/.exec(source)?.[1];
+  if (!script)
+    throw new Error('Frame document has no inline module bootstrap.');
+  return script.replaceAll('import(', 'load(');
+};
+
+const executeBootstrap = (
+  search: string,
+  loadModule: (
+    specifier: string,
+    runtime: RuntimeWindow
+  ) => Promise<unknown> = () => Promise.resolve(),
+  now: () => number = () => performance.now()
+): BootstrapHarness => {
+  const target = new EventTarget();
+  const imports: string[] = [];
+  const messages: BootstrapHarness['messages'][number][] = [];
+  const runtime = {
+    location: { search },
+    console: Object.create(console) as Console,
+    addEventListener: (type: string, listener: EventListener) =>
+      target.addEventListener(type, listener),
+    dispatchEvent: (event: Event) => target.dispatchEvent(event),
+  } as RuntimeWindow;
+  const runtimeParent = {
+    postMessage: (record: unknown, targetOrigin: string) => {
+      messages.push({ record, targetOrigin });
+    },
+  };
+  const execute = Function(
+    'parent',
+    'globalThis',
+    'performance',
+    'load',
+    inlineBootstrap()
+  ) as (
+    parent: typeof runtimeParent,
+    runtimeGlobal: RuntimeWindow,
+    runtimePerformance: { now(): number },
+    load: (specifier: string) => Promise<unknown>
+  ) => void;
+  execute(runtimeParent, runtime, { now }, (specifier) => {
+    imports.push(specifier);
+    return loadModule(specifier, runtime);
+  });
+  return { runtime, imports, messages };
+};
+
+const flushTasks = async (): Promise<void> => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
 afterEach(() => {
   document
-    .querySelectorAll(RUN_FRAME_SELECTOR)
+    .querySelectorAll(`${WARMUP_SELECTOR}, ${EXECUTION_SELECTOR}`)
     .forEach((frame) => frame.remove());
 });
 
@@ -214,317 +295,465 @@ it.each([
   expect(() => warmupSource([dependency])).toThrow();
 });
 
-it('generates a tokenized child-realm import with one completion record', () => {
-  const source = runSource(7);
-  expect(source).toContain("import('/execution.ts?run=7')");
-  expect(source.match(/__FAVY_PLAYGROUND_DONE__:/g)).toHaveLength(1);
-  expect(source).toContain(RUN_COMPLETE_PREFIX + '7');
-  expect(source).toContain('srcdoc');
+it('generates a privileged runtime with no package import or origin escape hatch', () => {
+  const source = generatedRuntimeSource();
+  expect(source).not.toMatch(/^\s*import\s/m);
+  expect(source).not.toContain('allow-same-origin');
+  expect(source).not.toMatch(/\bBlob\b|blob:/);
+  expect(source).not.toContain('srcdoc');
   expect(
-    diagnosticsForExecution('runner', source).map((diagnostic) =>
+    diagnosticsForExecution('runtime', source).map((diagnostic) =>
       ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
     )
   ).toEqual([]);
 });
 
-it('generates a strict-valid static runtime receiver', () => {
-  const source = runtimeSource(['@favy/di']);
-  expect(source).toContain('import "@favy/di";');
-  expect(source).toContain("globalThis.addEventListener('message'");
-  expect(
-    diagnosticsForExecution('static-runner', source).map((diagnostic) =>
-      ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
-    )
-  ).toEqual([]);
-});
+it('creates opaque URL frames and requires warmup before execution', () => {
+  const runner = createRunner();
 
-it('prepares one token before launching its isolated child realm', () => {
-  let receive: ((event: MessageEvent) => void) | undefined;
-  const runtime = createTestRuntime();
-  const runtimeParent = {};
-  const runtimeGlobal = {
-    console: runtime.runtimeConsole,
-    addEventListener: (
-      _type: string,
-      listener: (event: MessageEvent) => void
-    ) => {
-      receive = listener;
-    },
-  };
-  const source = ts.transpile(runtimeSource([]), {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
-  });
-  type RuntimeGlobal = typeof runtimeGlobal;
-  const execute = Function(
-    'globalThis',
-    'document',
-    'console',
-    'parent',
-    source
-  ) as (
-    runtimeEnvironment: RuntimeGlobal,
-    runtimeDocument: Document,
-    runtimeConsole: TestRuntime['runtimeConsole'],
-    runtimeParent: object
-  ) => void;
-  execute(runtimeGlobal, document, runtime.runtimeConsole, runtimeParent);
-  if (!receive) throw new Error('Static runner did not register a receiver.');
-  const dispatch = (action: 'prepare' | 'run', token: number): void =>
-    receive?.({
-      source: runtimeParent,
-      data: runtimeCommand(action, token),
-    } as unknown as MessageEvent);
+  runner.dispatch(runtimePrepareCommand(11));
+  const warmup = warmupFrame();
+  expect(warmup.getAttribute('sandbox')).toBe('allow-scripts');
+  expect(warmup.src).toContain('/frame.html?mode=warmup&session=11');
 
-  dispatch('run', 7);
-  expect(document.querySelectorAll(RUN_FRAME_SELECTOR)).toHaveLength(0);
-  dispatch('prepare', 7);
-  dispatch('run', 7);
-  const first = document.querySelector<HTMLIFrameElement>(RUN_FRAME_SELECTOR);
-  expect(first?.dataset.favyPlaygroundExecution).toBe('7');
+  runner.dispatch(runtimeRunCommand(11, 7));
+  expect(executionFrameOrNull()).toBeNull();
 
-  dispatch('prepare', 8);
-  expect(first?.isConnected).toBe(false);
-  dispatch('run', 7);
-  expect(document.querySelectorAll(RUN_FRAME_SELECTOR)).toHaveLength(0);
-  dispatch('run', 8);
-  expect(
-    document.querySelector<HTMLIFrameElement>(RUN_FRAME_SELECTOR)?.dataset
-      .favyPlaygroundExecution
-  ).toBe('8');
-});
+  runner.emit(warmup, { kind: 'ready', sessionToken: 11 });
+  expect(warmup.isConnected).toBe(false);
+  expect(runner.relays()).toEqual([{ kind: 'ready', sessionToken: 11 }]);
 
-it('records completion after a failed execution import settles', async () => {
-  const runtime = createTestRuntime();
-  const events: string[] = [];
-  let rejectExecution: (error: Error) => void = () => undefined;
-  const executionImport = new Promise<never>((_resolve, reject) => {
-    rejectExecution = reject;
-  });
-  const run = startTestRun(runtime, 7);
-  run.executeChild((specifier) => {
-    events.push(`import:${specifier}`);
-    return executionImport;
-  });
-
-  expect(events).toEqual(['import:/execution.ts?run=7']);
-  rejectExecution(new Error('execution failed'));
-  await executionImport.catch(() => undefined);
-  await Promise.resolve();
-  expect(runtime.records).toContainEqual([RUN_COMPLETE_PREFIX + '7']);
-});
-
-it('reports a rejected execution import before completing the run', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
-  const failure = new Error('direct boom');
-
-  run.executeChild(() => Promise.reject(failure));
-  await flushChildTasks();
-
-  expect(runtime.records[0]?.[0]).toBe(errorMarker(7));
-  expect(runtime.records[0]?.[1]).toEqual(
-    expect.stringContaining('Error: direct boom')
-  );
-  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
-  expect(
-    runtime.records.filter((record) => record[0] === errorMarker(7))
-  ).toHaveLength(1);
+  runner.dispatch(runtimeRunCommand(11, 7));
+  const execution = executionFrame();
+  expect(execution.getAttribute('sandbox')).toBe('allow-scripts');
+  expect(execution.src).toContain('/frame.html?mode=run&session=11&run=7');
 });
 
 it.each([
-  ['error', 'error', new Error('window boom')],
-  ['unhandled rejection', 'unhandledrejection', new Error('promise boom')],
-] as const)(
-  'reports an active child %s before completion',
-  async (_label, eventType, failure) => {
-    const runtime = createTestRuntime();
-    const run = startTestRun(runtime, 7);
-    const child = run.executeChild(() => Promise.resolve());
-    const event = new child.Event(eventType, { cancelable: true });
-    Object.defineProperty(event, eventType === 'error' ? 'error' : 'reason', {
-      value: failure,
-    });
-
-    child.dispatchEvent(event);
-    await flushChildTasks();
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(runtime.records[0]?.[0]).toBe(errorMarker(7));
-    expect(runtime.records[0]?.[1]).toEqual(
-      expect.stringContaining(failure.message)
-    );
-    expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
-  }
-);
-
-it('reports one error when the same failure reaches window and import paths', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
-  const failure = new Error('one boom');
-  let rejectImport: (error: Error) => void = () => undefined;
-  const executionImport = new Promise<never>((_resolve, reject) => {
-    rejectImport = reject;
-  });
-  const child = run.executeChild(() => executionImport);
-  const event = new child.Event('error', { cancelable: true });
-  Object.defineProperty(event, 'error', { value: failure });
-
-  child.dispatchEvent(event);
-  rejectImport(failure);
-  await flushChildTasks();
-
+  ['wrong source', {}, () => runtimePrepareCommand(11)],
+  [
+    'wrong type',
+    undefined,
+    () => ({ type: 'not-favy', action: 'prepare', sessionToken: 11 }),
+  ],
+  [
+    'unknown action',
+    undefined,
+    () => ({ type: MESSAGE_TYPE, action: 'launch', sessionToken: 11 }),
+  ],
+  ['negative session', undefined, () => runtimePrepareCommand(-1)],
+  ['fractional session', undefined, () => runtimePrepareCommand(1.5)],
+  [
+    'unsafe session',
+    undefined,
+    () => runtimePrepareCommand(Number.MAX_SAFE_INTEGER + 1),
+  ],
+  [
+    'missing run token',
+    undefined,
+    () => ({ type: MESSAGE_TYPE, action: 'run', sessionToken: 11 }),
+  ],
+  ['negative run token', undefined, () => runtimeRunCommand(11, -1)],
+  [
+    'unsafe run token',
+    undefined,
+    () => runtimeRunCommand(11, Number.MAX_SAFE_INTEGER + 1),
+  ],
+] as const)('rejects a %s command', (_label, source, command) => {
+  const runner = createRunner();
+  runner.dispatch(command(), source ?? runner.parent);
   expect(
-    runtime.records.filter((record) => record[0] === errorMarker(7))
-  ).toHaveLength(1);
-  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
+    document.querySelector(`${WARMUP_SELECTOR}, ${EXECUTION_SELECTOR}`)
+  ).toBeNull();
+  expect(runner.relays()).toEqual([]);
 });
 
-it('drops stale child errors after replacing its execution realm', async () => {
-  const runtime = createTestRuntime();
-  const stale = startTestRun(runtime, 7);
-  const staleChild = stale.executeChild(() => Promise.resolve());
-  const active = startTestRun(runtime, 8);
-  const activeChild = active.executeChild(() => Promise.resolve());
-  const dispatchError = (child: TestChild, message: string): void => {
-    const event = new child.Event('error', { cancelable: true });
-    Object.defineProperty(event, 'error', { value: new Error(message) });
-    child.dispatchEvent(event);
+it('ignores a hostile command shape whose own-key reflection throws', () => {
+  const runner = createRunner();
+  const command = new Proxy(
+    {
+      type: MESSAGE_TYPE,
+      action: 'prepare',
+      sessionToken: 11,
+    },
+    {
+      ownKeys: () => {
+        throw new Error('blocked ownKeys');
+      },
+    }
+  );
+
+  expect(() => runner.dispatch(command)).not.toThrow();
+  expect(document.querySelector(WARMUP_SELECTOR)).toBeNull();
+  expect(runner.relays()).toEqual([]);
+});
+
+it('replaces warmup state and drops messages from the stale frame', () => {
+  const runner = createRunner();
+  runner.dispatch(runtimePrepareCommand(11));
+  const stale = warmupFrame();
+  expect(runner.listenerCount()).toBe(2);
+
+  runner.dispatch(runtimePrepareCommand(12));
+  const active = warmupFrame();
+  expect(stale.isConnected).toBe(false);
+  expect(active).not.toBe(stale);
+  expect(runner.listenerCount()).toBe(2);
+
+  runner.emit(stale, { kind: 'ready', sessionToken: 11 });
+  runner.dispatch(runtimeRunCommand(11, 7));
+  expect(executionFrameOrNull()).toBeNull();
+  expect(runner.relays()).toEqual([]);
+
+  runner.emit(active, { kind: 'ready', sessionToken: 12 });
+  expect(active.isConnected).toBe(false);
+  expect(runner.listenerCount()).toBe(1);
+  expect(runner.relays()).toEqual([{ kind: 'ready', sessionToken: 12 }]);
+});
+
+it('cleans up a failed warmup without preparing its session', () => {
+  const runner = createRunner();
+  runner.dispatch(runtimePrepareCommand(11));
+  const warmup = warmupFrame();
+
+  runner.emit(warmup, {
+    kind: 'prepareError',
+    sessionToken: 11,
+    error: 'warmup failed',
+  });
+
+  expect(warmup.isConnected).toBe(false);
+  expect(runner.listenerCount()).toBe(1);
+  expect(runner.relays()).toEqual([
+    { kind: 'prepareError', sessionToken: 11, error: 'warmup failed' },
+  ]);
+  runner.dispatch(runtimeRunCommand(11, 7));
+  expect(executionFrameOrNull()).toBeNull();
+});
+
+it('accepts only bounded output from the active source and token domain', () => {
+  const runner = createRunner();
+  runner.dispatch(runtimePrepareCommand(11));
+  const warmup = warmupFrame();
+  runner.emit(warmup, { kind: 'ready', sessionToken: 11 });
+  runner.dispatch(runtimeRunCommand(11, 7));
+  const execution = executionFrame();
+  const valid = {
+    kind: 'output',
+    sessionToken: 11,
+    runToken: 7,
+    eventId: 0,
+    method: 'log',
+    data: ['visible', 42, true, null, undefined],
   };
 
-  dispatchError(staleChild, 'stale boom');
-  dispatchError(activeChild, 'active boom');
-  await flushChildTasks();
+  runner.emit(execution, { ...valid, sessionToken: 12 });
+  runner.emit(execution, { ...valid, runToken: 8 });
+  runner.emit(execution, { ...valid, eventId: -1 });
+  runner.emit(execution, { ...valid, eventId: 0.5 });
+  runner.emit(execution, { ...valid, eventId: Number.MAX_SAFE_INTEGER + 1 });
+  runner.emit(execution, { ...valid, method: 'trace' });
+  runner.emit(execution, { ...valid, data: { not: 'an array' } });
+  runner.emit(execution, { ...valid, data: Array(21).fill('wide') });
+  runner.emit(execution, { ...valid, data: [{ privileged: true }] });
+  runner.emit(execution, { ...valid, data: ['🙂'.repeat(1_025)] });
+  runner.dispatch(childRecord(valid), {});
+  expect(runner.relays()).toEqual([{ kind: 'ready', sessionToken: 11 }]);
 
-  expect(runtime.records.some((record) => record[0] === errorMarker(7))).toBe(
-    false
+  runner.emit(execution, valid);
+  expect(runner.relays()).toEqual([{ kind: 'ready', sessionToken: 11 }, valid]);
+});
+
+it('keeps execution alive after an error and cleans it after completion', () => {
+  const runner = createRunner();
+  runner.dispatch(runtimePrepareCommand(11));
+  runner.emit(warmupFrame(), { kind: 'ready', sessionToken: 11 });
+  runner.dispatch(runtimeRunCommand(11, 7));
+  const execution = executionFrame();
+
+  runner.emit(execution, {
+    kind: 'error',
+    sessionToken: 11,
+    runToken: 7,
+    eventId: 0,
+    error: 'boom',
+  });
+  expect(execution.isConnected).toBe(true);
+  expect(runner.listenerCount()).toBe(2);
+
+  runner.emit(execution, {
+    kind: 'complete',
+    sessionToken: 11,
+    runToken: 7,
+  });
+  expect(execution.isConnected).toBe(false);
+  expect(runner.listenerCount()).toBe(1);
+  expect(runner.relays()).toEqual([
+    { kind: 'ready', sessionToken: 11 },
+    {
+      kind: 'error',
+      sessionToken: 11,
+      runToken: 7,
+      eventId: 0,
+      error: 'boom',
+    },
+    { kind: 'complete', sessionToken: 11, runToken: 7 },
+  ]);
+
+  runner.emit(execution, {
+    kind: 'output',
+    sessionToken: 11,
+    runToken: 7,
+    eventId: 1,
+    method: 'log',
+    data: ['stale'],
+  });
+  expect(runner.relays()).toHaveLength(3);
+});
+
+it('cancels only the matching execution and acknowledges once', () => {
+  const runner = createRunner();
+  runner.dispatch(runtimePrepareCommand(11));
+  runner.emit(warmupFrame(), { kind: 'ready', sessionToken: 11 });
+  runner.dispatch(runtimeRunCommand(11, 7));
+  const execution = executionFrame();
+
+  runner.dispatch(runtimeCancelCommand(11, 8));
+  runner.dispatch(runtimeCancelCommand(12, 7));
+  expect(execution.isConnected).toBe(true);
+
+  runner.dispatch(runtimeCancelCommand(11, 7));
+  expect(execution.isConnected).toBe(false);
+  expect(runner.listenerCount()).toBe(1);
+  expect(runner.relays()).toEqual([
+    { kind: 'ready', sessionToken: 11 },
+    { kind: 'cancelled', sessionToken: 11, runToken: 7 },
+  ]);
+
+  runner.dispatch(runtimeCancelCommand(11, 7));
+  expect(runner.relays()).toHaveLength(2);
+});
+
+it('uses exact two-token command records', () => {
+  expect(runtimePrepareCommand(11)).toEqual({
+    type: MESSAGE_TYPE,
+    action: 'prepare',
+    sessionToken: 11,
+  } satisfies RuntimeCommand);
+  expect(runtimeRunCommand(11, 7)).toEqual({
+    type: MESSAGE_TYPE,
+    action: 'run',
+    sessionToken: 11,
+    runToken: 7,
+  } satisfies RuntimeCommand);
+  expect(runtimeCancelCommand(11, 7)).toEqual({
+    type: MESSAGE_TYPE,
+    action: 'cancel',
+    sessionToken: 11,
+    runToken: 7,
+  } satisfies RuntimeCommand);
+});
+
+it.each([
+  '?mode=warmup&session=-1',
+  '?mode=warmup&session=1.5',
+  '?mode=warmup&session=9007199254740992',
+  '?mode=warmup&session=11&run=7',
+  '?mode=run&session=11',
+  '?mode=run&session=11&run=-1',
+  '?mode=run&session=11&run=7&run=8',
+  '?mode=unknown&session=11',
+  '?mode=warmup&mode=run&session=11',
+  '?mode=warmup&session=11&extra=true',
+] as const)('does not import or post for invalid frame query %s', (search) => {
+  const child = executeBootstrap(search);
+  expect(child.imports).toEqual([]);
+  expect(child.messages).toEqual([]);
+});
+
+it('warms in the opaque child without relaying dependency console output', async () => {
+  const child = executeBootstrap(
+    '?mode=warmup&session=11',
+    (_specifier, runtime) => {
+      runtime.console.log('dependency side effect');
+      return Promise.resolve();
+    }
   );
-  expect(runtime.records).toContainEqual([
-    errorMarker(8),
-    expect.stringContaining('active boom'),
+
+  expect(child.imports).toEqual(['/warmup.ts']);
+  await flushTasks();
+  expect(child.messages).toEqual([
+    {
+      record: { type: MESSAGE_TYPE, kind: 'ready', sessionToken: 11 },
+      targetOrigin: '*',
+    },
   ]);
 });
 
-it('tokenizes execution without mutating the previous setup', () => {
-  const first = setupForRun(setup, 'console.log("new")', 7);
-  const second = setupForRun(first, 'console.log("new")', 8);
-  expect(first.files['/execution.ts'].code).toContain('// run:7');
-  expect(second.files['/execution.ts'].code).toContain('// run:8');
-  expect(first.files['/runner.ts']).toEqual(setup.files['/runner.ts']);
-  expect(setup.files['/index.ts'].code).toBe('console.log("old")');
-});
-
-it('changes only the execution file for each run', () => {
-  const next = setupForRun(setup, 'console.log("new")', 7);
-  const changedFiles = Object.keys(next.files).filter(
-    (path) => next.files[path].code !== setup.files[path].code
+it('normalizes a rejected warmup import into one preparation error', async () => {
+  const child = executeBootstrap('?mode=warmup&session=11', () =>
+    Promise.reject(new Error('dependency boom'))
   );
 
-  expect(changedFiles).toEqual(['/execution.ts']);
-  expect(next.files['/index.ts']).toEqual(setup.files['/index.ts']);
-  expect(next.files['/runner.ts']).toEqual(setup.files['/runner.ts']);
-  expect(next.files['/execution.ts'].code).toBe(
-    'console.log("new")\n// run:7\n'
-  );
+  await flushTasks();
+  expect(child.messages).toEqual([
+    {
+      record: {
+        type: MESSAGE_TYPE,
+        kind: 'prepareError',
+        sessionToken: 11,
+        error: expect.stringContaining('Error: dependency boom'),
+      },
+      targetOrigin: '*',
+    },
+  ]);
 });
 
-it('tokens globalThis, window, and imported-module console output', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
-
-  run.executeChild((_specifier, child) => {
-    const executeImportedModule = Function(
-      'window',
-      'globalThis',
-      "globalThis.console.log('global output');" +
-        "window.console.log('window output');" +
-        "globalThis.console.log('imported output');"
-    ) as (runtimeWindow: TestChild, runtimeGlobal: TestChild) => void;
-    executeImportedModule(child, child);
-    return Promise.resolve();
-  });
-  await Promise.resolve();
-
-  expect(runtime.records).toEqual(
-    expect.arrayContaining([
-      [RUN_OUTPUT_PREFIX + '7', 'log', 'global output'],
-      [RUN_OUTPUT_PREFIX + '7', 'log', 'window output'],
-      [RUN_OUTPUT_PREFIX + '7', 'log', 'imported output'],
-    ])
+it('assigns increasing event IDs to execution output and no ID to completion', async () => {
+  const child = executeBootstrap(
+    '?mode=run&session=11&run=7',
+    (_specifier, runtime) => {
+      runtime.console.log('first');
+      runtime.console.clear();
+      runtime.console.warn('third');
+      return Promise.resolve();
+    }
   );
+
+  expect(child.imports).toEqual(['/execution.ts?session=11&run=7']);
+  await flushTasks();
+  expect(child.messages.map(({ record }) => record)).toEqual([
+    {
+      type: MESSAGE_TYPE,
+      kind: 'output',
+      sessionToken: 11,
+      runToken: 7,
+      eventId: 0,
+      method: 'log',
+      data: ['first'],
+    },
+    {
+      type: MESSAGE_TYPE,
+      kind: 'output',
+      sessionToken: 11,
+      runToken: 7,
+      eventId: 1,
+      method: 'clear',
+      data: [],
+    },
+    {
+      type: MESSAGE_TYPE,
+      kind: 'output',
+      sessionToken: 11,
+      runToken: 7,
+      eventId: 2,
+      method: 'warn',
+      data: ['third'],
+    },
+    {
+      type: MESSAGE_TYPE,
+      kind: 'complete',
+      sessionToken: 11,
+      runToken: 7,
+    },
+  ]);
 });
 
-it('normalizes cross-realm console values before forwarding them', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
+it('restarts event IDs for each fresh execution document', async () => {
+  const first = executeBootstrap(
+    '?mode=run&session=11&run=7',
+    (_specifier, runtime) => {
+      runtime.console.log('first run');
+      return Promise.resolve();
+    }
+  );
+  const second = executeBootstrap(
+    '?mode=run&session=11&run=8',
+    (_specifier, runtime) => {
+      runtime.console.log('second run');
+      return Promise.resolve();
+    }
+  );
+  await flushTasks();
 
-  run.executeChild((_specifier, child) => {
-    child.console.log(
-      new child.Error('console boom'),
-      new child.Date('2026-08-04T12:34:56.000Z'),
-      new child.RegExp('favy\\s+di', 'gi'),
-      { nested: { value: 1 } },
-      [1, { nested: true }],
+  expect(first.messages[0]?.record).toMatchObject({ runToken: 7, eventId: 0 });
+  expect(second.messages[0]?.record).toMatchObject({ runToken: 8, eventId: 0 });
+});
+
+it('normalizes cross-realm console values before posting them', async () => {
+  const child = executeBootstrap(
+    '?mode=run&session=11&run=7',
+    (_specifier, runtime) => {
+      runtime.console.log(
+        new Error('console boom'),
+        new Date('2026-08-04T12:34:56.000Z'),
+        /favy\s+di/gi,
+        { nested: { value: 1 } },
+        [1, { nested: true }],
+        'text',
+        42,
+        true,
+        null,
+        undefined
+      );
+      return Promise.resolve();
+    }
+  );
+  await flushTasks();
+
+  expect(child.messages[0]?.record).toEqual({
+    type: MESSAGE_TYPE,
+    kind: 'output',
+    sessionToken: 11,
+    runToken: 7,
+    eventId: 0,
+    method: 'log',
+    data: [
+      expect.stringContaining('Error: console boom'),
+      '2026-08-04T12:34:56.000Z',
+      '/favy\\s+di/gi',
+      '[Object]',
+      '[1,"[Object]"]',
       'text',
       42,
       true,
-      null
-    );
-    return Promise.resolve();
+      null,
+      undefined,
+    ] satisfies PlaygroundConsoleValue[],
   });
-  await flushChildTasks();
-
-  expect(runtime.records).toContainEqual([
-    RUN_OUTPUT_PREFIX + '7',
-    'log',
-    expect.stringContaining('Error: console boom'),
-    '2026-08-04T12:34:56.000Z',
-    '/favy\\s+di/gi',
-    '[Object]',
-    '[1,"[Object]"]',
-    'text',
-    42,
-    true,
-    null,
-  ]);
 });
 
-it('handles cycles without invoking object getters', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
+it('handles cycles and reflection failures without invoking object getters', async () => {
   let getterRuns = 0;
-  const value: Record<string, unknown> = { safe: 1 };
+  const value: Record<string, unknown> = {};
   Object.defineProperty(value, 'danger', {
-    enumerable: true,
     get: () => {
       getterRuns += 1;
       return 'unsafe';
     },
   });
-  value.self = value;
   const circular: unknown[] = [1];
   circular.push(circular);
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
 
-  run.executeChild((_specifier, child) => {
-    child.console.log(value, circular);
-    return Promise.resolve();
-  });
-  await flushChildTasks();
+  const child = executeBootstrap(
+    '?mode=run&session=11&run=7',
+    (_specifier, runtime) => {
+      runtime.console.log(value, circular, proxy);
+      return Promise.resolve();
+    }
+  );
+  await flushTasks();
 
   expect(getterRuns).toBe(0);
-  expect(runtime.records).toContainEqual([
-    RUN_OUTPUT_PREFIX + '7',
-    'log',
-    '[Object]',
-    '[1,"[Circular]"]',
-  ]);
+  expect(child.messages[0]?.record).toMatchObject({
+    data: ['[Object]', '[1,"[Circular]"]', '[Unserializable value]'],
+  });
 });
 
-it('bounds arrays without materializing their own keys', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
+it('bounds arrays and argument counts before posting', async () => {
   let ownKeyReads = 0;
-  let descriptorReads = 0;
   const wide = new Proxy(
     Array.from(
       { length: 2_000 },
@@ -535,192 +764,186 @@ it('bounds arrays without materializing their own keys', async () => {
         ownKeyReads += 1;
         return Reflect.ownKeys(target);
       },
-      getOwnPropertyDescriptor: (target, key) => {
-        descriptorReads += 1;
-        return Reflect.getOwnPropertyDescriptor(target, key);
-      },
     }
   );
+  const child = executeBootstrap(
+    '?mode=run&session=11&run=7',
+    (_specifier, runtime) => {
+      runtime.console.log(wide);
+      runtime.console.info(...Array.from({ length: 30 }, (_, index) => index));
+      return Promise.resolve();
+    }
+  );
+  await flushTasks();
 
-  run.executeChild((_specifier, child) => {
-    child.console.log(wide);
-    return Promise.resolve();
-  });
-  await flushChildTasks();
-
-  const value = runtime.records.find(
-    (record) => record[0] === RUN_OUTPUT_PREFIX + '7'
-  )?.[2];
-  expect(typeof value).toBe('string');
-  expect((value as string).length).toBeLessThanOrEqual(4_096);
-  expect(Buffer.byteLength(value as string, 'utf8')).toBeLessThanOrEqual(4_096);
-  expect(value).toEqual(expect.stringContaining('item0'));
-  expect(value).toEqual(expect.stringContaining('[Truncated]'));
+  const first = child.messages[0]?.record as { data?: unknown[] };
+  const serialized = first.data?.[0];
+  expect(typeof serialized).toBe('string');
+  expect(Buffer.byteLength(serialized as string, 'utf8')).toBeLessThanOrEqual(
+    4_096
+  );
+  expect(serialized).toEqual(expect.stringContaining('[Truncated]'));
   expect(ownKeyReads).toBe(0);
-  expect(descriptorReads).toBeLessThan(256);
-  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
-});
-
-it('does not enumerate unknown console objects before completing the run', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
-  const keys = Array.from({ length: 2_500 }, (_, index) => `hidden${index}`);
-  let ownKeyReads = 0;
-  let descriptorReads = 0;
-  const value = new Proxy(Object.create(null) as Record<string, unknown>, {
-    ownKeys: () => {
-      ownKeyReads += 1;
-      return keys;
-    },
-    getOwnPropertyDescriptor: (_target, key) => {
-      descriptorReads += 1;
-      return typeof key === 'string' && key.startsWith('hidden')
-        ? { configurable: true, enumerable: false, value: 'hidden' }
-        : undefined;
-    },
-  });
-
-  run.executeChild((_specifier, child) => {
-    child.console.log(value);
-    return Promise.resolve();
-  });
-  await flushChildTasks();
-
-  expect(descriptorReads).toBeLessThan(8);
-  expect(ownKeyReads).toBe(0);
-  expect(runtime.records).toContainEqual([
-    RUN_OUTPUT_PREFIX + '7',
-    'log',
-    '[Object]',
-  ]);
-  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
-});
-
-it('renders a safe placeholder when proxy reflection throws', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
-  const { proxy, revoke } = Proxy.revocable({}, {});
-  revoke();
-
-  run.executeChild((_specifier, child) => {
-    child.console.log(proxy);
-    return Promise.resolve();
-  });
-  await flushChildTasks();
-
-  expect(runtime.records).toContainEqual([
-    RUN_OUTPUT_PREFIX + '7',
-    'log',
-    '[Unserializable value]',
-  ]);
-  expect(runtime.records.at(-1)).toEqual([RUN_COMPLETE_PREFIX + '7']);
-});
-
-it('drops qualified output from a replaced child realm', async () => {
-  const runtime = createTestRuntime();
-  const first = startTestRun(runtime, 7);
-  first.executeChild(() => Promise.resolve());
-  const staleConsole = (first.frame.contentWindow as TestChild | null)?.console;
-  if (!staleConsole) throw new Error('First execution iframe has no console.');
-
-  const replacement = startTestRun(runtime, 8);
-  replacement.executeChild((_specifier, child) => {
-    child.console.log('replacement output');
-    return Promise.resolve();
-  });
-  staleConsole.log('stale qualified output');
-  await Promise.resolve();
-
-  expect(runtime.records).toContainEqual([
-    RUN_OUTPUT_PREFIX + '8',
-    'log',
-    'replacement output',
-  ]);
-  expect(runtime.records).not.toContainEqual([
-    RUN_OUTPUT_PREFIX + '7',
-    'log',
-    'stale qualified output',
+  expect((child.messages[1]?.record as { data?: unknown[] }).data).toEqual([
+    ...Array.from({ length: 19 }, (_, index) => index),
+    '[Truncated]',
   ]);
 });
 
-it('preserves assert, clear, count, and timer console semantics', async () => {
-  const runtime = createTestRuntime();
-  const run = startTestRun(runtime, 7);
+it('preserves assert, count, and timer console semantics', async () => {
   const times = [10, 25];
-
-  run.executeChild(
-    (_specifier, child) => {
-      child.console.assert(true, 'hidden assertion');
-      child.console.assert(false, 'visible assertion');
-      child.console.clear();
-      child.console.count('jobs');
-      child.console.count('jobs');
-      child.console.time('work');
-      child.console.timeEnd('work');
+  const child = executeBootstrap(
+    '?mode=run&session=11&run=7',
+    (_specifier, runtime) => {
+      runtime.console.assert(true, 'hidden assertion');
+      runtime.console.assert(false, 'visible assertion');
+      runtime.console.count('jobs');
+      runtime.console.count('jobs');
+      runtime.console.time('work');
+      runtime.console.timeEnd('work');
       return Promise.resolve();
     },
     () => times.shift() ?? 25
   );
-  await Promise.resolve();
+  await flushTasks();
 
-  const output = runtime.records.filter(
-    (record) => record[0] === RUN_OUTPUT_PREFIX + '7'
-  );
-  expect(output.filter((record) => record[1] === 'assert')).toEqual([
-    expect.arrayContaining(['visible assertion']),
+  expect(child.messages.slice(0, -1).map(({ record }) => record)).toEqual([
+    expect.objectContaining({
+      eventId: 0,
+      method: 'assert',
+      data: ['Assertion failed:', 'visible assertion'],
+    }),
+    expect.objectContaining({ eventId: 1, method: 'count', data: ['jobs: 1'] }),
+    expect.objectContaining({ eventId: 2, method: 'count', data: ['jobs: 2'] }),
+    expect.objectContaining({
+      eventId: 3,
+      method: 'timeEnd',
+      data: ['work: 15ms'],
+    }),
   ]);
-  expect(output).toContainEqual([RUN_OUTPUT_PREFIX + '7', 'clear']);
-  expect(output).toContainEqual([RUN_OUTPUT_PREFIX + '7', 'count', 'jobs: 1']);
-  expect(output).toContainEqual([RUN_OUTPUT_PREFIX + '7', 'count', 'jobs: 2']);
-  expect(output).toContainEqual([
-    RUN_OUTPUT_PREFIX + '7',
-    'timeEnd',
-    'work: 15ms',
-  ]);
 });
 
-it('removes the previous execution iframe before creating its replacement', () => {
-  const runtime = createTestRuntime();
-  const first = startTestRun(runtime, 7);
+it('de-duplicates an execution failure and completes after import rejection', async () => {
+  const failure = new Error('one boom');
+  let rejectImport: (error: Error) => void = () => undefined;
+  const imported = new Promise<never>((_resolve, reject) => {
+    rejectImport = reject;
+  });
+  const child = executeBootstrap('?mode=run&session=11&run=7', () => imported);
+  const event = new Event('error', { cancelable: true });
+  Object.defineProperty(event, 'error', { value: failure });
 
-  const replacement = startTestRun(runtime, 8);
+  child.runtime.dispatchEvent(event);
+  rejectImport(failure);
+  await imported.catch(() => undefined);
+  await flushTasks();
 
-  expect(first.frame.isConnected).toBe(false);
-  expect(replacement.frame.isConnected).toBe(true);
-  expect(document.querySelectorAll(RUN_FRAME_SELECTOR)).toHaveLength(1);
-});
-
-it('keeps all generated execution files strict-valid and uninstrumented', () => {
-  for (const example of playgroundExamples) {
-    const source = setupForRun(setup, example.source, 7).files['/execution.ts']
-      .code;
-    const diagnostics = diagnosticsForExecution(example.id, source);
-    expect(
-      diagnostics.map((diagnostic) =>
-        ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
-      )
-    ).toEqual([]);
-    expect(source).toBe(`${example.source}\n// run:7\n`);
-  }
-});
-
-it('recognizes only private debug completion records', () => {
+  expect(event.defaultPrevented).toBe(true);
   expect(
-    completionToken({
+    child.messages.filter(
+      ({ record }) => (record as { kind?: string }).kind === 'error'
+    )
+  ).toHaveLength(1);
+  expect(child.messages.map(({ record }) => record)).toEqual([
+    expect.objectContaining({ kind: 'error', eventId: 0 }),
+    {
+      type: MESSAGE_TYPE,
+      kind: 'complete',
+      sessionToken: 11,
+      runToken: 7,
+    },
+  ]);
+});
+
+it('parses only the private Sandpack relay record', () => {
+  const runner = createRunner();
+  runner.dispatch(runtimePrepareCommand(11));
+  runner.emit(warmupFrame(), { kind: 'ready', sessionToken: 11 });
+  const record = runner.consoleRecords[0];
+  const marker = record?.data?.[0];
+
+  expect(runtimeRelayRecord(record ?? {})).toEqual({
+    kind: 'ready',
+    sessionToken: 11,
+  });
+  expect(
+    runtimeRelayRecord({ method: 'log', data: [marker, record?.data?.[1]] })
+  ).toBeUndefined();
+  expect(
+    runtimeRelayRecord({ method: 'debug', data: [marker] })
+  ).toBeUndefined();
+  expect(
+    runtimeRelayRecord({
       method: 'debug',
-      data: [RUN_COMPLETE_PREFIX + '12'],
+      data: [marker, { kind: 'ready', sessionToken: -1 }],
     })
-  ).toBe(12);
+  ).toBeUndefined();
   expect(
-    completionToken({
-      method: 'log',
-      data: [RUN_COMPLETE_PREFIX + '12'],
+    runtimeRelayRecord({
+      method: 'debug',
+      data: [
+        marker,
+        {
+          kind: 'output',
+          sessionToken: 11,
+          runToken: 7,
+          eventId: 0,
+          method: 'trace',
+          data: [],
+        },
+      ],
     })
   ).toBeUndefined();
 });
 
-it('decodes tokenized run output without changing its values', () => {
+it('changes only the execution file and records both token domains', () => {
+  const next = setupForRun(setup, 'console.log("new")', 11, 7);
+  const changedFiles = Object.keys(next.files).filter(
+    (file) => next.files[file].code !== setup.files[file].code
+  );
+
+  expect(changedFiles).toEqual(['/execution.ts']);
+  expect(next.files['/index.ts']).toEqual(setup.files['/index.ts']);
+  expect(next.files['/runner.ts']).toEqual(setup.files['/runner.ts']);
+  expect(next.files['/execution.ts'].code).toBe(
+    'console.log("new")\n// session:11\n// run:7\n'
+  );
+  expect(setup.files['/execution.ts'].code).toBe('export {};');
+});
+
+it('keeps all generated execution files strict-valid and uninstrumented', () => {
+  for (const example of playgroundExamples) {
+    const source = setupForRun(setup, example.source, 11, 7).files[
+      '/execution.ts'
+    ].code;
+    expect(
+      diagnosticsForExecution(example.id, source).map((diagnostic) =>
+        ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+      )
+    ).toEqual([]);
+    expect(source).toBe(`${example.source}\n// session:11\n// run:7\n`);
+  }
+});
+
+it('keeps the deployed single-token page helpers behind legacy aliases', () => {
+  expect(legacyRuntimeCommand('prepare', 7)).toEqual({
+    type: MESSAGE_TYPE,
+    action: 'prepare',
+    token: 7,
+  });
+  expect(legacyRuntimeSource(['@favy/di'])).toContain('import "@favy/di";');
+  expect(legacyRuntimeSource([])).toContain('srcdoc');
+  expect(
+    legacySetupForRun(setup, 'console.log("new")', 7).files['/execution.ts']
+      .code
+  ).toBe('console.log("new")\n// run:7\n');
+});
+
+it('keeps legacy page console parsers operational until controller integration', () => {
   const value = { circular: true };
+  expect(
+    completionToken({ method: 'debug', data: [RUN_COMPLETE_PREFIX + '12'] })
+  ).toBe(12);
   expect(
     runOutputRecord({
       method: 'debug',
@@ -729,35 +952,10 @@ it('decodes tokenized run output without changing its values', () => {
   ).toEqual({ token: 12, method: 'log', data: ['hello', value] });
   expect(
     runOutputRecord({
-      method: 'log',
-      data: [RUN_OUTPUT_PREFIX + '12', 'log', 'hello'],
+      method: 'debug',
+      data: [RUN_OUTPUT_PREFIX + '12', 'unknown'],
     })
   ).toBeUndefined();
-});
-
-it.each([
-  [{ method: 'debug', data: [RUN_OUTPUT_PREFIX + '', 'log'] }],
-  [{ method: 'debug', data: [RUN_OUTPUT_PREFIX + '12.5', 'log'] }],
-  [
-    {
-      method: 'debug',
-      data: [RUN_OUTPUT_PREFIX + '9007199254740992', 'log'],
-    },
-  ],
-  [{ method: 'debug', data: [RUN_OUTPUT_PREFIX + '12', 'unknown'] }],
-  [{ method: 'debug', data: [RUN_COMPLETE_PREFIX + '12'] }],
-])('rejects malformed run output records', (record) => {
-  expect(runOutputRecord(record)).toBeUndefined();
-});
-
-it.each([
-  [{ method: 'debug', data: [RUN_COMPLETE_PREFIX + ''] }],
-  [{ method: 'debug', data: [RUN_COMPLETE_PREFIX + '12', 'extra'] }],
-  [{ method: 'debug', data: [RUN_COMPLETE_PREFIX + '12.5'] }],
-  [{ method: 'debug', data: [RUN_COMPLETE_PREFIX + '9007199254740992'] }],
-  [{ method: 'debug', data: [12] }],
-])('rejects malformed completion records', (record) => {
-  expect(completionToken(record)).toBeUndefined();
 });
 
 it.each([
