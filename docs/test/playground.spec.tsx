@@ -25,12 +25,13 @@ let mockSandboxProps: PlaygroundSandboxProps[] = [];
 let mockSandboxMounts: string[] = [];
 let mockMountedSandboxes = 0;
 let mockMaximumMountedSandboxes = 0;
-let mockVisibleSandpackEditors = 0;
+let mockFallbackEditors = 0;
 let mockTypeScriptEditorProps: any[] = [];
 let mockEditorReadValue: string | undefined;
 let mockEditorCaptures = 0;
 let mockEditorRestores = 0;
 let mockTypeScriptEditorReady = true;
+let mockFallbackSources: string[] = [];
 
 jest.mock('../src/components/playground/playground-sandbox', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -56,9 +57,10 @@ jest.mock('../src/components/playground/playground-sandbox', () => {
 });
 
 jest.mock('@codesandbox/sandpack-react', () => ({
-  SandpackCodeEditor: () => {
-    mockVisibleSandpackEditors += 1;
-    return <div role="tabpanel">Sandpack editor fallback</div>;
+  CodeEditor: ({ code }: { code: string }) => {
+    mockFallbackEditors += 1;
+    mockFallbackSources.push(code);
+    return <pre>{code}</pre>;
   },
 }));
 
@@ -206,12 +208,13 @@ beforeEach(() => {
   mockSandboxMounts = [];
   mockMountedSandboxes = 0;
   mockMaximumMountedSandboxes = 0;
-  mockVisibleSandpackEditors = 0;
+  mockFallbackEditors = 0;
   mockTypeScriptEditorProps = [];
   mockEditorReadValue = undefined;
   mockEditorCaptures = 0;
   mockEditorRestores = 0;
   mockTypeScriptEditorReady = true;
+  mockFallbackSources = [];
   document.documentElement.dataset.theme = 'light';
 });
 
@@ -247,27 +250,28 @@ it('follows the document theme after mounting and when it changes', async () => 
   expect(latestSandbox().theme).toBe('light');
 });
 
-it('exposes one readable fallback textbox beside a hidden visual editor', () => {
+it('shows the selected source in one labelled, scrollable fallback', () => {
   mockTypeScriptEditorReady = false;
   render(<Playground />);
 
-  const visualTabpanel = screen.getByRole('tabpanel', { hidden: true });
-  const hiddenVisual = visualTabpanel.closest('[aria-hidden="true"]');
-  const textboxes = screen.getAllByRole('textbox', {
+  const fallback = screen.getByRole('region', {
     name: 'TypeScript playground editor',
   });
+  expect(fallback.tabIndex).toBe(0);
+  expect(fallback.textContent).toBe(playgroundExampleById.basic.source);
+  expect(
+    screen.queryByRole('textbox', {
+      name: 'TypeScript playground editor',
+    })
+  ).toBeNull();
+  expect(mockFallbackEditors).toBe(1);
 
-  expect(hiddenVisual).toBeTruthy();
-  expect(hiddenVisual?.hasAttribute('inert')).toBe(true);
-  expect(textboxes).toHaveLength(1);
-  const fallbackControl = textboxes[0] as HTMLTextAreaElement;
-  expect(fallbackControl.value).toBe(playgroundExampleById.basic.source);
-  expect(fallbackControl.readOnly).toBe(true);
-  expect(fallbackControl.getAttribute('aria-readonly')).toBe('true');
-  expect(fallbackControl.tabIndex).toBe(0);
-  expect(hiddenVisual?.parentElement).toBe(fallbackControl.parentElement);
-  expect(hiddenVisual?.contains(fallbackControl)).toBe(false);
-  expect(fallbackControl.contains(hiddenVisual)).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Composition' }));
+
+  expect(fallback.textContent).toBe(playgroundExampleById.composition.source);
+  expect(mockFallbackSources.at(-1)).toBe(
+    playgroundExampleById.composition.source
+  );
 });
 
 it('exposes exactly one editor textbox after Monaco is ready', () => {
@@ -449,7 +453,7 @@ it('keeps the editor and console in the visible sandbox child boundary', () => {
   });
   expect(editor()).toBeTruthy();
   expect(screen.getByRole('region', { name: 'Console output' })).toBeTruthy();
-  expect(mockVisibleSandpackEditors).toBe(0);
+  expect(mockFallbackEditors).toBe(0);
   expect(mockMountedSandboxes).toBe(1);
 });
 

@@ -85,70 +85,41 @@ const checkPlaygroundFirstPaint = async (browser) => {
       assert.ok(colors.plainContrast >= 4.5);
       assert.ok(colors.keywordContrast >= 4.5);
 
-      const fallbackControl = firstPaintPage.getByRole('textbox', {
-        name: 'TypeScript playground editor',
-      });
-      const fallbackVisual = firstPaintPage.locator(
-        '.playground__editor-fallback-visual[aria-hidden="true"][inert]'
+      const fallbackEditor = firstPaintPage.locator(
+        '.playground__editor-fallback[role="region"]' +
+          '[aria-label="TypeScript playground editor"]'
       );
-      assert.equal(await fallbackControl.count(), 1);
-      assert.equal(await firstPaintPage.getByRole('textbox').count(), 1);
-      assert.equal(await fallbackVisual.count(), 1);
-      assert.match(await fallbackControl.inputValue(), /@favy\/di/);
-      assert.equal(await fallbackControl.getAttribute('aria-readonly'), 'true');
-      assert.equal(await fallbackControl.getAttribute('tabindex'), '0');
-      assert.equal(await fallbackControl.isEditable(), false);
+      assert.equal(await fallbackEditor.count(), 1);
+      const editorRegion = firstPaintPage.locator('.playground__editor');
+      assert.equal(await editorRegion.getByRole('textbox').count(), 0);
+      assert.equal(await editorRegion.getByRole('tabpanel').count(), 0);
+      assert.match((await fallbackEditor.textContent()) ?? '', /@favy\/di/);
+      assert.equal(await fallbackEditor.getAttribute('tabindex'), '0');
 
-      const compactFallback = await fallbackControl.evaluate((control) => {
-        const visual = document.querySelector(
-          '.playground__editor-fallback-visual'
-        );
-        const editor = control.closest('.playground__editor');
-        if (!visual || !editor) throw new Error('Missing fallback structure');
-        const controlBox = control.getBoundingClientRect();
+      const fallbackLayout = await fallbackEditor.evaluate((editor) => {
+        const container = editor.closest('.playground__editor');
+        if (!container) throw new Error('Missing fallback editor container');
         const editorBox = editor.getBoundingClientRect();
-        const style = getComputedStyle(control);
+        const containerBox = container.getBoundingClientRect();
+        const style = getComputedStyle(editor);
         return {
-          height: controlBox.height,
-          editorHeight: editorBox.height,
-          hasSharedParent: visual.parentElement === control.parentElement,
-          visualContainsControl: visual.contains(control),
-          controlContainsVisual: control.contains(visual),
-          background: style.backgroundColor,
-          color: style.color,
+          height: editorBox.height,
+          containerHeight: containerBox.height,
           overflow: style.overflow,
           visibility: style.visibility,
         };
       });
-      assert.equal(compactFallback.hasSharedParent, true);
-      assert.equal(compactFallback.visualContainsControl, false);
-      assert.equal(compactFallback.controlContainsVisual, false);
-      assert.ok(compactFallback.height >= 44);
-      assert.ok(compactFallback.height < compactFallback.editorHeight / 2);
-      assert.notEqual(compactFallback.background, 'rgba(0, 0, 0, 0)');
-      assert.notEqual(compactFallback.color, compactFallback.background);
-      assert.equal(compactFallback.overflow, 'auto');
-      assert.equal(compactFallback.visibility, 'visible');
-
-      await fallbackControl.focus();
-      const focusedFallback = await fallbackControl.evaluate((control) => {
-        const box = control.getBoundingClientRect();
-        const style = getComputedStyle(control);
-        return {
-          height: box.height,
-          focused: document.activeElement === control,
-          outlineStyle: style.outlineStyle,
-          outlineWidth: Number.parseFloat(style.outlineWidth),
-          overflow: style.overflow,
-          zIndex: style.zIndex,
-        };
-      });
-      assert.equal(focusedFallback.focused, true);
-      assert.ok(focusedFallback.height > compactFallback.height * 2);
-      assert.notEqual(focusedFallback.outlineStyle, 'none');
-      assert.ok(focusedFallback.outlineWidth >= 3);
-      assert.equal(focusedFallback.overflow, 'auto');
-      assert.notEqual(focusedFallback.zIndex, 'auto');
+      assert.ok(fallbackLayout.height > 0);
+      assert.ok(fallbackLayout.height <= fallbackLayout.containerHeight);
+      assert.equal(fallbackLayout.overflow, 'auto');
+      assert.equal(fallbackLayout.visibility, 'visible');
+      await fallbackEditor.focus();
+      assert.equal(
+        await fallbackEditor.evaluate(
+          (editor) => document.activeElement === editor
+        ),
+        true
+      );
     } finally {
       await firstPaint.close();
     }

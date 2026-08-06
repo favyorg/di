@@ -1,4 +1,4 @@
-import { SandpackCodeEditor } from '@codesandbox/sandpack-react';
+import { CodeEditor as SandpackCode } from '@codesandbox/sandpack-react';
 import {
   useCallback,
   useEffect,
@@ -161,6 +161,9 @@ export function Playground(): JSX.Element {
   codeIdentityRef.current = codeIdentity;
   const selectedSource = drafts[selectedId];
   const sourceWithinLimit = isPlaygroundSourceWithinLimit(selectedSource);
+  const sandboxSource = sourceWithinLimit
+    ? selectedSource
+    : PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER;
   const typingVersions = sourceWithinLimit
     ? Object.fromEntries(
         Object.entries(dependencies[selectedId]).filter(
@@ -660,11 +663,7 @@ export function Playground(): JSX.Element {
             key={sandboxKey}
             sandboxKey={sandboxKey}
             dependencies={dependencies[selectedId]}
-            initialCode={
-              sourceWithinLimit
-                ? selectedSource
-                : PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER
-            }
+            initialCode={sandboxSource}
             theme={theme}
             runRequest={runRequest}
             cancelRunToken={cancelRunToken}
@@ -689,27 +688,19 @@ export function Playground(): JSX.Element {
                   ariaLabel="TypeScript playground editor"
                   typingVersions={typingVersions}
                   fallback={
-                    <div className="playground__editor-fallback">
-                      <div
-                        className="playground__editor-fallback-visual"
-                        aria-hidden="true"
-                        {...{ inert: '' }}
-                      >
-                        <SandpackCodeEditor
-                          initMode="immediate"
-                          readOnly
-                          showLineNumbers
-                          showRunButton={false}
-                          showTabs={false}
-                        />
-                      </div>
-                      <textarea
-                        className="playground__editor-fallback-control"
-                        aria-label="TypeScript playground editor"
-                        aria-readonly="true"
+                    <div
+                      className="playground__editor-fallback"
+                      role="region"
+                      aria-label="TypeScript playground editor"
+                      tabIndex={0}
+                    >
+                      <SandpackCode
+                        code={sandboxSource}
+                        filePath="/index.ts"
+                        initMode="immediate"
                         readOnly
-                        tabIndex={0}
-                        value={selectedSource}
+                        showLineNumbers
+                        showReadOnly={false}
                       />
                     </div>
                   }
