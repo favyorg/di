@@ -38,7 +38,11 @@ type MockSandpackMessage =
 
 type MockProviderProps = Readonly<{
   children: ReactNode;
-  customSetup: { entry: string; dependencies: Record<string, string> };
+  customSetup: {
+    entry: string;
+    dependencies: Record<string, string>;
+    devDependencies: Record<string, string>;
+  };
   files: Record<
     string,
     string | { code: string; hidden?: boolean; active?: boolean }
@@ -372,6 +376,7 @@ it('creates isolated runtime files and installs registry dependencies only', () 
   expect(customSetup).toEqual({
     entry: '/runner.ts',
     dependencies: { lodash: 'latest' },
+    devDependencies: { 'esbuild-wasm': '0.17.19' },
   });
   expect(options).toEqual({
     activeFile: '/index.ts',

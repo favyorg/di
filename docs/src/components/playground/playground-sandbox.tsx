@@ -146,6 +146,9 @@ const SANDBOX_OPTIONS = Object.freeze({
   autoReload: false,
 });
 
+// Sandpack's 0.17.12 template cannot parse const generics in makeModule.ts.
+const SANDBOX_ESBUILD_VERSION = '0.17.19';
+
 const VITE_CONFIG_SOURCE =
   "export default { resolve: { alias: [{ find: /^@favy\\/di$/, replacement: '/favy-di/index.ts' }] }, server: { cors: { origin: '*' }, hmr: false } };";
 
@@ -761,6 +764,9 @@ export function PlaygroundSandbox({
       customSetup: {
         entry: '/runner.ts',
         dependencies: registryDependencies,
+        devDependencies: {
+          'esbuild-wasm': SANDBOX_ESBUILD_VERSION,
+        },
       },
       files: {
         ...localFiles,

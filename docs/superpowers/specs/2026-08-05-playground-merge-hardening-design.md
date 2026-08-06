@@ -68,29 +68,40 @@ running bundled examples does not request `@favy/di` from the registry.
 
 The outer Sandpack/Nodebox runtime remains persistent between successful runs,
 but it never statically imports or evaluates user-selected dependencies. A
-dependency session prepares through a disposable hidden warmup iframe, and each
-Run uses a separate fresh execution iframe. Both frames use
-`sandbox="allow-scripts"` without `allow-same-origin`, so user code and imported
-package code execute only in opaque-origin documents and cannot read or mutate
-the outer runtime or the playground page. Sandpack may download and transform
-registry packages, but module evaluation never happens in its privileged
-runner realm.
+dependency session prepares through a fresh dedicated module Worker, and each
+Run uses a separate fresh dedicated module Worker. The persistent runner creates
+the Worker from `/runtime-worker.ts` with `type: "module"` and omitted
+credentials. A warmup Worker imports `/warmup.ts`; an execution Worker imports
+the tokened `/execution.ts` snapshot. The warmup Worker is terminated after
+readiness or failure, and the execution Worker is terminated after completion,
+cancellation, or replacement. Sandpack may download and transform registry
+packages, but module evaluation never happens in the persistent runner realm.
 
-The frames navigate to a hidden `/frame.html` served by the Sandpack Vite
-runtime. Its inline bootstrap reads a validated mode and token and dynamically
-imports either `/warmup.ts` or `/execution.ts`. Vite is configured to return
-`Access-Control-Allow-Origin: *` for the entry and every transitive module;
-module requests use no credentials, allowing an opaque `Origin: null` document
-to load the graph. The warmup entry imports the exact dependency graph only in
-its disposable frame, reports readiness, and is then removed. This URL-based
-transport is the required design; Blob URLs and `allow-same-origin` are not
-fallbacks.
+The earlier opaque nested `/frame.html` transport is not viable in Nodebox. A
+browser check verified that an iframe sandboxed without `allow-same-origin` is
+not controlled by the preview service worker: its navigation bypasses the
+virtual Vite graph and reaches the Nodebox edge as a 404. A `srcdoc` variant has
+an opaque `Origin: null` and its module fetches fail CORS instead. Adding CORS
+headers inside the virtual Vite server cannot fix requests that never reach
+that server. A module Worker created by the preview client remains on the
+service-worker-controlled Nodebox graph and can therefore load the entry and
+its transitive imports.
 
-The children report readiness, console records, errors, and completion through
-`parent.postMessage()`. The outer runner accepts a message only when all of the
-following match the active frame and that message's token domain:
+The Worker is a fresh JavaScript realm without DOM globals such as `window`,
+`document`, `parent`, or `localStorage`, so user code cannot directly reach the
+playground page or the persistent runner's global object. This is a lifecycle
+and capability boundary, not an opaque-origin security boundary: the Worker
+executes on the randomized Nodebox preview origin, and origin storage APIs that
+exist in workers remain in that origin's scope. The preview origin is treated
+as disposable runtime infrastructure, not as trusted durable storage. This
+design does not claim to contain deliberately hostile code.
 
-- `event.source` is the current child window;
+Workers report readiness, console records, errors, and completion through their
+dedicated `postMessage()` channel. The outer runner accepts a message only when
+all of the following match the current `ActiveWorker` and that message's token
+domain:
+
+- the listener belongs to the exact Worker that is still active;
 - the message has the expected discriminator and exact session token, plus the
   exact run token for execution messages;
 - the method is one of the supported console/completion/error methods;
@@ -99,22 +110,25 @@ following match the active frame and that message's token domain:
 The protocol has two token domains. A dependency-session token identifies one
 Sandpack provider generation and its warmup; each click receives a separate
 run token that is unique within that session. `prepare(sessionToken)` creates
-the warmup frame. `run(sessionToken, runToken)` and
-`cancel(sessionToken, runToken)` address only one execution. The warmup frame's
-`ready` or `prepareError` carries the session token; the execution frame's
+the warmup Worker. `run(sessionToken, runToken)` and
+`cancel(sessionToken, runToken)` address only one execution. The warmup Worker's
+`ready` or `prepareError` carries the session token; the execution Worker's
 `output`, `error`, and `complete` carry both tokens. The outer runner itself
-emits tokened `cancelled` after removing a matching execution frame. It
+emits tokened `cancelled` after terminating a matching execution Worker. It
 validates child messages, then relays bounded records and acknowledgements
 through its Sandpack console channel to React.
 
-`cancel` removes the matching execution frame and listener and acknowledges
-cleanup. Cancelling a queued request is local because no execution frame exists;
+`cancel` terminates the matching execution Worker, removes its listener, and
+acknowledges cleanup. Cancelling a queued request is local because no execution
+Worker exists;
 cancelling a commit invalidates the run token so a late `fs/change` is ignored.
 Reset with the same dependencies leaves useful background warmup intact, while
 navigation to a different dependency signature destroys the whole session.
-Late messages are ignored after either token or frame is replaced. If an active
-execution cancellation is not acknowledged within one second, React
-hard-remounts the outer runtime. Normal completion never remounts it.
+Late messages are ignored after either token or Worker is replaced. Creating a
+replacement Worker first terminates the previous one. If an active execution
+cancellation is not acknowledged within one second, React hard-remounts the
+outer runtime. Normal completion terminates its Worker but never remounts the
+outer runtime.
 
 A Run click captures the exact editor source and dependency signature. Its state
 machine is explicit:
@@ -124,7 +138,8 @@ machine is explicit:
 2. `committing` writes the captured source to `/execution.ts` and waits at most
    10 seconds for the exact Sandpack `fs/change` acknowledgement.
 3. `executing` begins when the tokened `run` command is sent and has a
-   30-second watchdog covering child navigation, compilation, and execution.
+   30-second watchdog covering Worker module loading, compilation, and
+   execution.
 
 A preparation error, preparation timeout, or commit timeout hard-remounts the
 outer runtime with a new session token and retries the same run token and
@@ -176,7 +191,7 @@ The de-duplication set stores only accepted identifiers and is therefore capped
 at 200 entries and cleared with the run.
 
 These limits bound legitimate console data retained by the application; they
-do not claim to prevent a deliberately hostile iframe from consuming browser
+do not claim to prevent a deliberately hostile Worker from consuming browser
 CPU or structured-clone work before a rejected message reaches validation.
 
 ## Editor Typings, Focus, and Accessibility
@@ -246,11 +261,14 @@ Implementation proceeds test-first and covers these boundaries:
 - invalid imports and oversized source produce stable visible states without a
   render exception;
 - the deployed `runtimeSource()` path has no privileged dependency imports,
-  creates opaque warmup and execution frames, validates both token domains plus
-  source/type/shape, and cleans up after every terminal outcome;
-- a real browser loads an external transitive module graph from `Origin: null`
-  through the configured CORS transport, while sandboxed code cannot read the
-  outer runtime;
+  creates a fresh module Worker for warmup and each execution, validates both
+  token domains plus source/type/shape, and terminates the Worker after every
+  terminal outcome, cancellation, or replacement;
+- a real browser loads an external transitive module graph through the Nodebox
+  preview service worker, while executed code observes no `window`, `document`,
+  `parent`, or `localStorage` globals; the same coverage records that an opaque
+  nested frame bypasses that virtual graph instead of treating CORS as a viable
+  fallback;
 - a request that waits longer than 30 seconds for readiness still runs its
   captured snapshot once; commit, cancel, and execution watchdog tests cover
   late acknowledgements and remount only on their specified failure paths;
@@ -262,9 +280,10 @@ Implementation proceeds test-first and covers these boundaries:
   `@favy/di` from npm;
 - browser smoke runs all six examples, checks type hover and both themes, and
   verifies the standalone page's accessibility and responsive behavior;
-- two warm runs reuse the same outer iframe, perform no dependency reload, and
-  complete below a conservative 1,000 ms CI ceiling. The locally observed time
-  is reported separately and should remain around the current 30–40 ms.
+- two warm runs reuse the same outer iframe while each uses a fresh Worker,
+  perform no package reinstall, and complete below a conservative 1,000 ms CI
+  ceiling. The locally observed time is reported separately and should remain
+  around the current 30–40 ms.
 
 Unit tests, TypeScript checks, the production docs build, the clean-install CI
 path, and the browser smoke must all pass before the branch is considered
@@ -275,6 +294,7 @@ merge-ready.
 - Publishing a new npm version solely for the playground.
 - Removing external-package auto-imports, the Run button, examples, drafts,
   Monaco hover, or the standalone route.
-- Adding a worker/container backend or supporting hostile server-side code.
+- Adding a server-side container backend or supporting hostile server-side
+  code.
 - Broadly redesigning the page or refactoring unrelated documentation code.
 - Trading persistent warm performance for a full Sandpack remount on every Run.
