@@ -10,7 +10,6 @@ import {
 } from '../src/components/playground/playground-dependencies';
 import { playgroundExamples } from '../src/components/playground/playground-examples';
 import {
-  frameHtmlSource,
   isPlaygroundSourceWithinLimit,
   preparationLabel,
   runtimeCancelCommand,
@@ -20,14 +19,13 @@ import {
   runtimeSource,
   setupForRun,
   warmupSource,
+  workerSource,
   type PlaygroundConsoleValue,
   type RuntimeCommand,
   type RuntimeRelay,
 } from '../src/components/playground/playground-runtime';
 
 const MESSAGE_TYPE = '__FAVY_PLAYGROUND_RUNTIME__';
-const WARMUP_SELECTOR = 'iframe[data-favy-playground-warmup]';
-const EXECUTION_SELECTOR = 'iframe[data-favy-playground-execution]';
 const workspace = path.resolve(__dirname, '../..');
 
 const setup: SandboxSetup = {
@@ -55,16 +53,58 @@ type RuntimeWindow = Record<string, unknown> & {
 type RunnerHarness = Readonly<{
   parent: object;
   consoleRecords: ConsoleRecord[];
+  activeWorker(): FakeWorker;
   dispatch(command: unknown, source?: object): void;
-  emit(frame: HTMLIFrameElement, relay: object): void;
+  emit(worker: FakeWorker, relay: object): void;
   listenerCount(): number;
   relays(): RuntimeRelay[];
+  workerCount(): number;
 }>;
+
+class FakeWorker {
+  readonly url: string;
+  readonly options: WorkerOptions | undefined;
+  terminated = false;
+  private readonly listeners = new Set<(event: MessageEvent) => void>();
+
+  constructor(url: string | URL, options?: WorkerOptions) {
+    this.url = String(url);
+    this.options = options;
+  }
+
+  addEventListener(
+    type: string,
+    listener: (event: MessageEvent) => void
+  ): void {
+    if (type === 'message') this.listeners.add(listener);
+  }
+
+  removeEventListener(
+    type: string,
+    listener: (event: MessageEvent) => void
+  ): void {
+    if (type === 'message') this.listeners.delete(listener);
+  }
+
+  terminate(): void {
+    this.terminated = true;
+  }
+
+  emit(data: unknown): void {
+    for (const listener of [...this.listeners]) {
+      listener({ data } as MessageEvent);
+    }
+  }
+
+  listenerCount(): number {
+    return this.listeners.size;
+  }
+}
 
 type BootstrapHarness = Readonly<{
   runtime: RuntimeWindow;
   imports: string[];
-  messages: Array<Readonly<{ record: unknown; targetOrigin: string }>>;
+  messages: Array<Readonly<{ record: unknown }>>;
 }>;
 
 const diagnosticsForExecution = (
@@ -112,6 +152,7 @@ const generatedRuntimeSource = (): string => runtimeSource();
 const createRunner = (): RunnerHarness => {
   const listeners = new Set<(event: MessageEvent) => void>();
   const consoleRecords: ConsoleRecord[] = [];
+  const workers: FakeWorker[] = [];
   const runtimeConsole = {
     debug: (...data: unknown[]) => {
       consoleRecords.push({ method: 'debug', data });
@@ -133,16 +174,29 @@ const createRunner = (): RunnerHarness => {
     },
   };
   const parent = {};
+  class RuntimeWorker extends FakeWorker {
+    constructor(url: string | URL, options?: WorkerOptions) {
+      super(url, options);
+      workers.push(this);
+    }
+  }
   const source = ts.transpile(generatedRuntimeSource(), {
     module: ts.ModuleKind.ESNext,
     target: ts.ScriptTarget.ES2022,
   });
-  const execute = Function('globalThis', 'document', 'parent', source) as (
+  const execute = Function(
+    'globalThis',
+    'document',
+    'parent',
+    'Worker',
+    source
+  ) as (
     runtimeEnvironment: typeof runtimeGlobal,
     runtimeDocument: Document,
-    runtimeParent: object
+    runtimeParent: object,
+    RuntimeWorker: typeof FakeWorker
   ) => void;
-  execute(runtimeGlobal, document, parent);
+  execute(runtimeGlobal, document, parent, RuntimeWorker);
   const dispatchEvent = (source: object, data: unknown): void => {
     for (const listener of [...listeners]) {
       listener({ source, data } as unknown as MessageEvent);
@@ -152,43 +206,29 @@ const createRunner = (): RunnerHarness => {
   return {
     parent,
     consoleRecords,
-    dispatch: (command, source = parent) => dispatchEvent(source, command),
-    emit: (frame, relay) => {
-      const source = frame.contentWindow;
-      if (!source) throw new Error('Runtime frame has no content window.');
-      dispatchEvent(source, childRecord(relay));
+    activeWorker: () => {
+      const worker = [...workers]
+        .reverse()
+        .find((candidate) => !candidate.terminated);
+      if (!worker) throw new Error('Runner did not create an active Worker.');
+      return worker;
     },
-    listenerCount: () => listeners.size,
+    dispatch: (command, source = parent) => dispatchEvent(source, command),
+    emit: (worker, relay) => worker.emit(childRecord(relay)),
+    listenerCount: () =>
+      listeners.size +
+      workers.reduce((count, worker) => count + worker.listenerCount(), 0),
     relays: () =>
       consoleRecords.flatMap((record) => {
         const relay = runtimeRelayRecord(record);
         return relay ? [relay] : [];
       }),
+    workerCount: () => workers.length,
   };
 };
 
-const warmupFrame = (): HTMLIFrameElement => {
-  const frame = document.querySelector<HTMLIFrameElement>(WARMUP_SELECTOR);
-  if (!frame) throw new Error('Runner did not create a warmup iframe.');
-  return frame;
-};
-
-const executionFrameOrNull = (): HTMLIFrameElement | null =>
-  document.querySelector<HTMLIFrameElement>(EXECUTION_SELECTOR);
-
-const executionFrame = (): HTMLIFrameElement => {
-  const frame = executionFrameOrNull();
-  if (!frame) throw new Error('Runner did not create an execution iframe.');
-  return frame;
-};
-
-const inlineBootstrap = (): string => {
-  const source = frameHtmlSource();
-  const script = /<script type="module">([\s\S]*)<\/script>/.exec(source)?.[1];
-  if (!script)
-    throw new Error('Frame document has no inline module bootstrap.');
-  return script.replaceAll('import(', 'load(');
-};
+const workerBootstrap = (): string =>
+  workerSource().replaceAll('import(', 'load(');
 
 const executeBootstrap = (
   search: string,
@@ -204,28 +244,24 @@ const executeBootstrap = (
   const runtime = {
     location: { search },
     console: Object.create(console) as Console,
+    postMessage: (record: unknown) => {
+      messages.push({ record });
+    },
     addEventListener: (type: string, listener: EventListener) =>
       target.addEventListener(type, listener),
     dispatchEvent: (event: Event) => target.dispatchEvent(event),
   } as RuntimeWindow;
-  const runtimeParent = {
-    postMessage: (record: unknown, targetOrigin: string) => {
-      messages.push({ record, targetOrigin });
-    },
-  };
   const execute = Function(
-    'parent',
     'globalThis',
     'performance',
     'load',
-    inlineBootstrap()
+    workerBootstrap()
   ) as (
-    parent: typeof runtimeParent,
     runtimeGlobal: RuntimeWindow,
     runtimePerformance: { now(): number },
     load: (specifier: string) => Promise<unknown>
   ) => void;
-  execute(runtimeParent, runtime, { now }, (specifier) => {
+  execute(runtime, { now }, (specifier) => {
     imports.push(specifier);
     return loadModule(specifier, runtime);
   });
@@ -236,12 +272,6 @@ const flushTasks = async (): Promise<void> => {
   await Promise.resolve();
   await Promise.resolve();
 };
-
-afterEach(() => {
-  document
-    .querySelectorAll(`${WARMUP_SELECTOR}, ${EXECUTION_SELECTOR}`)
-    .forEach((frame) => frame.remove());
-});
 
 it('accepts exactly 64 KiB of UTF-8 source and rejects the next code point', () => {
   expect(isPlaygroundSourceWithinLimit('a'.repeat(65_536))).toBe(true);
@@ -313,25 +343,35 @@ it('generates a privileged runtime with no package import or origin escape hatch
   ).toEqual([]);
 });
 
-it('creates opaque URL frames and requires warmup before execution', () => {
+it('creates disposable module Workers and requires warmup before execution', () => {
   const runner = createRunner();
 
   runner.dispatch(runtimePrepareCommand(11));
-  const warmup = warmupFrame();
-  expect(warmup.getAttribute('sandbox')).toBe('allow-scripts');
-  expect(warmup.src).toContain('/frame.html?mode=warmup&session=11');
+  const warmup = runner.activeWorker();
+  expect(warmup.url).toContain('/runtime-worker.ts?mode=warmup&session=11');
+  expect(warmup.options).toEqual({
+    type: 'module',
+    credentials: 'omit',
+    name: 'favy-playground-runtime',
+  });
 
   runner.dispatch(runtimeRunCommand(11, 7));
-  expect(executionFrameOrNull()).toBeNull();
+  expect(runner.workerCount()).toBe(1);
 
   runner.emit(warmup, { kind: 'ready', sessionToken: 11 });
-  expect(warmup.isConnected).toBe(false);
+  expect(warmup.terminated).toBe(true);
   expect(runner.relays()).toEqual([{ kind: 'ready', sessionToken: 11 }]);
 
   runner.dispatch(runtimeRunCommand(11, 7));
-  const execution = executionFrame();
-  expect(execution.getAttribute('sandbox')).toBe('allow-scripts');
-  expect(execution.src).toContain('/frame.html?mode=run&session=11&run=7');
+  const execution = runner.activeWorker();
+  expect(execution.url).toContain(
+    '/runtime-worker.ts?mode=run&session=11&run=7'
+  );
+  expect(execution.options).toEqual({
+    type: 'module',
+    credentials: 'omit',
+    name: 'favy-playground-runtime',
+  });
 });
 
 it.each([
@@ -367,9 +407,7 @@ it.each([
 ] as const)('rejects a %s command', (_label, source, command) => {
   const runner = createRunner();
   runner.dispatch(command(), source ?? runner.parent);
-  expect(
-    document.querySelector(`${WARMUP_SELECTOR}, ${EXECUTION_SELECTOR}`)
-  ).toBeNull();
+  expect(runner.workerCount()).toBe(0);
   expect(runner.relays()).toEqual([]);
 });
 
@@ -389,29 +427,29 @@ it('ignores a hostile command shape whose own-key reflection throws', () => {
   );
 
   expect(() => runner.dispatch(command)).not.toThrow();
-  expect(document.querySelector(WARMUP_SELECTOR)).toBeNull();
+  expect(runner.workerCount()).toBe(0);
   expect(runner.relays()).toEqual([]);
 });
 
-it('replaces warmup state and drops messages from the stale frame', () => {
+it('replaces warmup state and drops messages from the stale Worker', () => {
   const runner = createRunner();
   runner.dispatch(runtimePrepareCommand(11));
-  const stale = warmupFrame();
+  const stale = runner.activeWorker();
   expect(runner.listenerCount()).toBe(2);
 
   runner.dispatch(runtimePrepareCommand(12));
-  const active = warmupFrame();
-  expect(stale.isConnected).toBe(false);
+  const active = runner.activeWorker();
+  expect(stale.terminated).toBe(true);
   expect(active).not.toBe(stale);
   expect(runner.listenerCount()).toBe(2);
 
   runner.emit(stale, { kind: 'ready', sessionToken: 11 });
   runner.dispatch(runtimeRunCommand(11, 7));
-  expect(executionFrameOrNull()).toBeNull();
+  expect(runner.workerCount()).toBe(2);
   expect(runner.relays()).toEqual([]);
 
   runner.emit(active, { kind: 'ready', sessionToken: 12 });
-  expect(active.isConnected).toBe(false);
+  expect(active.terminated).toBe(true);
   expect(runner.listenerCount()).toBe(1);
   expect(runner.relays()).toEqual([{ kind: 'ready', sessionToken: 12 }]);
 });
@@ -419,7 +457,7 @@ it('replaces warmup state and drops messages from the stale frame', () => {
 it('cleans up a failed warmup without preparing its session', () => {
   const runner = createRunner();
   runner.dispatch(runtimePrepareCommand(11));
-  const warmup = warmupFrame();
+  const warmup = runner.activeWorker();
 
   runner.emit(warmup, {
     kind: 'prepareError',
@@ -427,22 +465,22 @@ it('cleans up a failed warmup without preparing its session', () => {
     error: 'warmup failed',
   });
 
-  expect(warmup.isConnected).toBe(false);
+  expect(warmup.terminated).toBe(true);
   expect(runner.listenerCount()).toBe(1);
   expect(runner.relays()).toEqual([
     { kind: 'prepareError', sessionToken: 11, error: 'warmup failed' },
   ]);
   runner.dispatch(runtimeRunCommand(11, 7));
-  expect(executionFrameOrNull()).toBeNull();
+  expect(runner.workerCount()).toBe(1);
 });
 
 it('accepts only bounded output from the active source and token domain', () => {
   const runner = createRunner();
   runner.dispatch(runtimePrepareCommand(11));
-  const warmup = warmupFrame();
+  const warmup = runner.activeWorker();
   runner.emit(warmup, { kind: 'ready', sessionToken: 11 });
   runner.dispatch(runtimeRunCommand(11, 7));
-  const execution = executionFrame();
+  const execution = runner.activeWorker();
   const valid = {
     kind: 'output',
     sessionToken: 11,
@@ -472,9 +510,9 @@ it('accepts only bounded output from the active source and token domain', () => 
 it('keeps execution alive after an error and cleans it after completion', () => {
   const runner = createRunner();
   runner.dispatch(runtimePrepareCommand(11));
-  runner.emit(warmupFrame(), { kind: 'ready', sessionToken: 11 });
+  runner.emit(runner.activeWorker(), { kind: 'ready', sessionToken: 11 });
   runner.dispatch(runtimeRunCommand(11, 7));
-  const execution = executionFrame();
+  const execution = runner.activeWorker();
 
   runner.emit(execution, {
     kind: 'error',
@@ -483,7 +521,7 @@ it('keeps execution alive after an error and cleans it after completion', () => 
     eventId: 0,
     error: 'boom',
   });
-  expect(execution.isConnected).toBe(true);
+  expect(execution.terminated).toBe(false);
   expect(runner.listenerCount()).toBe(2);
 
   runner.emit(execution, {
@@ -491,7 +529,7 @@ it('keeps execution alive after an error and cleans it after completion', () => 
     sessionToken: 11,
     runToken: 7,
   });
-  expect(execution.isConnected).toBe(false);
+  expect(execution.terminated).toBe(true);
   expect(runner.listenerCount()).toBe(1);
   expect(runner.relays()).toEqual([
     { kind: 'ready', sessionToken: 11 },
@@ -519,16 +557,16 @@ it('keeps execution alive after an error and cleans it after completion', () => 
 it('cancels only the matching execution and acknowledges once', () => {
   const runner = createRunner();
   runner.dispatch(runtimePrepareCommand(11));
-  runner.emit(warmupFrame(), { kind: 'ready', sessionToken: 11 });
+  runner.emit(runner.activeWorker(), { kind: 'ready', sessionToken: 11 });
   runner.dispatch(runtimeRunCommand(11, 7));
-  const execution = executionFrame();
+  const execution = runner.activeWorker();
 
   runner.dispatch(runtimeCancelCommand(11, 8));
   runner.dispatch(runtimeCancelCommand(12, 7));
-  expect(execution.isConnected).toBe(true);
+  expect(execution.terminated).toBe(false);
 
   runner.dispatch(runtimeCancelCommand(11, 7));
-  expect(execution.isConnected).toBe(false);
+  expect(execution.terminated).toBe(true);
   expect(runner.listenerCount()).toBe(1);
   expect(runner.relays()).toEqual([
     { kind: 'ready', sessionToken: 11 },
@@ -570,13 +608,13 @@ it.each([
   '?mode=unknown&session=11',
   '?mode=warmup&mode=run&session=11',
   '?mode=warmup&session=11&extra=true',
-] as const)('does not import or post for invalid frame query %s', (search) => {
+] as const)('does not import or post for invalid Worker query %s', (search) => {
   const child = executeBootstrap(search);
   expect(child.imports).toEqual([]);
   expect(child.messages).toEqual([]);
 });
 
-it('warms in the opaque child without relaying dependency console output', async () => {
+it('warms in the Worker without relaying dependency console output', async () => {
   const child = executeBootstrap(
     '?mode=warmup&session=11',
     (_specifier, runtime) => {
@@ -590,7 +628,23 @@ it('warms in the opaque child without relaying dependency console output', async
   expect(child.messages).toEqual([
     {
       record: { type: MESSAGE_TYPE, kind: 'ready', sessionToken: 11 },
-      targetOrigin: '*',
+    },
+  ]);
+});
+
+it('keeps the captured Worker postMessage after an import replaces the global', async () => {
+  const child = executeBootstrap(
+    '?mode=warmup&session=11',
+    (_specifier, runtime) => {
+      runtime.postMessage = () => undefined;
+      return Promise.resolve();
+    }
+  );
+
+  await flushTasks();
+  expect(child.messages).toEqual([
+    {
+      record: { type: MESSAGE_TYPE, kind: 'ready', sessionToken: 11 },
     },
   ]);
 });
@@ -609,7 +663,6 @@ it('normalizes a rejected warmup import into one preparation error', async () =>
         sessionToken: 11,
         error: expect.stringContaining('Error: dependency boom'),
       },
-      targetOrigin: '*',
     },
   ]);
 });
@@ -664,7 +717,7 @@ it('assigns increasing event IDs to execution output and no ID to completion', a
   ]);
 });
 
-it('restarts event IDs for each fresh execution document', async () => {
+it('restarts event IDs for each fresh execution Worker', async () => {
   const first = executeBootstrap(
     '?mode=run&session=11&run=7',
     (_specifier, runtime) => {
@@ -902,7 +955,7 @@ it('de-duplicates an execution failure and completes after import rejection', as
 it('parses only the private Sandpack relay record', () => {
   const runner = createRunner();
   runner.dispatch(runtimePrepareCommand(11));
-  runner.emit(warmupFrame(), { kind: 'ready', sessionToken: 11 });
+  runner.emit(runner.activeWorker(), { kind: 'ready', sessionToken: 11 });
   const record = runner.consoleRecords[0];
   const marker = record?.data?.[0];
 
