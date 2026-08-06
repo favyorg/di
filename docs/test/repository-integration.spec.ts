@@ -36,6 +36,18 @@ const readJson = <Value>(relativePath: string): Value =>
 const packageJson = readJson<PackageManifest>('docs/package.json');
 const project = readJson<ProjectConfiguration>('docs/project.json');
 const nxJson = readJson<NxConfiguration>('nx.json');
+const workflowPath = path.join(workspace, '.github/workflows/ci.yml');
+const workflowSource = existsSync(workflowPath)
+  ? readFileSync(workflowPath, 'utf8')
+  : '';
+const readmeSource = readFileSync(path.join(workspace, 'README.md'), 'utf8');
+const historicalPlaygroundDesignSource = readFileSync(
+  path.join(
+    workspace,
+    'docs/superpowers/specs/2026-08-04-interactive-playground-design.md'
+  ),
+  'utf8'
+);
 
 it('exposes serial Jest and managed browser smoke package scripts', () => {
   expect(packageJson.scripts).toEqual(
@@ -50,7 +62,10 @@ it('exposes serial Jest and managed browser smoke package scripts', () => {
 });
 
 it('rejects an invalid managed smoke port before starting Astro', () => {
-  const environment = { ...process.env, DOCS_SMOKE_PORT: '0' };
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    DOCS_SMOKE_PORT: '0',
+  };
   delete environment.DOCS_URL;
 
   const result = spawnSync(
@@ -93,13 +108,19 @@ it('confirms only the complete expected Astro Local origin from startup stdout',
       ], expectedOrigin),
     ]));
   `;
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    DOCS_SMOKE_PORT: '0',
+  };
+  delete environment.FORCE_COLOR;
+  delete environment.NO_COLOR;
   const result = spawnSync(
     process.execPath,
     ['--input-type=module', '-e', probe],
     {
       cwd: workspace,
       encoding: 'utf8',
-      env: { ...process.env, DOCS_SMOKE_PORT: '0' },
+      env: environment,
       timeout: 5_000,
     }
   );
@@ -173,7 +194,7 @@ process.on('SIGTERM', stop);
   );
 
   try {
-    const environment = {
+    const environment: NodeJS.ProcessEnv = {
       ...process.env,
       DOCS_SMOKE_IMPORTED_MARKER: marker,
       DOCS_SMOKE_PORT: String(address.port),
@@ -229,7 +250,7 @@ it('refuses an occupied smoke port without replacing its server', async () => {
   if (!address || typeof address === 'string') {
     throw new Error('Missing occupied-port test address.');
   }
-  const environment = {
+  const environment: NodeJS.ProcessEnv = {
     ...process.env,
     DOCS_SMOKE_PORT: String(address.port),
   };
@@ -295,5 +316,65 @@ it('defines smoke as an explicit non-cacheable Nx target after docs build', () =
 it('declares the Astro build output at the project dist directory', () => {
   expect(nxJson.targetDefaults['@nxtensions/astro:build'].outputs).toContain(
     '{projectRoot}/dist'
+  );
+});
+
+it('discovers CI only from the GitHub Actions workflow directory', () => {
+  expect(existsSync(workflowPath)).toBe(true);
+  expect(existsSync(path.join(workspace, 'workflows/ci.yml'))).toBe(false);
+});
+
+it('runs the clean docs release gates in their required order', () => {
+  expect(workflowSource).toContain(`on:
+  push:
+    branches:
+      - main
+  pull_request:`);
+  expect(workflowSource).toContain(`    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            docs/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: docs
+      - uses: nrwl/nx-set-shas@v4
+      - run: npx nx affected -t lint test build
+      - run: npx playwright install --with-deps chromium
+        working-directory: docs
+      - run: npx nx build docs --skip-nx-cache
+      - run: npx nx run docs:smoke --skip-nx-cache`);
+});
+
+it('prominently routes README readers to the standalone playground', () => {
+  expect(readmeSource).toContain(
+    '## Documentation\n\n- [Playground](https://di.favy.dev/playground/)'
+  );
+});
+
+it('routes obsolete playground decisions to all superseding designs', () => {
+  const supersededNotice = historicalPlaygroundDesignSource.slice(
+    0,
+    historicalPlaygroundDesignSource.indexOf('## Goal')
+  );
+
+  expect(supersededNotice).toContain('**Superseded decisions:**');
+  expect(supersededNotice).toContain(
+    '[playground prewarm design](2026-08-04-playground-prewarm-design.md)'
+  );
+  expect(supersededNotice).toContain(
+    '[playground type-hover design](2026-08-05-playground-type-hover-design.md)'
+  );
+  expect(supersededNotice).toContain(
+    '[standalone playground design](2026-08-05-standalone-playground-design.md)'
+  );
+  expect(supersededNotice).toContain(
+    '[playground merge-hardening design](2026-08-05-playground-merge-hardening-design.md)'
   );
 });

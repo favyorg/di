@@ -94,6 +94,7 @@ console.log(AddTen({ left: 5 })); // 15
 
 ## Documentation
 
+- [Playground](https://di.favy.dev/playground/)
 - [Introduction](https://di.favy.dev/guides/introduction/)
 - [Testing](https://di.favy.dev/guides/testing/)
 - [Caching](https://di.favy.dev/module/cache/)

@@ -1,5 +1,11 @@
 # Interactive documentation playground
 
+> **Superseded decisions:** The editor, runtime, and manual-run decisions in this
+> historical design are superseded by the [playground prewarm design](2026-08-04-playground-prewarm-design.md),
+> [playground type-hover design](2026-08-05-playground-type-hover-design.md),
+> [standalone playground design](2026-08-05-standalone-playground-design.md), and
+> [playground merge-hardening design](2026-08-05-playground-merge-hardening-design.md).
+
 ## Goal
 
 Add a dedicated `/playground/` documentation page where readers can edit and
