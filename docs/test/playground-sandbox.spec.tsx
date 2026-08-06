@@ -390,12 +390,11 @@ it('creates isolated runtime files and installs registry dependencies only', () 
     code: 'import "@favy/di";\nimport "lodash";',
     hidden: true,
   });
-  expect((files['/frame.html'] as { code: string }).code).toContain(
-    '<script type="module">'
-  );
-  expect((files['/frame.html'] as { code: string }).code).toContain(
-    "'/warmup.ts'"
-  );
+  expect(files['/runtime-worker.ts']).toEqual({
+    code: expect.stringContaining("'/warmup.ts'"),
+    hidden: true,
+  });
+  expect(files).not.toHaveProperty('/frame.html');
   expect(files['/favy-di/index.ts']).toEqual({
     code: 'export const Module = {};',
     hidden: true,

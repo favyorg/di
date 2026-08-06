@@ -14,7 +14,6 @@ import {
 import { favyDiSourceFiles } from './favy-di-sources';
 import type { PlaygroundDependencies } from './playground-dependencies';
 import {
-  frameHtmlSource,
   isPlaygroundSourceWithinLimit,
   preparationLabel,
   PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER,
@@ -25,6 +24,7 @@ import {
   runtimeSource,
   setupForRun,
   warmupSource,
+  workerSource,
   type PlaygroundConsoleValue,
   type RuntimeConsoleMethod,
   type RuntimeRelay,
@@ -771,7 +771,7 @@ export function PlaygroundSandbox({
           code: warmupSource(Object.keys(dependencies)),
           hidden: true,
         },
-        '/frame.html': { code: frameHtmlSource(), hidden: true },
+        '/runtime-worker.ts': { code: workerSource(), hidden: true },
         '/vite.config.js': { code: VITE_CONFIG_SOURCE, hidden: true },
         '/index.html': {
           code: '<!doctype html><script type="module" src="/runner.ts"></script>',

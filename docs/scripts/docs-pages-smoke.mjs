@@ -315,28 +315,29 @@ const closeMonacoHover = async (page) => {
 const checkPlayground = async (page) => {
   const coldRequests = [];
   const coldResponses = [];
-  let rejectFrameFailure;
-  const frameFailure = new Promise((_, reject) => {
-    rejectFrameFailure = reject;
+  let rejectWorkerFailure;
+  const workerFailure = new Promise((_, reject) => {
+    rejectWorkerFailure = reject;
   });
-  void frameFailure.catch(() => undefined);
+  void workerFailure.catch(() => undefined);
   const collectColdRequest = (request) => coldRequests.push(request);
   const collectColdResponse = (response) => {
     coldResponses.push(response);
     const url = new URL(response.url());
-    if (url.pathname !== '/frame.html' || response.status() < 400) return;
+    if (url.pathname !== '/runtime-worker.ts' || response.status() < 400)
+      return;
     void response.allHeaders().then(
       (headers) =>
-        rejectFrameFailure(
+        rejectWorkerFailure(
           new Error(
-            `Playground frame failed before readiness: ${response.url()} ` +
+            `Playground Worker failed before readiness: ${response.url()} ` +
               `${response.status()} ${JSON.stringify(headers)}`
           )
         ),
       (error) =>
-        rejectFrameFailure(
+        rejectWorkerFailure(
           new Error(
-            `Could not read failed frame headers for ${response.url()}: ${error}`
+            `Could not read failed Worker headers for ${response.url()}: ${error}`
           )
         )
     );
@@ -475,7 +476,7 @@ const checkPlayground = async (page) => {
   try {
     await Promise.race([
       status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 }),
-      frameFailure,
+      workerFailure,
     ]);
   } finally {
     page.off('request', collectColdRequest);
@@ -520,8 +521,8 @@ const checkPlayground = async (page) => {
     ),
     `Missing local @favy/di entry request from ${viteOrigin}`
   );
-  const frameRequests = activeViteRequests.filter(
-    (request) => new URL(request.url()).pathname === '/frame.html'
+  const workerRequests = activeViteRequests.filter(
+    (request) => new URL(request.url()).pathname === '/runtime-worker.ts'
   );
   const localModuleRequests = activeViteRequests.filter((request) => {
     const { pathname } = new URL(request.url());
@@ -532,17 +533,9 @@ const checkPlayground = async (page) => {
         pathname.startsWith('/favy-di/'))
     );
   });
-  assert.ok(frameRequests.length > 0, 'Missing opaque frame request');
+  assert.ok(workerRequests.length > 0, 'Missing runtime Worker request');
   assert.ok(localModuleRequests.length > 0, 'Missing local module requests');
-  for (const request of localModuleRequests) {
-    const requestHeaders = await request.allHeaders();
-    assert.equal(
-      requestHeaders.origin,
-      'null',
-      `Expected Origin: null for ${request.url()}`
-    );
-  }
-  for (const request of [...frameRequests, ...localModuleRequests]) {
+  for (const request of [...workerRequests, ...localModuleRequests]) {
     const response = coldResponses.find(
       (candidate) => candidate.request() === request
     );
@@ -714,38 +707,37 @@ const checkPlayground = async (page) => {
 
   const externalSource = `import camelCase from 'lodash/camelCase';
 
-let parentBlocked = false;
-try {
-  void parent.document;
-} catch {
-  parentBlocked = true;
-}
-console.log(camelCase('opaque module graph'), parentBlocked, self.origin);
-await new Promise((resolve) => setTimeout(resolve, 750));`;
+console.log(camelCase('worker module graph'));
+await new Promise<void>((resolve) => {
+  (globalThis as typeof globalThis & {
+    __favyPlaygroundSmokeRelease?: () => void;
+  }).__favyPlaygroundSmokeRelease = resolve;
+});`;
   const externalRequests = [];
   const externalResponses = [];
-  let rejectExternalFrameFailure;
-  const externalFrameFailure = new Promise((_, reject) => {
-    rejectExternalFrameFailure = reject;
+  let rejectExternalWorkerFailure;
+  const externalWorkerFailure = new Promise((_, reject) => {
+    rejectExternalWorkerFailure = reject;
   });
-  void externalFrameFailure.catch(() => undefined);
+  void externalWorkerFailure.catch(() => undefined);
   const collectExternalRequest = (request) => externalRequests.push(request);
   const collectExternalResponse = (response) => {
     externalResponses.push(response);
     const url = new URL(response.url());
-    if (url.pathname !== '/frame.html' || response.status() < 400) return;
+    if (url.pathname !== '/runtime-worker.ts' || response.status() < 400)
+      return;
     void response.allHeaders().then(
       (headers) =>
-        rejectExternalFrameFailure(
+        rejectExternalWorkerFailure(
           new Error(
-            `External playground frame failed: ${response.url()} ` +
+            `External playground Worker failed: ${response.url()} ` +
               `${response.status()} ${JSON.stringify(headers)}`
           )
         ),
       (error) =>
-        rejectExternalFrameFailure(
+        rejectExternalWorkerFailure(
           new Error(
-            `Could not read failed external frame headers for ${response.url()}: ${error}`
+            `Could not read failed external Worker headers for ${response.url()}: ${error}`
           )
         )
     );
@@ -755,7 +747,8 @@ await new Promise((resolve) => setTimeout(resolve, 750));`;
 
   let externalViteOrigin;
   let externalRuntimeHandle;
-  let executionFrameHandle;
+  let executionWorkerListener;
+  let executionWorkerTimeout;
   try {
     await playgroundInput.focus();
     await page.keyboard.press(
@@ -765,7 +758,7 @@ await new Promise((resolve) => setTimeout(resolve, 750));`;
     await status.getByText('Checking imports', { exact: true }).waitFor();
     await Promise.race([
       status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 }),
-      externalFrameFailure,
+      externalWorkerFailure,
     ]);
 
     const externalRuntimeSource = await runtime.getAttribute('src');
@@ -777,32 +770,37 @@ await new Promise((resolve) => setTimeout(resolve, 750));`;
     externalRuntimeHandle = await runtime.elementHandle();
     const externalRuntimeFrame = await externalRuntimeHandle?.contentFrame();
     assert.ok(externalRuntimeFrame, 'Missing outer Sandpack runtime frame');
-    const executionFrameElement = externalRuntimeFrame.locator(
-      'iframe[data-favy-playground-execution]'
-    );
+    const executionWorkerPromise = new Promise((resolve, reject) => {
+      executionWorkerListener = (worker) => {
+        const url = new URL(worker.url());
+        if (
+          url.origin === externalViteOrigin &&
+          url.pathname === '/runtime-worker.ts' &&
+          url.searchParams.get('mode') === 'run'
+        ) {
+          clearTimeout(executionWorkerTimeout);
+          executionWorkerTimeout = undefined;
+          resolve(worker);
+        }
+      };
+      executionWorkerTimeout = setTimeout(
+        () => reject(new Error('Timed out waiting for execution Worker')),
+        10_000
+      );
+    });
+    page.on('worker', executionWorkerListener);
     await run.click();
-    await executionFrameElement.waitFor({ state: 'attached', timeout: 10_000 });
-    const [executionFrameSource, executionRunAttribute] = await Promise.all([
-      executionFrameElement.getAttribute('src'),
-      executionFrameElement.getAttribute('data-favy-playground-execution'),
-    ]);
-    assert.ok(
-      executionFrameSource,
-      'Nested execution frame should have a source'
-    );
-    const executionFrameUrl = new URL(
-      executionFrameSource,
-      `${externalViteOrigin}/`
-    );
-    assert.equal(executionFrameUrl.origin, externalViteOrigin);
-    assert.equal(executionFrameUrl.pathname, '/frame.html');
-    assert.equal(executionFrameUrl.hash, '');
-    const executionQuery = executionFrameUrl.search.match(
+    const executionWorker = await executionWorkerPromise;
+    const executionWorkerUrl = new URL(executionWorker.url());
+    assert.equal(executionWorkerUrl.origin, externalViteOrigin);
+    assert.equal(executionWorkerUrl.pathname, '/runtime-worker.ts');
+    assert.equal(executionWorkerUrl.hash, '');
+    const executionQuery = executionWorkerUrl.search.match(
       /^\?mode=run&session=(\d+)&run=(\d+)$/
     );
     assert.ok(
       executionQuery,
-      `Unexpected nested execution frame query: ${executionFrameUrl.search}`
+      `Unexpected execution Worker query: ${executionWorkerUrl.search}`
     );
     const [, sessionToken, runToken] = executionQuery;
     for (const [name, token] of [
@@ -814,58 +812,67 @@ await new Promise((resolve) => setTimeout(resolve, 750));`;
         `Invalid ${name} token: ${token}`
       );
     }
-    assert.equal(runToken, executionRunAttribute);
+    const workerIsolation = await executionWorker.evaluate(() => ({
+      document: typeof document,
+      parent: typeof parent,
+      localStorage: typeof localStorage,
+      window: typeof window,
+    }));
+    assert.deepEqual(workerIsolation, {
+      document: 'undefined',
+      parent: 'undefined',
+      localStorage: 'undefined',
+      window: 'undefined',
+    });
     assert.equal(
-      await executionFrameElement.getAttribute('sandbox'),
-      'allow-scripts'
+      await externalRuntimeFrame
+        .locator('iframe[data-favy-playground-execution]')
+        .count(),
+      0,
+      'Execution should not create a nested iframe'
     );
-    executionFrameHandle = await executionFrameElement.elementHandle();
-    const executionFrame = await executionFrameHandle?.contentFrame();
-    assert.ok(executionFrame, 'Missing nested opaque execution frame');
 
     await page.waitForFunction(
       () => {
         const output = document.querySelector(
           '[aria-label="Console output"]'
         )?.textContent;
-        return (
-          output?.includes('opaqueModuleGraph') &&
-          output.includes('true') &&
-          output.includes('null')
-        );
+        return output?.includes('workerModuleGraph');
       },
       undefined,
       { timeout: 60_000 }
     );
-    const frameIsolation = await executionFrame.evaluate(() => {
-      let parentBlocked = false;
-      try {
-        void parent.document;
-      } catch {
-        parentBlocked = true;
+    await executionWorker.evaluate(() => {
+      const release = globalThis.__favyPlaygroundSmokeRelease;
+      if (typeof release !== 'function') {
+        throw new Error('Missing execution Worker smoke release hook');
       }
-      return { origin: self.origin, parentBlocked };
+      delete globalThis.__favyPlaygroundSmokeRelease;
+      release();
     });
-    assert.deepEqual(frameIsolation, { origin: 'null', parentBlocked: true });
-    assert.equal(await executionFrameElement.count(), 1);
     await Promise.race([
       status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 }),
-      externalFrameFailure,
+      externalWorkerFailure,
     ]);
   } finally {
     page.off('request', collectExternalRequest);
     page.off('response', collectExternalResponse);
-    if (executionFrameHandle) {
-      await executionFrameHandle.dispose().catch(() => undefined);
+    if (executionWorkerListener) {
+      page.off('worker', executionWorkerListener);
+    }
+    if (executionWorkerTimeout !== undefined) {
+      clearTimeout(executionWorkerTimeout);
     }
     if (externalRuntimeHandle) {
       await externalRuntimeHandle.dispose().catch(() => undefined);
     }
   }
 
-  const externalFrameRequests = externalRequests.filter((request) => {
+  const externalWorkerRequests = externalRequests.filter((request) => {
     const url = new URL(request.url());
-    return url.origin === externalViteOrigin && url.pathname === '/frame.html';
+    return (
+      url.origin === externalViteOrigin && url.pathname === '/runtime-worker.ts'
+    );
   });
   const externalModuleRequests = externalRequests.filter((request) => {
     const url = new URL(request.url());
@@ -879,8 +886,8 @@ await new Promise((resolve) => setTimeout(resolve, 750));`;
     );
   });
   assert.ok(
-    externalFrameRequests.length > 0,
-    'Missing external opaque frame request'
+    externalWorkerRequests.length > 0,
+    'Missing external runtime Worker request'
   );
   assert.ok(
     externalModuleRequests.some(
@@ -894,14 +901,10 @@ await new Promise((resolve) => setTimeout(resolve, 750));`;
     ),
     'Missing installed lodash module request'
   );
-  for (const request of externalModuleRequests) {
-    assert.equal(
-      (await request.allHeaders()).origin,
-      'null',
-      `Expected Origin: null for ${request.url()}`
-    );
-  }
-  for (const request of [...externalFrameRequests, ...externalModuleRequests]) {
+  for (const request of [
+    ...externalWorkerRequests,
+    ...externalModuleRequests,
+  ]) {
     const response = externalResponses.find(
       (candidate) => candidate.request() === request
     );
