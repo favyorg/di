@@ -219,24 +219,44 @@ process.on('SIGTERM', stop);
   }
 });
 
-it('binds the inspected execution iframe to the exact active Vite run route', () => {
+it('binds the inspected execution Worker to the exact active Vite run route', () => {
   const smokeSource = readFileSync(
     path.join(workspace, 'docs/scripts/docs-pages-smoke.mjs'),
     'utf8'
   );
 
-  expect(smokeSource).toContain("executionFrameElement.getAttribute('src')");
   expect(smokeSource).toContain(
-    'assert.equal(executionFrameUrl.origin, externalViteOrigin);'
+    'const executionWorkerUrl = new URL(executionWorker.url());'
   );
   expect(smokeSource).toContain(
-    "assert.equal(executionFrameUrl.pathname, '/frame.html');"
+    'assert.equal(executionWorkerUrl.origin, externalViteOrigin);'
+  );
+  expect(smokeSource).toContain(
+    "assert.equal(executionWorkerUrl.pathname, '/runtime-worker.ts');"
   );
   expect(smokeSource).toContain(
     String.raw`/^\?mode=run&session=(\d+)&run=(\d+)$/`
   );
   expect(smokeSource).toContain(
-    'assert.equal(runToken, executionRunAttribute);'
+    'const workerIsolation = await executionWorker.evaluate(() => ({'
+  );
+});
+
+it('surfaces Worker and module request failures during execution waits', () => {
+  const smokeSource = readFileSync(
+    path.join(workspace, 'docs/scripts/docs-pages-smoke.mjs'),
+    'utf8'
+  );
+
+  expect(smokeSource).toContain(
+    "page.on('requestfailed', collectExternalRequestFailed);"
+  );
+  expect(smokeSource).toContain('request.failure()?.errorText');
+  expect(smokeSource).toMatch(
+    /const executionWorker = await Promise\.race\(\[\s*executionWorkerPromise,\s*externalWorkerFailure,\s*\]\);/
+  );
+  expect(smokeSource).toMatch(
+    /await Promise\.race\(\[\s*page\.waitForFunction\([\s\S]*?output\?\.includes\('workerModuleGraph'\)[\s\S]*?\),\s*externalWorkerFailure,\s*\]\);/
   );
 });
 

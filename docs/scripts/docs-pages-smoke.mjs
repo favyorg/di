@@ -720,30 +720,47 @@ await new Promise<void>((resolve) => {
     rejectExternalWorkerFailure = reject;
   });
   void externalWorkerFailure.catch(() => undefined);
+  const isRuntimeWorkerOrModulePath = (pathname) =>
+    pathname === '/runtime-worker.ts' ||
+    pathname === '/warmup.ts' ||
+    pathname === '/execution.ts' ||
+    pathname.startsWith('/favy-di/') ||
+    pathname.startsWith('/node_modules/');
   const collectExternalRequest = (request) => externalRequests.push(request);
   const collectExternalResponse = (response) => {
     externalResponses.push(response);
     const url = new URL(response.url());
-    if (url.pathname !== '/runtime-worker.ts' || response.status() < 400)
+    if (!isRuntimeWorkerOrModulePath(url.pathname) || response.status() < 400)
       return;
     void response.allHeaders().then(
       (headers) =>
         rejectExternalWorkerFailure(
           new Error(
-            `External playground Worker failed: ${response.url()} ` +
+            `External playground Worker/module response failed: ${response.url()} ` +
               `${response.status()} ${JSON.stringify(headers)}`
           )
         ),
       (error) =>
         rejectExternalWorkerFailure(
           new Error(
-            `Could not read failed external Worker headers for ${response.url()}: ${error}`
+            `Could not read failed external Worker/module headers for ${response.url()}: ${error}`
           )
         )
     );
   };
+  const collectExternalRequestFailed = (request) => {
+    const url = new URL(request.url());
+    if (!isRuntimeWorkerOrModulePath(url.pathname)) return;
+    rejectExternalWorkerFailure(
+      new Error(
+        `External playground Worker/module request failed: ${request.url()} ` +
+          `${request.failure()?.errorText ?? 'unknown request failure'}`
+      )
+    );
+  };
   page.on('request', collectExternalRequest);
   page.on('response', collectExternalResponse);
+  page.on('requestfailed', collectExternalRequestFailed);
 
   let externalViteOrigin;
   let externalRuntimeHandle;
@@ -790,7 +807,10 @@ await new Promise<void>((resolve) => {
     });
     page.on('worker', executionWorkerListener);
     await run.click();
-    const executionWorker = await executionWorkerPromise;
+    const executionWorker = await Promise.race([
+      executionWorkerPromise,
+      externalWorkerFailure,
+    ]);
     const executionWorkerUrl = new URL(executionWorker.url());
     assert.equal(executionWorkerUrl.origin, externalViteOrigin);
     assert.equal(executionWorkerUrl.pathname, '/runtime-worker.ts');
@@ -832,16 +852,19 @@ await new Promise<void>((resolve) => {
       'Execution should not create a nested iframe'
     );
 
-    await page.waitForFunction(
-      () => {
-        const output = document.querySelector(
-          '[aria-label="Console output"]'
-        )?.textContent;
-        return output?.includes('workerModuleGraph');
-      },
-      undefined,
-      { timeout: 60_000 }
-    );
+    await Promise.race([
+      page.waitForFunction(
+        () => {
+          const output = document.querySelector(
+            '[aria-label="Console output"]'
+          )?.textContent;
+          return output?.includes('workerModuleGraph');
+        },
+        undefined,
+        { timeout: 60_000 }
+      ),
+      externalWorkerFailure,
+    ]);
     await executionWorker.evaluate(() => {
       const release = globalThis.__favyPlaygroundSmokeRelease;
       if (typeof release !== 'function') {
@@ -857,6 +880,7 @@ await new Promise<void>((resolve) => {
   } finally {
     page.off('request', collectExternalRequest);
     page.off('response', collectExternalResponse);
+    page.off('requestfailed', collectExternalRequestFailed);
     if (executionWorkerListener) {
       page.off('worker', executionWorkerListener);
     }
