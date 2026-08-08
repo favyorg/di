@@ -122,10 +122,7 @@ const BoxModule = makeModule({
 const Greeting = BoxModule()('Greeting', () => 'hello');
 const output = Greeting();
 
-const message: string = output.value;
-const exactName: 'Greeting' = output.name;
-
-console.log(exactName + ': ' + message); // "Greeting: hello"`} />
+console.log(\`\${output.name}: \${output.value}\`); // "Greeting: hello"`} />
 
 Here `this['_RESULT']` becomes the callback return type, `this['_NAME']` becomes the declared key, and `this['_DEPS']` preserves the callable's remaining dependencies. The runtime object and the statically computed result now have the same shape.
 

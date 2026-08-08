@@ -111,10 +111,8 @@ const BoxModule = makeModule({
 
 const Greeting = BoxModule()('Greeting', () => 'hello');
 const output = Greeting();
-const name: 'Greeting' = output.name;
-const value: string = output.value;
 
-console.log(\`\${name}: \${value}\`); // Greeting: hello`;
+console.log(\`\${output.name}: \${output.value}\`); // Greeting: hello`;
 
 export const playgroundExamples: readonly PlaygroundExample[] = Object.freeze([
   {
