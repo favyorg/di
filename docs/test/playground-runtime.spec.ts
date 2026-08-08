@@ -285,8 +285,8 @@ it('accepts exactly 64 KiB of UTF-8 source and rejects the next code point', () 
 });
 
 it('warms dependencies with encoded static imports only', () => {
-  const source = warmupSource(['@favy/di', 'lodash']);
-  expect(source).toBe('import "@favy/di";\nimport "lodash";');
+  const source = warmupSource(['@favy/di', 'lodash/camelCase']);
+  expect(source).toBe('import "@favy/di";\nimport "lodash/camelCase";');
   expect(source).not.toContain('/index.ts');
 });
 
@@ -341,6 +341,15 @@ it('generates a privileged runtime with no package import or origin escape hatch
       ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
     )
   ).toEqual([]);
+});
+
+it('keeps Worker entry imports static so Vite does not inject its HMR client', () => {
+  const source = workerSource();
+  expect(source).toContain("import('/warmup.ts')");
+  expect(source).toContain(
+    'import(/* @vite-ignore */ `/execution.ts?session=${sessionToken}&run=${runToken}`)'
+  );
+  expect(source).not.toMatch(/import\([^'"`]\w+\)/);
 });
 
 it('creates disposable module Workers and requires warmup before execution', () => {

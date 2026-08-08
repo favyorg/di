@@ -28,6 +28,7 @@ jest.mock(
 );
 
 type MockSandpackMessage =
+  | { type: 'connected' }
   | { type: 'done'; compilatonError: boolean }
   | { type: 'fs/change'; path: string; content: string }
   | {
@@ -38,7 +39,7 @@ type MockSandpackMessage =
 
 type MockProviderProps = Readonly<{
   children: ReactNode;
-  customSetup: {
+  customSetup?: {
     entry: string;
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
@@ -65,15 +66,31 @@ let mockMountedProviders = 0;
 let mockMountedControllers = 0;
 let mockListenCalls = 0;
 let mockActiveListeners = 0;
+let mockRunSandpackCalls = 0;
+let mockRunSandpackResults: Promise<void>[] = [];
+let mockSetBundlerStatus: ((status: string) => void) | undefined;
+
+const immediatelyResolved = (): Promise<void> =>
+  ({
+    then(onFulfilled: () => void): Promise<void> {
+      onFulfilled();
+      return Promise.resolve();
+    },
+  } as Promise<void>);
 
 jest.mock('@codesandbox/sandpack-react', () => {
   const React = jest.requireActual<typeof import('react')>('react');
   const SandpackContext = React.createContext<any>(null);
 
   const SandpackProvider = (props: any) => {
-    const { children, customSetup, files, template } = props;
+    const { children, customSetup, files, options, template } = props;
     mockProviderProps.push(props);
-    const listeners = React.useRef(new Set<any>());
+    const [status, setStatus] = React.useState(
+      options.autorun ? 'running' : 'idle'
+    );
+    if (customSetup) mockSetBundlerStatus = setStatus;
+    const globalListeners = React.useRef(new Set<any>());
+    const scopedListeners = React.useRef(new Set<any>());
     const setup = React.useRef({
       ...customSetup,
       files: Object.fromEntries(
@@ -97,32 +114,57 @@ jest.mock('@codesandbox/sandpack-react', () => {
       []
     );
     const listen = React.useCallback(
-      (listener: (message: MockSandpackMessage) => void) => {
+      (listener: (message: MockSandpackMessage) => void, clientId?: string) => {
+        const listeners = clientId
+          ? scopedListeners.current
+          : globalListeners.current;
         mockListenCalls += 1;
-        listeners.current.add(listener);
+        listeners.add(listener);
         mockActiveListeners += 1;
         let subscribed = true;
         return () => {
           if (!subscribed) return;
           subscribed = false;
-          if (listeners.current.delete(listener)) mockActiveListeners -= 1;
+          if (listeners.delete(listener)) mockActiveListeners -= 1;
         };
       },
       []
     );
     const emit = React.useCallback((message: any) => {
-      listeners.current.forEach((listener) => listener(message));
+      globalListeners.current.forEach((listener) => listener(message));
+      scopedListeners.current.forEach((listener) => listener(message));
     }, []);
-    const value = React.useMemo(() => ({ client, listen }), [client, listen]);
+    const runSandpack = React.useCallback(() => {
+      mockRunSandpackCalls += 1;
+      mockActiveListeners -= scopedListeners.current.size;
+      scopedListeners.current.clear();
+      const pending = mockRunSandpackResults.shift() ?? immediatelyResolved();
+      void pending.then(
+        () => setStatus('running'),
+        () => undefined
+      );
+      return pending;
+    }, []);
+    const sandpack = React.useMemo(
+      () => ({ runSandpack, status }),
+      [runSandpack, status]
+    );
+    const value = React.useMemo(
+      () => ({ client, listen, sandpack }),
+      [client, listen, sandpack]
+    );
 
     React.useEffect(() => {
       mockMountedProviders += 1;
-      mockEmitSandpack = emit;
+      if (customSetup) mockEmitSandpack = emit;
       return () => {
         mockMountedProviders -= 1;
         if (mockEmitSandpack === emit) mockEmitSandpack = undefined;
-        mockActiveListeners -= listeners.current.size;
-        listeners.current.clear();
+        if (customSetup) mockSetBundlerStatus = undefined;
+        mockActiveListeners -=
+          globalListeners.current.size + scopedListeners.current.size;
+        globalListeners.current.clear();
+        scopedListeners.current.clear();
       };
     }, [emit]);
 
@@ -160,17 +202,24 @@ jest.mock('@codesandbox/sandpack-react', () => {
 
     return {
       iframe,
+      sandpack: context.sandpack,
       getClient: () => {
         const error = mockGetClientErrors.shift();
         if (error) throw error;
         return context.client;
       },
       listen: (listener: (message: MockSandpackMessage) => void) =>
-        context.listen(listener),
+        context.listen(listener, 'runtime-client'),
     };
   };
 
-  return { SandpackProvider, useSandpackClient };
+  const useSandpack = () => {
+    const context = React.useContext(SandpackContext);
+    if (!context) throw new Error('Missing mocked SandpackProvider.');
+    return { sandpack: context.sandpack, listen: context.listen };
+  };
+
+  return { SandpackProvider, useSandpack, useSandpackClient };
 });
 
 const request = (
@@ -195,6 +244,7 @@ const renderSandbox = (overrides: Partial<PlaygroundSandboxProps> = {}) => {
   const props: PlaygroundSandboxProps = {
     sandboxKey: 'favy-local|lodash-latest',
     dependencies: { '@favy/di': 'local', lodash: 'latest' },
+    warmupImports: ['@favy/di', 'lodash/camelCase'],
     initialCode: 'console.log("initial");',
     theme: 'light',
     runRequest: null,
@@ -215,6 +265,13 @@ const emitSandpack = (message: MockSandpackMessage): void => {
   act(() => {
     if (!mockEmitSandpack) throw new Error('No mounted Sandpack provider.');
     mockEmitSandpack(message);
+  });
+};
+
+const emitBundlerStatus = (status: string): void => {
+  act(() => {
+    if (!mockSetBundlerStatus) throw new Error('No mounted Sandpack provider.');
+    mockSetBundlerStatus(status);
   });
 };
 
@@ -297,6 +354,9 @@ beforeEach(() => {
   mockMountedControllers = 0;
   mockListenCalls = 0;
   mockActiveListeners = 0;
+  mockRunSandpackCalls = 0;
+  mockRunSandpackResults = [];
+  mockSetBundlerStatus = undefined;
 });
 
 afterEach(() => {
@@ -366,11 +426,10 @@ it('creates isolated runtime files and installs registry dependencies only', () 
   renderSandbox();
 
   expect(screen.getByText('Visible workspace')).toBeTruthy();
-  expect(mockMountedProviders).toBe(1);
+  expect(mockMountedProviders).toBe(2);
   expect(mockMountedControllers).toBe(1);
-  const { customSetup, files, options, template, theme } = mockProviderProps.at(
-    -1
-  ) as MockProviderProps;
+  const { customSetup, files, options, template, theme } =
+    mockProviderProps.find((props) => props.customSetup) as MockProviderProps;
   expect(template).toBe('vite');
   expect(theme).toBe('light');
   expect(customSetup).toEqual({
@@ -380,7 +439,7 @@ it('creates isolated runtime files and installs registry dependencies only', () 
   });
   expect(options).toEqual({
     activeFile: '/index.ts',
-    autorun: true,
+    autorun: false,
     autoReload: false,
   });
   expect(files['/index.ts']).toEqual({
@@ -392,7 +451,7 @@ it('creates isolated runtime files and installs registry dependencies only', () 
     /^\s*import\s/m
   );
   expect(files['/warmup.ts']).toEqual({
-    code: 'import "@favy/di";\nimport "lodash";',
+    code: 'import "@favy/di";\nimport "lodash/camelCase";',
     hidden: true,
   });
   expect(files['/runtime-worker.ts']).toEqual({
@@ -424,6 +483,9 @@ it('creates isolated runtime files and installs registry dependencies only', () 
   );
   expect((files['/vite.config.js'] as { code: string }).code).toContain(
     'hmr: false'
+  );
+  expect((files['/vite.config.js'] as { code: string }).code).toContain(
+    'optimizeDeps: { include: ["lodash/camelCase"] }'
   );
 });
 
@@ -704,6 +766,7 @@ it('resets saturated event, byte, and ID budgets after settlement', () => {
   const props: PlaygroundSandboxProps = {
     sandboxKey: 'favy-local|lodash-latest',
     dependencies: { '@favy/di': 'local', lodash: 'latest' },
+    warmupImports: ['@favy/di', 'lodash'],
     initialCode: 'console.log("initial");',
     theme: 'light',
     runRequest: request(1),
@@ -869,6 +932,7 @@ it('reuses the prepared controller iframe across completed runs', () => {
   const props: PlaygroundSandboxProps = {
     sandboxKey: 'favy-local|lodash-latest',
     dependencies: { '@favy/di': 'local', lodash: 'latest' },
+    warmupImports: ['@favy/di', 'lodash'],
     initialCode: 'console.log("initial");',
     theme: 'light',
     runRequest: request(1),
@@ -905,11 +969,12 @@ it('reuses the prepared controller iframe across completed runs', () => {
   });
 });
 
-it('keeps one scoped listener when Sandpack hook wrappers change identity', () => {
+it('keeps one global listener when Sandpack hook wrappers change identity', () => {
   const handlers = callbacks();
   const props: PlaygroundSandboxProps = {
     sandboxKey: 'favy-local|lodash-latest',
     dependencies: { '@favy/di': 'local', lodash: 'latest' },
+    warmupImports: ['@favy/di', 'lodash'],
     initialCode: 'console.log("initial");',
     theme: 'light',
     runRequest: null,
@@ -924,6 +989,157 @@ it('keeps one scoped listener when Sandpack hook wrappers change identity', () =
   expect(mockListenCalls).toBe(1);
   emitSandpack({ type: 'done', compilatonError: false });
   expect(lastRuntimeCommand()).toMatchObject({ action: 'prepare' });
+});
+
+it('retries one stalled Sandpack bootstrap before showing a terminal failure', () => {
+  const { handlers } = renderSandbox();
+
+  act(() => jest.advanceTimersByTime(42_000));
+  expect(mockRunSandpackCalls).toBe(2);
+  expect(mockListenCalls).toBe(1);
+  expect(mockActiveListeners).toBe(1);
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Preparing runtime');
+
+  bootRuntime();
+  emitRuntimeReady();
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Ready');
+});
+
+it('restarts immediately when Run follows a terminal bootstrap failure', () => {
+  const { handlers, props, rerender } = renderSandbox();
+
+  act(() => jest.advanceTimersByTime(84_000));
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Failed');
+
+  rerender(
+    <PlaygroundSandbox {...props} runRequest={request(7)}>
+      <textarea aria-label="Visible editor" defaultValue="draft" />
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+
+  expect(mockRunSandpackCalls).toBe(3);
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+});
+
+it('does not overlap a pending Sandpack start during recovery', async () => {
+  let finishPendingStart!: () => void;
+  mockRunSandpackResults.push(
+    new Promise((resolve) => {
+      finishPendingStart = resolve;
+    })
+  );
+  const { handlers, props, rerender } = renderSandbox();
+
+  act(() => jest.advanceTimersByTime(84_000));
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Failed');
+
+  rerender(
+    <PlaygroundSandbox {...props} runRequest={request(7)}>
+      <textarea aria-label="Visible editor" defaultValue="draft" />
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+  expect(mockRunSandpackCalls).toBe(1);
+
+  await act(async () => {
+    finishPendingStart();
+  });
+
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Preparing runtime');
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+  bootRuntime();
+  emitRuntimeReady();
+  expect(updatedExecutions()).toHaveLength(1);
+  acknowledgeExecutionWrite();
+  expect(lastRuntimeCommand()).toMatchObject({ action: 'run', runToken: 7 });
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Running');
+});
+
+it('starts the queued recovery after an adopted Sandpack start rejects', async () => {
+  let rejectPendingStart!: (reason?: unknown) => void;
+  mockRunSandpackResults.push(
+    new Promise((_, reject) => {
+      rejectPendingStart = reject;
+    })
+  );
+  const { handlers, props, rerender } = renderSandbox();
+
+  act(() => jest.advanceTimersByTime(84_000));
+  rerender(
+    <PlaygroundSandbox {...props} runRequest={request(7)}>
+      <textarea aria-label="Visible editor" defaultValue="draft" />
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+  expect(mockRunSandpackCalls).toBe(1);
+
+  await act(async () => {
+    rejectPendingStart(new Error('old start failed'));
+  });
+
+  expect(mockRunSandpackCalls).toBe(2);
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Preparing runtime');
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+});
+
+it('bounds bootstrap even when Sandpack never publishes its timeout status', () => {
+  const { handlers } = renderSandbox();
+
+  act(() => jest.advanceTimersByTime(41_999));
+  expect(mockRunSandpackCalls).toBe(1);
+
+  act(() => jest.advanceTimersByTime(1));
+  expect(mockRunSandpackCalls).toBe(2);
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Preparing runtime');
+
+  act(() => jest.advanceTimersByTime(42_000));
+  expect(mockRunSandpackCalls).toBe(2);
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Failed');
+});
+
+it('keeps the watchdog retry active after a stale Sandpack timeout', () => {
+  const { handlers } = renderSandbox();
+
+  act(() => jest.advanceTimersByTime(42_000));
+  expect(mockRunSandpackCalls).toBe(2);
+
+  emitBundlerStatus('timeout');
+
+  expect(mockRunSandpackCalls).toBe(2);
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Preparing runtime');
+  bootRuntime();
+  emitRuntimeReady();
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Ready');
+});
+
+it('extends inactivity without exceeding the absolute attempt deadline', () => {
+  renderSandbox();
+
+  act(() => jest.advanceTimersByTime(41_000));
+  emitSandpack({ type: 'connected' });
+  act(() => jest.advanceTimersByTime(18_999));
+  expect(mockRunSandpackCalls).toBe(1);
+
+  act(() => jest.advanceTimersByTime(1));
+  expect(mockRunSandpackCalls).toBe(2);
+});
+
+it('settles a queued run when the bounded Sandpack retry also times out', () => {
+  const { handlers } = renderSandbox({ runRequest: request(7) });
+
+  act(() => jest.advanceTimersByTime(42_000));
+  expect(mockRunSandpackCalls).toBe(2);
+  expect(handlers.onSettled).not.toHaveBeenCalled();
+
+  act(() => jest.advanceTimersByTime(42_000));
+  expect(mockRunSandpackCalls).toBe(2);
+  expect(handlers.onSettled).toHaveBeenCalledTimes(1);
+  expect(handlers.onSettled).toHaveBeenCalledWith({
+    runToken: 7,
+    outcome: 'runtime-unavailable',
+  });
+  expect(handlers.onStatus).toHaveBeenLastCalledWith('Failed');
 });
 
 it('keeps a cold request queued past 30 seconds and launches once when ready', () => {
@@ -942,7 +1158,7 @@ it('keeps a cold request queued past 30 seconds and launches once when ready', (
 
 it('retries the first preparation error and settles the second one unavailable', () => {
   const runRequest = request(7);
-  const { handlers } = renderSandbox({ runRequest });
+  const { handlers, props, rerender } = renderSandbox({ runRequest });
   bootRuntime();
   const firstToken = firstSessionToken();
 
@@ -967,20 +1183,30 @@ it('retries the first preparation error and settles the second one unavailable',
     runToken: 7,
     outcome: 'runtime-unavailable',
   });
+
+  rerender(
+    <PlaygroundSandbox {...props} runRequest={request(8)}>
+      <textarea aria-label="Visible editor" defaultValue="draft" />
+      <span>Visible workspace</span>
+    </PlaygroundSandbox>
+  );
+  expect(mockRunSandpackCalls).toBe(3);
 });
 
-it('restarts at the exact 120-second preparation boundary with the same request', () => {
+it('retries at the exact bootstrap boundary with the same request', () => {
   const runRequest = request(7);
   const { handlers } = renderSandbox({ runRequest });
   bootRuntime();
   const firstToken = firstSessionToken();
 
-  act(() => jest.advanceTimersByTime(119_999));
+  act(() => jest.advanceTimersByTime(41_999));
   expect(activeSessionToken()).toBe(firstToken);
   expect(handlers.onSettled).not.toHaveBeenCalled();
+  expect(mockRunSandpackCalls).toBe(1);
 
   act(() => jest.advanceTimersByTime(1));
   expect(handlers.onSettled).not.toHaveBeenCalled();
+  expect(mockRunSandpackCalls).toBe(2);
   bootRuntime();
   expect(activeSessionToken()).not.toBe(firstToken);
 
@@ -1431,7 +1657,7 @@ it('uses the cancellation watchdog when cancel command delivery throws', () => {
     runToken: 7,
   });
   expect(view.handlers.onSettled).toHaveBeenCalledTimes(1);
-  expect(jest.getTimerCount()).toBe(0);
+  expect(jest.getTimerCount()).toBe(1);
 });
 
 it('keeps one controller listener under StrictMode and clears every timer on cleanup', () => {
@@ -1441,6 +1667,7 @@ it('keeps one controller listener under StrictMode and clears every timer on cle
       <PlaygroundSandbox
         sandboxKey="favy-local|lodash-latest"
         dependencies={{ '@favy/di': 'local', lodash: 'latest' }}
+        warmupImports={['@favy/di', 'lodash']}
         initialCode={'console.log("initial");'}
         theme="light"
         runRequest={request(7)}
@@ -1450,7 +1677,7 @@ it('keeps one controller listener under StrictMode and clears every timer on cle
     </StrictMode>
   );
 
-  expect(mockMountedProviders).toBe(1);
+  expect(mockMountedProviders).toBe(2);
   expect(mockMountedControllers).toBe(1);
   expect(mockActiveListeners).toBe(1);
   expect(jest.getTimerCount()).toBe(1);

@@ -278,6 +278,11 @@ it('exposes exactly one editor textbox after Monaco is ready', () => {
   render(<Playground />);
 
   expect(
+    screen.queryByRole('region', {
+      name: 'TypeScript playground editor',
+    })
+  ).toBeNull();
+  expect(
     screen.getAllByRole('textbox', {
       name: 'TypeScript playground editor',
     })
@@ -512,7 +517,7 @@ it('keeps normal control focus through reset and example navigation', () => {
   expect(mockEditorRestores).toBe(0);
 });
 
-it('waits 1000 ms before replacing the dependency session', () => {
+it('waits 1000 ms and warms each exact package subpath', () => {
   render(<Playground />);
   edit(`${playgroundExampleById.basic.source}\nimport 'lodash/fp';`);
 
@@ -522,9 +527,46 @@ it('waits 1000 ms before replacing the dependency session', () => {
   act(() => jest.advanceTimersByTime(1));
   expect(mockSandboxMounts).toEqual([
     '@favy/di@local',
-    '@favy/di@local|lodash@latest',
+    '@favy/di@local|lodash@latest|no-root:lodash|import:lodash/fp',
+  ]);
+  expect(latestSandbox().warmupImports).toEqual(['@favy/di', 'lodash/fp']);
+
+  edit(`${playgroundExampleById.basic.source}\nimport 'lodash/camelCase';`);
+  act(() => jest.advanceTimersByTime(1_000));
+
+  expect(mockSandboxMounts).toEqual([
+    '@favy/di@local',
+    '@favy/di@local|lodash@latest|no-root:lodash|import:lodash/fp',
+    '@favy/di@local|lodash@latest|no-root:lodash|import:lodash/camelCase',
+  ]);
+  expect(latestSandbox().dependencies).toEqual({
+    '@favy/di': 'local',
+    lodash: 'latest',
+  });
+  expect(latestSandbox().warmupImports).toEqual([
+    '@favy/di',
+    'lodash/camelCase',
   ]);
   expect(mockMaximumMountedSandboxes).toBe(1);
+});
+
+it('remounts when a type-only package root becomes a runtime import', () => {
+  render(<Playground />);
+  edit(
+    `${playgroundExampleById.basic.source}\nimport type { Dictionary } from 'lodash';`
+  );
+  act(() => jest.advanceTimersByTime(1_000));
+  emitReady();
+  const mountsBeforeRuntimeImport = mockSandboxMounts.length;
+
+  edit(
+    `${playgroundExampleById.basic.source}\nimport { chunk } from 'lodash';\nvoid chunk;`
+  );
+  act(() => jest.advanceTimersByTime(1_000));
+
+  expect(mockSandboxMounts).toHaveLength(mountsBeforeRuntimeImport + 1);
+  expect(latestSandbox().warmupImports).toEqual(['@favy/di', 'lodash']);
+  expect(screen.getByRole('status').textContent).toBe('Preparing dependencies');
 });
 
 it('passes validated non-favy versions to automatic typings', () => {

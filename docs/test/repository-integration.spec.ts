@@ -219,7 +219,7 @@ process.on('SIGTERM', stop);
   }
 });
 
-it('binds the inspected execution Worker to the exact active Vite run route', () => {
+it('binds and inspects the execution Worker on the exact active Vite run route', () => {
   const smokeSource = readFileSync(
     path.join(workspace, 'docs/scripts/docs-pages-smoke.mjs'),
     'utf8'
@@ -238,7 +238,11 @@ it('binds the inspected execution Worker to the exact active Vite run route', ()
     String.raw`/^\?mode=run&session=(\d+)&run=(\d+)$/`
   );
   expect(smokeSource).toContain(
-    'const workerIsolation = await executionWorker.evaluate(() => ({'
+    "output.includes('undefined,undefined,undefined,undefined')"
+  );
+  expect(smokeSource).toContain('executionWorkerUrl.href');
+  expect(smokeSource).toContain(
+    String.raw`/\/@vite\/client|__vite__injectQuery/`
   );
 });
 

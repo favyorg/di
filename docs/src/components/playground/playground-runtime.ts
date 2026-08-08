@@ -3,7 +3,7 @@ import type {
   SandpackBundlerFile,
   SandpackMessage,
 } from '@codesandbox/sandpack-client';
-import { isNpmPackageName } from './playground-dependencies';
+import { isNpmPackageSpecifier } from './playground-dependencies';
 
 const RUNTIME_MESSAGE_TYPE = '__FAVY_PLAYGROUND_RUNTIME__';
 const RUNTIME_RELAY_MARKER = '__FAVY_PLAYGROUND_RELAY__';
@@ -107,8 +107,8 @@ const CONSOLE_METHODS = new Set<RuntimeConsoleMethod>([
 export const warmupSource = (dependencies: readonly string[]): string =>
   dependencies
     .map((dependency) => {
-      if (!isNpmPackageName(dependency)) {
-        throw new TypeError('Warmup dependencies must be npm package names.');
+      if (!isNpmPackageSpecifier(dependency)) {
+        throw new TypeError('Warmup imports must be npm package specifiers.');
       }
       return `import ${JSON.stringify(dependency)};`;
     })
@@ -504,10 +504,10 @@ export const workerSource = (): string =>
     '    writable: true,',
     '    value: runConsole,',
     '  });',
-    "  const entry = mode === 'warmup'",
-    "    ? '/warmup.ts'",
-    '    : `/execution.ts?session=${sessionToken}&run=${runToken}`;',
-    '  void import(/* @vite-ignore */ entry).then(',
+    "  const loading = mode === 'warmup'",
+    "    ? import('/warmup.ts')",
+    '    : import(/* @vite-ignore */ `/execution.ts?session=${sessionToken}&run=${runToken}`);',
+    '  void loading.then(',
     "    () => send(mode === 'warmup' ? 'ready' : 'complete'),",
     '    (error) => {',
     "      send(mode === 'warmup' ? 'prepareError' : 'error', normalize(error));",

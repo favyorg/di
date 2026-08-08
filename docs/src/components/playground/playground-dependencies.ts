@@ -101,31 +101,71 @@ const staticStringValue = (value: unknown): string | undefined => {
   return undefined;
 };
 
-const collectSpecifiers = (value: unknown, names: string[]): void => {
+const hasOnlyTypeSpecifiers = (
+  node: Record<string, unknown>,
+  kind: 'exportKind' | 'importKind'
+): boolean =>
+  Array.isArray(node.specifiers) &&
+  node.specifiers.length > 0 &&
+  node.specifiers.every(
+    (specifier) =>
+      !!specifier &&
+      typeof specifier === 'object' &&
+      (specifier as Record<string, unknown>)[kind] === 'type'
+  );
+
+const isTypeOnlyModuleReference = (node: Record<string, unknown>): boolean =>
+  node.type === 'TSImportType' ||
+  (node.type === 'ImportDeclaration' &&
+    (node.importKind === 'type' ||
+      hasOnlyTypeSpecifiers(node, 'importKind'))) ||
+  ((node.type === 'ExportAllDeclaration' ||
+    node.type === 'ExportNamedDeclaration') &&
+    (node.exportKind === 'type' ||
+      (node.type === 'ExportNamedDeclaration' &&
+        hasOnlyTypeSpecifiers(node, 'exportKind'))));
+
+const collectSpecifiers = (
+  value: unknown,
+  names: string[],
+  runtimeOnly = false
+): void => {
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
-    value.forEach((child) => collectSpecifiers(child, names));
+    value.forEach((child) => collectSpecifiers(child, names, runtimeOnly));
     return;
   }
 
   const node = value as Record<string, unknown>;
-  const specifier = MODULE_SOURCE_NODES.has(String(node.type))
-    ? node.source
-    : node.type === 'TSImportType'
-    ? node.argument
-    : undefined;
+  const specifier =
+    runtimeOnly && isTypeOnlyModuleReference(node)
+      ? undefined
+      : MODULE_SOURCE_NODES.has(String(node.type))
+      ? node.source
+      : node.type === 'TSImportType'
+      ? node.argument
+      : undefined;
   const name = staticStringValue(specifier);
   if (name !== undefined) names.push(name);
 
   for (const [key, child] of Object.entries(node)) {
-    if (key !== 'loc' && key !== 'extra') collectSpecifiers(child, names);
+    if (key !== 'loc' && key !== 'extra') {
+      collectSpecifiers(child, names, runtimeOnly);
+    }
   }
 };
 
-const parseSpecifiers = (source: string): string[] | undefined => {
+const parseSpecifiers = (
+  source: string,
+  runtimeOnly = false
+): string[] | undefined => {
   try {
     const names: string[] = [];
-    collectSpecifiers(parseTypeScript(source, PARSER_OPTIONS), names);
+    collectSpecifiers(
+      parseTypeScript(source, PARSER_OPTIONS),
+      names,
+      runtimeOnly
+    );
     return names;
   } catch {
     return undefined;
@@ -349,6 +389,19 @@ const classifySpecifier = (specifier: string): PackageSpecifier => {
   return isNpmPackageName(name)
     ? { kind: 'package', name }
     : { kind: 'unsupported', specifier };
+};
+
+export const isNpmPackageSpecifier = (specifier: string): boolean =>
+  classifySpecifier(specifier).kind === 'package';
+
+export const resolvePlaygroundWarmupImports = (
+  source: string
+): readonly string[] => {
+  const specifiers = parseSpecifiers(source, true);
+  if (!specifiers) return [];
+  return [...new Set(specifiers.filter(isNpmPackageSpecifier))].sort(
+    (left, right) => left.localeCompare(right)
+  );
 };
 
 export const resolvePlaygroundDependencies = (

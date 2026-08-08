@@ -1,9 +1,44 @@
 import {
   dependencySignature,
   resolvePlaygroundDependencies,
+  resolvePlaygroundWarmupImports,
 } from '../src/components/playground/playground-dependencies';
 
 describe('resolvePlaygroundDependencies', () => {
+  it('keeps exact package subpaths for the Vite warmup graph', () => {
+    expect(
+      resolvePlaygroundWarmupImports(`
+        import { Module } from '@favy/di';
+        import fp from 'lodash/fp';
+        import map from 'lodash/map';
+        import fpAgain from 'lodash/fp';
+        export { value } from '@scope/pkg/subpath';
+      `)
+    ).toEqual(['@favy/di', '@scope/pkg/subpath', 'lodash/fp', 'lodash/map']);
+  });
+
+  it('only warms package imports that survive TypeScript erasure', () => {
+    expect(
+      resolvePlaygroundWarmupImports(`
+        import type TypeOnly from 'type-default';
+        import { type NamedType } from 'type-named';
+        export type { ExportedType } from 'type-export';
+        export { type ExportedNamedType } from 'type-export-named';
+        type ImportedType = import('type-query').ImportedType;
+
+        import runtimeDefault from 'runtime-default';
+        import { type Model, runtimeValue } from 'runtime-mixed';
+        export { type ExportedModel, runtimeValue } from 'runtime-export-mixed';
+        void import('runtime-dynamic');
+      `)
+    ).toEqual([
+      'runtime-default',
+      'runtime-dynamic',
+      'runtime-export-mixed',
+      'runtime-mixed',
+    ]);
+  });
+
   it('extracts, normalizes, pins, deduplicates, and sorts npm packages', () => {
     const resolution = resolvePlaygroundDependencies(`
       import { Module } from '@favy/di';

@@ -1,6 +1,7 @@
 import type { SandpackMessage } from '@codesandbox/sandpack-client';
 import {
   SandpackProvider,
+  useSandpack,
   useSandpackClient,
 } from '@codesandbox/sandpack-react';
 import {
@@ -69,6 +70,7 @@ export type PlaygroundRunSettlement =
 export type PlaygroundSandboxProps = PropsWithChildren<{
   sandboxKey: string;
   dependencies: PlaygroundDependencies;
+  warmupImports: readonly string[];
   initialCode: string;
   theme: PlaygroundTheme;
   runRequest: PlaygroundRunRequest | null;
@@ -142,16 +144,32 @@ type SandboxControllerProps = Pick<
 
 const SANDBOX_OPTIONS = Object.freeze({
   activeFile: '/index.ts',
-  autorun: true,
+  autorun: false,
   autoReload: false,
 });
 
 // Sandpack's 0.17.12 template cannot parse const generics in makeModule.ts.
 const SANDBOX_ESBUILD_VERSION = '0.17.19';
 
-const VITE_CONFIG_SOURCE =
-  "export default { resolve: { alias: [{ find: /^@favy\\/di$/, replacement: '/favy-di/index.ts' }] }, server: { cors: { origin: '*' }, hmr: false } };";
+const viteConfigSource = (optimizeImports: readonly string[]): string =>
+  `export default { resolve: { alias: [{ find: /^@favy\\/di$/, replacement: '/favy-di/index.ts' }] }, optimizeDeps: { include: ${JSON.stringify(
+    optimizeImports
+  )} }, server: { cors: { origin: '*' }, hmr: false } };`;
 
+const registryWarmupImports = (
+  dependencies: PlaygroundDependencies,
+  warmupImports: readonly string[]
+): readonly string[] =>
+  warmupImports.filter((specifier) =>
+    Object.entries(dependencies).some(
+      ([name, version]) =>
+        version === 'latest' &&
+        (specifier === name || specifier.startsWith(`${name}/`))
+    )
+  );
+
+const BUNDLER_IDLE_TIMEOUT_MS = 42_000;
+const BUNDLER_ATTEMPT_TIMEOUT_MS = 60_000;
 const PREPARATION_TIMEOUT_MS = 120_000;
 const COMMIT_TIMEOUT_MS = 10_000;
 const EXECUTION_TIMEOUT_MS = 30_000;
@@ -217,8 +235,16 @@ const SandboxController = ({
   onCancellationTimeout,
   onControllerSettled,
 }: SandboxControllerProps): JSX.Element => {
-  const { iframe, getClient, listen } = useSandpackClient();
+  const { iframe, getClient } = useSandpackClient();
+  const { listen, sandpack } = useSandpack();
   const bootHandled = useRef(false);
+  const bootFailed = useRef(false);
+  const bundlerRetries = useRef(0);
+  const bundlerAttempt = useRef(0);
+  const bundlerRun = useRef<Promise<void>>();
+  const bundlerRestartQueued = useRef(false);
+  const bundlerDeadline = useRef<number>();
+  const bundlerTimer = useRef<number>();
   const sessionToken = useRef<number>();
   const sessionReady = useRef(false);
   const lifecycle = useRef<RunLifecycle>({ phase: 'idle' });
@@ -239,6 +265,9 @@ const SandboxController = ({
   const onRestartAfterExecutionRef = useRef(onRestartAfterExecution);
   const onCancellationTimeoutRef = useRef(onCancellationTimeout);
   const onControllerSettledRef = useRef(onControllerSettled);
+  const runtimeListener = useRef<() => void>();
+  const runBundlerRef = useRef<() => void>(() => undefined);
+  const retryBundlerRef = useRef<() => void>(() => undefined);
   const restartBeforeExecutionRef = useRef<() => void>(() => undefined);
   const tryCommitRef = useRef<() => boolean>(() => false);
   const handleMessageRef = useRef<(message: SandpackMessage) => void>(
@@ -256,6 +285,13 @@ const SandboxController = ({
   onRestartAfterExecutionRef.current = onRestartAfterExecution;
   onCancellationTimeoutRef.current = onCancellationTimeout;
   onControllerSettledRef.current = onControllerSettled;
+
+  const subscribeRuntime = useCallback((): void => {
+    runtimeListener.current?.();
+    runtimeListener.current = listenRef.current((message) =>
+      handleMessageRef.current(message)
+    );
+  }, []);
 
   const clearAllTimers = useCallback((): void => {
     clearTimer(preparationTimer);
@@ -352,6 +388,107 @@ const SandboxController = ({
     [clearOutputBudget, transition]
   );
 
+  const failBundler = useCallback((): void => {
+    clearTimer(bundlerTimer);
+    bundlerDeadline.current = undefined;
+    bundlerRestartQueued.current = false;
+    bootFailed.current = true;
+    const run = lifecycle.current;
+    if (run.phase === 'queued' || run.phase === 'committing') {
+      settle(
+        run,
+        { runToken: run.request.runToken, outcome: 'runtime-unavailable' },
+        'Failed'
+      );
+      return;
+    }
+    onStatusRef.current('Failed');
+  }, [settle]);
+
+  const armBundlerWatchdog = useCallback((): void => {
+    clearTimer(bundlerTimer);
+    const remaining = Math.max(
+      0,
+      (bundlerDeadline.current ?? Date.now() + BUNDLER_ATTEMPT_TIMEOUT_MS) -
+        Date.now()
+    );
+    bundlerTimer.current = window.setTimeout(() => {
+      bundlerTimer.current = undefined;
+      retryBundlerRef.current();
+    }, Math.min(BUNDLER_IDLE_TIMEOUT_MS, remaining));
+  }, []);
+
+  const startBundlerWatchdog = useCallback((): void => {
+    bundlerDeadline.current = Date.now() + BUNDLER_ATTEMPT_TIMEOUT_MS;
+    armBundlerWatchdog();
+  }, [armBundlerWatchdog]);
+
+  const trackBundler = useCallback((pending: Promise<void>): void => {
+    const attempt = ++bundlerAttempt.current;
+    bundlerRun.current = pending;
+    void pending.then(
+      () => {
+        if (
+          attempt === bundlerAttempt.current &&
+          bundlerRun.current === pending
+        ) {
+          bundlerRun.current = undefined;
+          bundlerRestartQueued.current = false;
+        }
+      },
+      () => {
+        if (
+          attempt !== bundlerAttempt.current ||
+          bundlerRun.current !== pending
+        ) {
+          return;
+        }
+        bundlerRun.current = undefined;
+        if (!sessionReady.current && runtimeListener.current) {
+          if (bundlerRestartQueued.current) {
+            bundlerRestartQueued.current = false;
+            runBundlerRef.current();
+          } else {
+            retryBundlerRef.current();
+          }
+        }
+      }
+    );
+  }, []);
+
+  const runBundler = useCallback((): void => {
+    if (bundlerRun.current) {
+      bundlerRestartQueued.current = true;
+      return;
+    }
+    try {
+      trackBundler(sandpack.runSandpack());
+    } catch {
+      retryBundlerRef.current();
+    }
+  }, [sandpack.runSandpack, trackBundler]);
+  runBundlerRef.current = runBundler;
+
+  const retryBundler = useCallback((): void => {
+    if (sessionReady.current) {
+      clearTimer(bundlerTimer);
+      bundlerDeadline.current = undefined;
+      return;
+    }
+    if (bundlerRetries.current > 0) {
+      failBundler();
+      return;
+    }
+    bundlerRetries.current = 1;
+    bootHandled.current = false;
+    bootFailed.current = false;
+    sessionToken.current = undefined;
+    onStatusRef.current('Preparing runtime');
+    startBundlerWatchdog();
+    runBundler();
+  }, [failBundler, runBundler, startBundlerWatchdog]);
+  retryBundlerRef.current = retryBundler;
+
   const restartBeforeExecution = useCallback((): void => {
     const run = lifecycle.current;
     if (run.phase !== 'queued' && run.phase !== 'committing') return;
@@ -365,6 +502,9 @@ const SandboxController = ({
       });
       return;
     }
+    clearTimer(bundlerTimer);
+    bundlerDeadline.current = undefined;
+    bootFailed.current = true;
     onStatusRef.current('Failed');
     onControllerSettledRef.current(run.request, {
       runToken: run.request.runToken,
@@ -378,6 +518,7 @@ const SandboxController = ({
       if (
         lifecycle.current !== run ||
         sessionReady.current ||
+        bundlerTimer.current !== undefined ||
         preparationTimer.current !== undefined
       ) {
         return;
@@ -451,6 +592,12 @@ const SandboxController = ({
     };
     transition(queued);
     onPhaseChangeRef.current(ledger.request.runToken, 'queued');
+    if (bootFailed.current) {
+      bootFailed.current = false;
+      bundlerRetries.current = 0;
+      retryBundlerRef.current();
+      return;
+    }
     if (!tryCommitRef.current()) {
       ensurePreparationWatchdog(queued);
       onStatusRef.current('Preparing runtime');
@@ -469,7 +616,10 @@ const SandboxController = ({
 
       if (relay.kind === 'ready') {
         if (sessionReady.current) return;
+        bootFailed.current = false;
         sessionReady.current = true;
+        clearTimer(bundlerTimer);
+        bundlerDeadline.current = undefined;
         clearTimer(preparationTimer);
         onReadyRef.current(sandboxKeyRef.current);
         queueEligibleRequest();
@@ -569,6 +719,9 @@ const SandboxController = ({
   );
 
   handleMessageRef.current = (message): void => {
+    if (bootFailed.current) return;
+    if (!sessionReady.current) armBundlerWatchdog();
+
     if (message.type === 'fs/change') {
       const run = lifecycle.current;
       if (
@@ -655,12 +808,21 @@ const SandboxController = ({
 
   useEffect(() => {
     onStatusRef.current('Preparing runtime');
-  }, []);
+    startBundlerWatchdog();
+    runBundler();
+    return () => {
+      clearTimer(bundlerTimer);
+      bundlerDeadline.current = undefined;
+    };
+  }, [runBundler, startBundlerWatchdog]);
 
-  useEffect(
-    () => listenRef.current((message) => handleMessageRef.current(message)),
-    []
-  );
+  useEffect(() => {
+    subscribeRuntime();
+    return () => {
+      runtimeListener.current?.();
+      runtimeListener.current = undefined;
+    };
+  }, [subscribeRuntime]);
 
   useEffect(
     () => () => {
@@ -729,6 +891,7 @@ const SandboxController = ({
 export function PlaygroundSandbox({
   children,
   dependencies,
+  warmupImports,
   initialCode,
   theme,
   sandboxKey,
@@ -747,7 +910,7 @@ export function PlaygroundSandbox({
   const onSettledRef = useRef(onSettled);
   runLedgerRef.current = runLedger;
   onSettledRef.current = onSettled;
-  const [{ customSetup, files }] = useState(() => {
+  const [{ customSetup, editorFiles, files }] = useState(() => {
     const sandboxInitialCode = isPlaygroundSourceWithinLimit(initialCode)
       ? initialCode
       : PLAYGROUND_SOURCE_TOO_LARGE_PLACEHOLDER;
@@ -760,6 +923,7 @@ export function PlaygroundSandbox({
         { code, hidden: true },
       ])
     );
+    const indexFile = { code: sandboxInitialCode, active: true } as const;
     return {
       customSetup: {
         entry: '/runner.ts',
@@ -768,17 +932,23 @@ export function PlaygroundSandbox({
           'esbuild-wasm': SANDBOX_ESBUILD_VERSION,
         },
       },
+      editorFiles: { '/index.ts': indexFile },
       files: {
         ...localFiles,
-        '/index.ts': { code: sandboxInitialCode, active: true },
+        '/index.ts': indexFile,
         '/execution.ts': { code: '', hidden: true },
         '/runner.ts': { code: runtimeSource(), hidden: true },
         '/warmup.ts': {
-          code: warmupSource(Object.keys(dependencies)),
+          code: warmupSource(warmupImports),
           hidden: true,
         },
         '/runtime-worker.ts': { code: workerSource(), hidden: true },
-        '/vite.config.js': { code: VITE_CONFIG_SOURCE, hidden: true },
+        '/vite.config.js': {
+          code: viteConfigSource(
+            registryWarmupImports(dependencies, warmupImports)
+          ),
+          hidden: true,
+        },
         '/index.html': {
           code: '<!doctype html><script type="module" src="/runner.ts"></script>',
           hidden: true,
@@ -876,24 +1046,35 @@ export function PlaygroundSandbox({
   );
 
   return (
-    <SandpackProvider
-      template="vite"
-      files={files}
-      customSetup={customSetup}
-      options={SANDBOX_OPTIONS}
-      theme={theme}
-    >
-      <SandboxController
+    <>
+      <SandpackProvider
         key={controllerGeneration}
-        sandboxKey={sandboxKey}
-        runLedger={runLedger}
-        onRestartBeforeExecution={handleRestartBeforeExecution}
-        onRestartAfterExecution={handleRestartAfterExecution}
-        onCancellationTimeout={handleCancellationTimeout}
-        onControllerSettled={handleControllerSettled}
-        {...controllerProps}
-      />
-      {children}
-    </SandpackProvider>
+        className="playground__runtime-provider"
+        template="vite"
+        files={files}
+        customSetup={customSetup}
+        options={SANDBOX_OPTIONS}
+        theme={theme}
+      >
+        <SandboxController
+          sandboxKey={sandboxKey}
+          runLedger={runLedger}
+          onRestartBeforeExecution={handleRestartBeforeExecution}
+          onRestartAfterExecution={handleRestartAfterExecution}
+          onCancellationTimeout={handleCancellationTimeout}
+          onControllerSettled={handleControllerSettled}
+          {...controllerProps}
+        />
+      </SandpackProvider>
+      <SandpackProvider
+        className="playground__editor-provider"
+        template="vite"
+        files={editorFiles}
+        options={SANDBOX_OPTIONS}
+        theme={theme}
+      >
+        {children}
+      </SandpackProvider>
+    </>
   );
 }

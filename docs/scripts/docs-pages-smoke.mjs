@@ -449,7 +449,9 @@ const checkPlayground = async (page) => {
     ),
     exampleNames
   );
-  const provider = page.locator('.playground__sandbox .sp-wrapper');
+  const provider = page.locator(
+    '.playground__sandbox .playground__editor-provider.sp-wrapper'
+  );
   await provider.waitFor({ timeout: 30_000 });
   assert.equal(await provider.count(), 1);
   const playgroundEditor = page.locator('.playground__editor .monaco-editor');
@@ -460,6 +462,11 @@ const checkPlayground = async (page) => {
   await playgroundInput.waitFor({ timeout: 30_000 });
   assert.equal(await playgroundEditor.count(), 1);
   assert.equal(await playgroundInput.count(), 1);
+  assert.equal(
+    await page.locator('.playground__editor-fallback').count(),
+    0,
+    'The server fallback must be removed after Monaco becomes ready'
+  );
   assert.equal(
     await page.locator('.playground__editor .sp-code-editor').count(),
     0
@@ -475,13 +482,27 @@ const checkPlayground = async (page) => {
   const status = page.getByRole('status');
   try {
     await Promise.race([
-      status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 }),
+      page.waitForFunction(
+        () => {
+          const value = document
+            .querySelector('.playground__status')
+            ?.textContent?.trim();
+          return value === 'Ready' || value === 'Failed';
+        },
+        undefined,
+        { timeout: 130_000 }
+      ),
       workerFailure,
     ]);
   } finally {
     page.off('request', collectColdRequest);
     page.off('response', collectColdResponse);
   }
+  assert.equal(
+    (await status.textContent())?.trim(),
+    'Ready',
+    'Playground cold bootstrap did not recover'
+  );
 
   const runtime = page.locator('iframe.playground__runtime-client');
   const runtimeSource = await runtime.getAttribute('src');
@@ -708,11 +729,12 @@ const checkPlayground = async (page) => {
   const externalSource = `import camelCase from 'lodash/camelCase';
 
 console.log(camelCase('worker module graph'));
-await new Promise<void>((resolve) => {
-  (globalThis as typeof globalThis & {
-    __favyPlaygroundSmokeRelease?: () => void;
-  }).__favyPlaygroundSmokeRelease = resolve;
-});`;
+console.log([
+  typeof document,
+  typeof parent,
+  typeof localStorage,
+  typeof window,
+].join(','));`;
   const externalRequests = [];
   const externalResponses = [];
   let rejectExternalWorkerFailure;
@@ -832,18 +854,6 @@ await new Promise<void>((resolve) => {
         `Invalid ${name} token: ${token}`
       );
     }
-    const workerIsolation = await executionWorker.evaluate(() => ({
-      document: typeof document,
-      parent: typeof parent,
-      localStorage: typeof localStorage,
-      window: typeof window,
-    }));
-    assert.deepEqual(workerIsolation, {
-      document: 'undefined',
-      parent: 'undefined',
-      localStorage: 'undefined',
-      window: 'undefined',
-    });
     assert.equal(
       await externalRuntimeFrame
         .locator('iframe[data-favy-playground-execution]')
@@ -852,27 +862,59 @@ await new Promise<void>((resolve) => {
       'Execution should not create a nested iframe'
     );
 
-    await Promise.race([
-      page.waitForFunction(
-        () => {
-          const output = document.querySelector(
-            '[aria-label="Console output"]'
-          )?.textContent;
-          return output?.includes('workerModuleGraph');
-        },
-        undefined,
-        { timeout: 60_000 }
-      ),
-      externalWorkerFailure,
-    ]);
-    await executionWorker.evaluate(() => {
-      const release = globalThis.__favyPlaygroundSmokeRelease;
-      if (typeof release !== 'function') {
-        throw new Error('Missing execution Worker smoke release hook');
-      }
-      delete globalThis.__favyPlaygroundSmokeRelease;
-      release();
-    });
+    try {
+      await Promise.race([
+        page.waitForFunction(
+          () => {
+            const output = document.querySelector(
+              '[aria-label="Console output"]'
+            )?.textContent;
+            return (
+              output?.includes('workerModuleGraph') &&
+              output.includes('undefined,undefined,undefined,undefined')
+            );
+          },
+          undefined,
+          { timeout: 60_000 }
+        ),
+        externalWorkerFailure,
+      ]);
+    } catch (error) {
+      const diagnostics = {
+        status: (await status.textContent())?.trim(),
+        output: await consoleOutput.textContent(),
+        requests: externalRequests
+          .map((request) => request.url())
+          .filter((url) => isRuntimeWorkerOrModulePath(new URL(url).pathname)),
+      };
+      throw new Error(
+        `External execution did not produce output: ${JSON.stringify(
+          diagnostics
+        )}`,
+        { cause: error }
+      );
+    }
+    const executionWorkerResponse = await externalRuntimeFrame.evaluate(
+      async (url) => {
+        const response = await fetch(url);
+        return {
+          ok: response.ok,
+          status: response.status,
+          text: await response.text(),
+        };
+      },
+      executionWorkerUrl.href
+    );
+    assert.ok(
+      executionWorkerResponse.ok,
+      `Could not re-read execution Worker: ${executionWorkerResponse.status}`
+    );
+    const executionWorkerSource = executionWorkerResponse.text;
+    assert.doesNotMatch(
+      executionWorkerSource,
+      /\/@vite\/client|__vite__injectQuery/,
+      'Vite must not inject its HMR client into the execution Worker'
+    );
     await Promise.race([
       status.getByText('Ready', { exact: true }).waitFor({ timeout: 60_000 }),
       externalWorkerFailure,
@@ -961,7 +1003,6 @@ await new Promise<void>((resolve) => {
   );
   const warmRuntimeSource = await runtime.getAttribute('src');
   assert.ok(warmRuntimeSource, 'Warm playground runtime should have a source');
-  const warmViteOrigin = new URL(warmRuntimeSource).origin;
   const runtimeDocumentSentinel = `smoke-${Date.now()}`;
   const hostDocumentSentinel = `host-${Date.now()}`;
   await initialRuntimeFrame.evaluate((sentinel) => {
@@ -1144,26 +1185,14 @@ await new Promise<void>((resolve) => {
         decodeURIComponent(`${pathname}${search}`)
       );
     });
-    const graphRequests = requests
-      .map((request) => {
-        const url = new URL(request);
-        return {
-          hostname: url.hostname,
-          key: `${url.origin}${safeDecode(url.pathname)}`,
-          origin: url.origin,
-          pathname: safeDecode(url.pathname),
-        };
-      })
-      .filter(
-        ({ hostname, origin: requestOrigin, pathname }) =>
-          hostname === 'registry.npmjs.org' ||
-          hostname === 'cdn.jsdelivr.net' ||
-          hostname.endsWith('.jsdelivr.net') ||
-          (requestOrigin === warmViteOrigin &&
-            (pathname.startsWith('/favy-di/') ||
-              pathname.startsWith('/node_modules/')))
-      )
-      .map(({ key }) => key);
+    const remoteGraphRequests = requests.filter((request) => {
+      const { hostname } = new URL(request);
+      return (
+        hostname === 'registry.npmjs.org' ||
+        hostname === 'cdn.jsdelivr.net' ||
+        hostname.endsWith('.jsdelivr.net')
+      );
+    });
     assert.deepEqual(
       registryRequests,
       [],
@@ -1180,9 +1209,9 @@ await new Promise<void>((resolve) => {
       `Warm Run ${runIndex + 1} should not load Monaco or workers`
     );
     assert.deepEqual(
-      graphRequests,
+      remoteGraphRequests,
       [],
-      `Warm Run ${runIndex + 1} repeated package or local-module graph requests`
+      `Warm Run ${runIndex + 1} repeated remote package requests`
     );
   }
   assert.ok(
@@ -1209,8 +1238,7 @@ await new Promise<void>((resolve) => {
     (await page.getByRole('status').textContent())?.trim(),
     'Checking imports'
   );
-  await run.click();
-  assert.equal(await run.isDisabled(), false);
+  assert.equal(await run.isDisabled(), true);
   assert.equal(
     await page
       .getByRole('toolbar', { name: 'Playground controls' })

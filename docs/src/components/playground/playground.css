@@ -324,6 +324,10 @@ astro-island[ssr] .playground .sp-syntax-comment {
   display: none;
 }
 
+.playground__sandbox .playground__runtime-provider {
+  display: none;
+}
+
 .playground__editor > :is(.sp-stack, section),
 .playground__console > .sp-stack {
   block-size: 100%;

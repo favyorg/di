@@ -15,6 +15,7 @@ import {
 import {
   dependencySignature,
   resolvePlaygroundDependencies,
+  resolvePlaygroundWarmupImports,
   type PlaygroundDependencies,
 } from './playground-dependencies';
 import {
@@ -55,6 +56,7 @@ type DeferredScan = Readonly<{
 
 type Drafts = Record<PlaygroundExampleId, string>;
 type DependencyMap = Record<PlaygroundExampleId, PlaygroundDependencies>;
+type WarmupImportMap = Record<PlaygroundExampleId, readonly string[]>;
 type ResetGenerations = Record<PlaygroundExampleId, number>;
 type ImportBlockStatus = 'Checking imports' | `Unsupported import: ${string}`;
 type ImportBlockMap = Partial<Record<PlaygroundExampleId, ImportBlockStatus>>;
@@ -86,6 +88,14 @@ const initialDependencies = (): DependencyMap =>
     playgroundExamples.map(({ id, source }) => [id, dependenciesFor(source)])
   ) as DependencyMap;
 
+const initialWarmupImports = (): WarmupImportMap =>
+  Object.fromEntries(
+    playgroundExamples.map(({ id, source }) => [
+      id,
+      resolvePlaygroundWarmupImports(source),
+    ])
+  ) as WarmupImportMap;
+
 const initialResetGenerations = (): ResetGenerations =>
   Object.fromEntries(
     playgroundExamples.map(({ id }) => [id, 0])
@@ -106,8 +116,25 @@ const formatConsoleValue = (value: unknown): string => {
   }
 };
 
-const keyFor = (dependencies: PlaygroundDependencies): string =>
-  dependencySignature(dependencies);
+const keyFor = (
+  dependencies: PlaygroundDependencies,
+  warmupImports: readonly string[]
+): string => {
+  const packages = Object.keys(dependencies);
+  const packageSet = new Set(packages);
+  const importSet = new Set(warmupImports);
+  return [
+    dependencySignature(dependencies),
+    ...packages
+      .filter((name) => !importSet.has(name))
+      .map((name) => `no-root:${name}`),
+    ...warmupImports
+      .filter((specifier) => !packageSet.has(specifier))
+      .map((specifier) => `import:${specifier}`),
+  ]
+    .filter(Boolean)
+    .join('|');
+};
 
 const documentTheme = (): PlaygroundTheme =>
   typeof document !== 'undefined' &&
@@ -119,8 +146,13 @@ export function Playground(): JSX.Element {
   const [selectedId, setSelectedId] = useState<PlaygroundExampleId>('basic');
   const [drafts, setDrafts] = useState<Drafts>(initialDrafts);
   const [detectedDependencies] = useState<DependencyMap>(initialDependencies);
+  const [detectedWarmupImports] =
+    useState<WarmupImportMap>(initialWarmupImports);
   const [dependencies, setDependencies] =
     useState<DependencyMap>(detectedDependencies);
+  const [warmupImports, setWarmupImports] = useState<WarmupImportMap>(
+    detectedWarmupImports
+  );
   const [resetGeneration, setResetGeneration] = useState<ResetGenerations>(
     initialResetGenerations
   );
@@ -142,15 +174,20 @@ export function Playground(): JSX.Element {
   const runRequestRef = useRef(runRequest);
   const selectedIdRef = useRef(selectedId);
   const dependenciesRef = useRef(dependencies);
+  const warmupImportsRef = useRef(warmupImports);
   const readySandboxKeyRef = useRef<string>();
   const importsBlockedRef = useRef(importsBlocked);
   const importBlocksRef = useRef<ImportBlockMap>({});
   runRequestRef.current = runRequest;
   selectedIdRef.current = selectedId;
   dependenciesRef.current = dependencies;
+  warmupImportsRef.current = warmupImports;
   importsBlockedRef.current = importsBlocked;
 
-  const sandboxKey = keyFor(dependencies[selectedId]);
+  const sandboxKey = keyFor(
+    dependencies[selectedId],
+    warmupImports[selectedId]
+  );
   const sandboxKeyRef = useRef(sandboxKey);
   if (sandboxKeyRef.current !== sandboxKey) {
     sandboxKeyRef.current = sandboxKey;
@@ -259,17 +296,24 @@ export function Playground(): JSX.Element {
     }
   }, []);
 
-  const updateDependencies = useCallback(
+  const updateSandboxPlan = useCallback(
     (
       updateSelectedId: PlaygroundExampleId,
-      nextDependencies: PlaygroundDependencies
+      nextDependencies: PlaygroundDependencies,
+      nextWarmupImports: readonly string[]
     ) => {
-      const next = {
+      const nextDependenciesByExample = {
         ...dependenciesRef.current,
         [updateSelectedId]: nextDependencies,
       };
-      dependenciesRef.current = next;
-      setDependencies(next);
+      const nextWarmupImportsByExample = {
+        ...warmupImportsRef.current,
+        [updateSelectedId]: nextWarmupImports,
+      };
+      dependenciesRef.current = nextDependenciesByExample;
+      warmupImportsRef.current = nextWarmupImportsByExample;
+      setDependencies(nextDependenciesByExample);
+      setWarmupImports(nextWarmupImportsByExample);
     },
     []
   );
@@ -296,9 +340,12 @@ export function Playground(): JSX.Element {
       delete importBlocksRef.current[scanSelectedId];
       importsBlockedRef.current = false;
       setImportsBlocked(false);
+      const nextWarmupImports = resolvePlaygroundWarmupImports(code);
       if (
         dependencySignature(resolution.dependencies) ===
-        dependencySignature(dependenciesRef.current[scanSelectedId])
+          dependencySignature(dependenciesRef.current[scanSelectedId]) &&
+        JSON.stringify(nextWarmupImports) ===
+          JSON.stringify(warmupImportsRef.current[scanSelectedId])
       ) {
         setStatus(
           readySandboxKeyRef.current === sandboxKeyRef.current
@@ -308,10 +355,14 @@ export function Playground(): JSX.Element {
         return;
       }
       captureEditorForRemount();
-      updateDependencies(scanSelectedId, resolution.dependencies);
+      updateSandboxPlan(
+        scanSelectedId,
+        resolution.dependencies,
+        nextWarmupImports
+      );
       setStatus('Preparing dependencies');
     },
-    [captureEditorForRemount, updateDependencies]
+    [captureEditorForRemount, updateSandboxPlan]
   );
 
   const handleCodeChange = useCallback(
@@ -373,7 +424,10 @@ export function Playground(): JSX.Element {
           ? SOURCE_TOO_LARGE_STATUS
           : importBlock ??
               (readySandboxKeyRef.current ===
-              keyFor(dependenciesRef.current[nextId])
+              keyFor(
+                dependenciesRef.current[nextId],
+                warmupImportsRef.current[nextId]
+              )
                 ? 'Ready'
                 : 'Preparing runtime')
       );
@@ -395,18 +449,23 @@ export function Playground(): JSX.Element {
         ...current,
         [resetId]: playgroundExampleById[resetId].source,
       }));
-      updateDependencies(resetId, detectedDependencies[resetId]);
+      updateSandboxPlan(
+        resetId,
+        detectedDependencies[resetId],
+        detectedWarmupImports[resetId]
+      );
       setResetGeneration((current) => ({
         ...current,
         [resetId]: current[resetId] + 1,
       }));
       setStatus(
-        readySandboxKeyRef.current === keyFor(detectedDependencies[resetId])
+        readySandboxKeyRef.current ===
+          keyFor(detectedDependencies[resetId], detectedWarmupImports[resetId])
           ? 'Ready'
           : 'Preparing runtime'
       );
     },
-    [cancelScan, detectedDependencies, updateDependencies]
+    [cancelScan, detectedDependencies, detectedWarmupImports, updateSandboxPlan]
   );
 
   const applyTransition = useCallback(
@@ -517,14 +576,20 @@ export function Playground(): JSX.Element {
     setImportsBlocked(false);
     const currentDependencies = dependenciesRef.current[selectedId];
     const nextDependencies = resolution.dependencies;
+    const currentWarmupImports = warmupImportsRef.current[selectedId];
+    const nextWarmupImports = resolvePlaygroundWarmupImports(code);
     const changed =
       dependencySignature(nextDependencies) !==
-      dependencySignature(currentDependencies);
+        dependencySignature(currentDependencies) ||
+      JSON.stringify(nextWarmupImports) !==
+        JSON.stringify(currentWarmupImports);
     if (changed) {
       captureEditorForRemount();
-      updateDependencies(selectedId, nextDependencies);
+      updateSandboxPlan(selectedId, nextDependencies, nextWarmupImports);
     }
-    const targetKey = changed ? keyFor(nextDependencies) : sandboxKey;
+    const targetKey = changed
+      ? keyFor(nextDependencies, nextWarmupImports)
+      : sandboxKey;
     const nextRunToken = runCounter.current + 1;
     if (!Number.isSafeInteger(nextRunToken)) {
       setStatus('Failed — runtime unavailable');
@@ -555,7 +620,7 @@ export function Playground(): JSX.Element {
     runDisabled,
     sandboxKey,
     selectedId,
-    updateDependencies,
+    updateSandboxPlan,
   ]);
 
   const handleExampleChange = (event: ChangeEvent<HTMLSelectElement>): void =>
@@ -663,6 +728,7 @@ export function Playground(): JSX.Element {
             key={sandboxKey}
             sandboxKey={sandboxKey}
             dependencies={dependencies[selectedId]}
+            warmupImports={warmupImports[selectedId]}
             initialCode={sandboxSource}
             theme={theme}
             runRequest={runRequest}
