@@ -21,7 +21,10 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Getting started',
-          items: [{ label: 'Introduction', slug: 'guides/introduction' }],
+          items: [
+            { label: 'Introduction', slug: 'guides/introduction' },
+            { label: 'Playground', link: '/playground/' },
+          ],
         },
         {
           label: 'Core concepts',
@@ -64,7 +67,7 @@ export default defineConfig({
     tailwind({
       applyBaseStyles: false,
       configFile: fileURLToPath(
-        new URL('./tailwind.config.mjs', import.meta.url),
+        new URL('./tailwind.config.mjs', import.meta.url)
       ),
     }),
     starlightThemeRapide(),
@@ -74,6 +77,11 @@ export default defineConfig({
     rehypePlugins: [rehypeMermaid],
   },
   vite: {
+    resolve: {
+      alias: {
+        path: 'path-browserify',
+      },
+    },
     ssr: {
       noExternal: ['monaco-editor'],
     },

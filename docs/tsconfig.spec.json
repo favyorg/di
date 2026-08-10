@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../dist/out-tsc",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "verbatimModuleSyntax": false,
+    "types": ["jest", "node"]
+  },
+  "include": [
+    "jest.config.ts",
+    "test/**/*.spec.ts",
+    "test/**/*.spec.tsx",
+    "src/**/*.d.ts"
+  ]
+}

@@ -3,13 +3,14 @@ import type { Props } from '@astrojs/starlight/props';
 
 const { entry } = Astro.props;
 const slug = entry.slug;
-const label = slug.startsWith('guides/')
-  ? 'Guide'
-  : slug.startsWith('reference/')
-    ? 'Reference'
-    : slug.includes('transform-')
-      ? 'Advanced'
-      : 'Core concept';
+const label =
+  slug.startsWith('guides/')
+    ? 'Guide'
+    : slug.startsWith('reference/')
+      ? 'Reference'
+      : slug.includes('transform-')
+        ? 'Advanced'
+        : 'Core concept';
 ---
 
 <header class="docs-page-title">

@@ -55,7 +55,7 @@
     },
     "@nxtensions/astro:build": {
       "inputs": ["production", "^production"],
-      "outputs": ["{workspaceRoot}/dist/{projectRoot}"],
+      "outputs": ["{projectRoot}/dist"],
       "cache": true
     },
     "@nxtensions/astro:check": {

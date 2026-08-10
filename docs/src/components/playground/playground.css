@@ -1,0 +1,407 @@
+.playground {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: 1rem;
+  max-inline-size: 100%;
+  margin: 0;
+}
+
+.playground,
+.playground *,
+.playground__desktop-nav,
+.playground__example-list,
+.playground__mobile-nav,
+.playground__workspace,
+.playground__toolbar,
+.playground__sandbox,
+.playground__region,
+.playground__editor,
+.playground__console {
+  min-inline-size: 0;
+}
+
+.playground *,
+.playground *::before,
+.playground *::after {
+  box-sizing: border-box;
+}
+
+.playground__desktop-nav {
+  align-content: start;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--playground-border);
+  border-radius: var(--playground-radius-lg);
+  background: var(--playground-surface-raised);
+  box-shadow: var(--playground-shadow);
+}
+
+.playground__desktop-nav h2,
+.playground__region h2 {
+  margin: 0;
+  color: var(--playground-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.playground__example-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.playground__example {
+  inline-size: 100%;
+  padding: 0.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--playground-radius-md);
+  color: var(--playground-text);
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.playground__example:is(:hover, [aria-pressed='true']) {
+  border-color: var(--playground-accent);
+  background: var(--playground-accent-soft);
+}
+
+.playground__example-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-weight: 700;
+}
+
+.playground__selected-marker {
+  display: inline-grid;
+  flex: 0 0 1.5rem;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  place-items: center;
+  border: 1px solid var(--playground-accent);
+  border-radius: 999px;
+  background: var(--playground-accent-soft);
+  font-size: 0.875rem;
+}
+
+.playground__example-description {
+  display: block;
+  margin-block-start: 0.35rem;
+  color: var(--playground-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.playground__mobile-nav {
+  gap: 0.4rem;
+}
+
+.playground__mobile-nav label {
+  color: var(--playground-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.playground__mobile-nav select {
+  inline-size: 100%;
+  max-inline-size: 100%;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--playground-border);
+  border-radius: var(--playground-radius-md);
+  color: var(--playground-text);
+  background: var(--playground-surface-raised);
+  font: inherit;
+}
+
+.playground__workspace {
+  overflow: hidden;
+  border: 1px solid var(--playground-border);
+  border-radius: var(--playground-radius-lg);
+  background: var(--playground-surface-raised);
+  box-shadow: var(--playground-shadow);
+}
+
+.playground__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-block-end: 1px solid var(--playground-border);
+  background: var(--playground-surface-raised);
+}
+
+.playground__toolbar button {
+  padding-inline: 1rem;
+  border: 1px solid var(--playground-border);
+  border-radius: var(--playground-radius-md);
+  color: var(--playground-text);
+  background: var(--playground-surface);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.playground__toolbar button[aria-label='Run code'] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border-color: var(--playground-accent);
+  background: var(--playground-accent-soft);
+}
+
+.playground__spinner {
+  flex: 0 0 auto;
+  inline-size: 0.9rem;
+  block-size: 0.9rem;
+  border: 2px solid currentColor;
+  border-block-end-color: transparent;
+  border-radius: 999px;
+  animation: playground-spin 0.7s linear infinite;
+}
+
+@keyframes playground-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.playground__toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.playground__shortcut {
+  margin-inline-start: auto;
+  color: var(--playground-muted);
+  font-size: 0.875rem;
+}
+
+.playground__shortcut kbd {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--playground-border);
+  border-radius: 0.35rem;
+  color: var(--playground-text);
+  background: var(--playground-surface);
+  font: inherit;
+}
+
+.playground__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-block-size: 2.75rem;
+  color: var(--playground-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.playground__status::before {
+  content: '';
+  inline-size: 0.55rem;
+  block-size: 0.55rem;
+  border: 1px solid var(--playground-accent);
+  border-radius: 999px;
+  background: var(--playground-accent-soft);
+}
+
+.playground__toolbar[aria-busy='true'] .playground__status::before {
+  background: var(--playground-accent);
+}
+
+.playground__sandbox,
+.playground__sandbox .sp-wrapper,
+.playground__sandbox .sp-layout,
+.playground__sandbox .sp-stack,
+.playground__region,
+.playground__editor,
+.playground__console,
+.playground__editor .sp-code-editor,
+.playground__editor .monaco-editor,
+.playground__editor .monaco-editor .overflow-guard,
+.playground__console .sp-console-list {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.playground__sandbox .sp-wrapper {
+  display: grid;
+}
+
+.playground__sandbox :is(.sp-wrapper, .sp-layout, .sp-stack) {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.playground__region {
+  overflow: hidden;
+  background: var(--playground-surface-raised);
+}
+
+.playground__region + .playground__region {
+  border-block-start: 1px solid var(--playground-border);
+}
+
+.playground__region h2 {
+  padding: 0.7rem 1rem;
+  border-block-end: 1px solid var(--playground-border);
+}
+
+.playground__editor {
+  block-size: 28rem;
+  overflow: hidden;
+}
+
+.playground__editor-fallback {
+  block-size: 100%;
+  overflow: auto;
+  background: var(--playground-surface-raised);
+}
+
+astro-island[ssr] .playground .sp-syntax-plain,
+astro-island[ssr] .playground .sp-syntax-punctuation {
+  color: var(--playground-syntax-plain);
+}
+
+astro-island[ssr] .playground .sp-syntax-keyword {
+  color: var(--playground-syntax-keyword);
+}
+
+astro-island[ssr] .playground .sp-syntax-definition,
+astro-island[ssr] .playground .sp-syntax-property {
+  color: var(--playground-syntax-definition);
+}
+
+astro-island[ssr] .playground .sp-syntax-string {
+  color: var(--playground-syntax-string);
+}
+
+astro-island[ssr] .playground .sp-syntax-comment {
+  color: var(--playground-syntax-comment);
+}
+
+.playground__editor:focus-within {
+  outline: 3px solid
+    color-mix(in srgb, var(--playground-accent) 72%, var(--playground-text));
+  outline-offset: -3px;
+}
+
+.playground__editor .monaco-editor,
+.playground__editor .monaco-editor .margin,
+.playground__editor .monaco-editor-background {
+  background: var(--playground-surface-raised);
+}
+
+.playground__console {
+  block-size: 12rem;
+  overflow: hidden;
+}
+
+.playground__console-output {
+  block-size: 100%;
+  overflow: auto;
+  padding: 0.875rem 1rem;
+  color: var(--playground-text);
+  font-family: var(--playground-font-mono);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.playground__console-empty {
+  color: var(--playground-muted);
+}
+
+.playground__runtime-client {
+  display: none;
+}
+
+.playground__sandbox .playground__runtime-provider {
+  display: none;
+}
+
+.playground__editor > :is(.sp-stack, section),
+.playground__console > .sp-stack {
+  block-size: 100%;
+}
+
+.playground__editor .sp-code-editor,
+.playground__console .sp-console-list {
+  min-block-size: 0;
+  overflow: auto;
+}
+
+.playground__console .sp-console-list {
+  flex: 1 1 auto;
+}
+
+.playground :is(button, select) {
+  min-inline-size: 2.75rem;
+  min-block-size: 2.75rem;
+}
+
+.playground :is(button, select):focus-visible {
+  outline: 3px solid
+    color-mix(in srgb, var(--playground-accent) 72%, var(--playground-text));
+  outline-offset: 2px;
+}
+
+@media (max-width: 47.999rem) {
+  .playground {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .playground__desktop-nav {
+    display: none;
+  }
+
+  .playground__mobile-nav {
+    display: grid;
+  }
+
+  .playground__toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .playground__toolbar button {
+    inline-size: 100%;
+  }
+
+  .playground__shortcut {
+    margin-inline-start: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .playground__editor {
+    block-size: 24rem;
+  }
+
+  .playground__console {
+    block-size: 10rem;
+  }
+}
+
+@media (min-width: 48rem) {
+  .playground__desktop-nav {
+    display: grid;
+  }
+
+  .playground__mobile-nav {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playground__spinner {
+    animation: none;
+  }
+}

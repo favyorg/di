@@ -21,6 +21,14 @@
     },
     "sync": {
       "executor": "@nxtensions/astro:sync"
+    },
+    "smoke": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["build"],
+      "options": {
+        "command": "npm --prefix docs run smoke"
+      }
     }
   },
   "tags": []
