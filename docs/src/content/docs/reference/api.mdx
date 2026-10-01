@@ -69,6 +69,7 @@ const Greeting = Module<GreetingDeps>()(
   'Greeting',
   ({ subject, Module }) => Module.name.toString() + ': ' + subject,
 );
+type GreetingLive = typeof Greeting.Live;
 
 console.log(Greeting({ subject: 'hello' })); // "Greeting: hello"
 console.log(Greeting.name); // "Greeting"`} />
@@ -90,7 +91,12 @@ caller does not supply that generated key.
 ### `Live<T>`
 
 Extracts a module's remaining requirements and adds its result under its
-declared key.
+declared key. For a concrete module, declare `type FooLive = typeof Foo.Live`
+immediately below it. The exported `Live<typeof Foo>` helper computes the same
+type and remains useful in generic utilities.
+
+`.Live` is a type-only marker. A TypeScript type query does not evaluate the
+property; reading `Foo.Live` at runtime throws.
 
 ```ts
 export type Live<T> = T extends {
@@ -105,18 +111,19 @@ export type Live<T> = T extends {
 transitive requirements without recursively expanding the callable and its
 `.provide()` method.
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 const Database = Module<{ url: string }>()('Database', ({ url }) => ({ url }));
-type DatabaseLive = Live<typeof Database>;
+type DatabaseLive = typeof Database.Live;
 
 const Repository = Module<DatabaseLive>()(
   'Repository',
   ({ Database }) => Database.url,
 );
-type RepositoryLive = Live<typeof Repository>;
+type RepositoryLive = typeof Repository.Live;
 
 const App = Module<RepositoryLive>()('App', ({ Repository }) => Repository);
+type AppLive = typeof App.Live;
 
 console.log(App({ url: 'memory://db', Database, Repository }));
 // "memory://db"`} />
@@ -219,6 +226,7 @@ const SingletonModule = makeModule({ cache: 'module' });
 
 let runs = 0;
 const Counter = SingletonModule()('Counter', () => ++runs);
+type CounterLive = typeof Counter.Live;
 
 console.log(Counter()); // 1
 console.log(Counter()); // 1
@@ -232,7 +240,14 @@ console.log(Counter()); // 2`} />
   context for the next root call.
 - `'module'` stores results by module name in the factory until
   `flushCache()`.
-- `'none'` evaluates a provider each time its dependency field is read.
+- `'none'` invokes a provider each time its dependency field is read.
+
+These binding policies belong to the factory of the root module or the module
+whose `.provide()` registers that key. Forwarded dependencies keep their
+original binding policy. A provider's own `'module'` cache is independent and
+can return a cached result even through a `'none'` binding. See
+[Mixing factories](/module/cache/#mixing-factories) for an example and flush
+behavior.
 
 With `lazy: false`, providers present on the root map are read eagerly before
 the module callback. Raw dependency values are never invoked. With
@@ -430,6 +445,7 @@ type Exact<D, P> = P & Record<Exclude<Keys<P>, Keys<D>>, never>;
 export type TModule<K extends PropertyKey, D, R, C = D> = {
   (...args: Args<D, C>): R;
   readonly name: K;
+  readonly Live: ModuleDeps<D> & { [P in K]: R };
   readonly [__deps__]: Brand<ModuleDeps<D>, R>;
 
   provide<const P extends Partial<Deps<D, C>> = {}>(
@@ -447,9 +463,12 @@ export type TModule<K extends PropertyKey, D, R, C = D> = {
   provider is resolved even when the field's declared type is broad such as
   `unknown` or `any`.
 - A provider's remaining dependencies must fit a compatible branch of the
-  consumer context. `Live<typeof Provider>` is the usual way to carry those
+  consumer context. `typeof Provider.Live` is the usual way to carry those
   transitive requirements.
 - `name` is the readonly declared string, number, or symbol key.
+- `Live` exposes the remaining application dependencies and named result for
+  `typeof SomeModule.Live` type queries. Runtime reads throw; use a module call
+  to obtain its result.
 - `.provide()` returns an isolated, still-provider-capable module. Required
   keys present on the partial's type are removed from the next call signature;
   optional keys do not prove that a required dependency was bound. Like the
@@ -459,8 +478,12 @@ export type TModule<K extends PropertyKey, D, R, C = D> = {
   calls retain branch-specific required fields, and binding a discriminant can
   narrow the remaining branch. The types deliberately do not attempt exhaustive
   diagnostics for every union-valued or structurally widened partial.
-- Bound values take precedence over the root map. A later `.provide()` call
-  overrides an earlier bound value without mutating the original module.
+- Bound values take precedence over the root map. Once a bound key is removed
+  from the remaining dependency type, TypeScript rejects binding it again with
+  `.provide()`. To choose a different value, create another partial from the
+  original module. At runtime, if the same key is supplied in successive
+  `.provide()` calls (for example, from JavaScript), the later value wins
+  without mutating the earlier module.
 
 At runtime, both direct dependency maps and `.provide()` maps may be any
 non-null object. Only their own keys are consumed.
@@ -471,9 +494,12 @@ const Add: TModule<'Add', { left: number; right: number }, number> = Module<{
   left: number;
   right: number;
 }>()('Add', ({ left, right }) => left + right);
+type AddLive = typeof Add.Live;
 
 const WithLeft = Add.provide({ left: 2 });
+type WithLeftLive = typeof WithLeft.Live;
 const ReadyAdd = WithLeft.provide({ right: 3 });
+type ReadyAddLive = typeof ReadyAdd.Live;
 
 console.log(ReadyAdd()); // 5
 console.log(ReadyAdd.name); // "Add"`} />

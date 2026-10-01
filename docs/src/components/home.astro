@@ -1,22 +1,13 @@
 ---
+import greetingSource from '../examples/greeting.ts?raw';
+
 const installCommand = 'npm install @favy/di';
-const quickStart = [
-  "import { Module, type Live } from '@favy/di';",
-  '',
-  "const Clock = Module()('Clock', () => ({",
-  '  now: () => new Date(),',
-  '}));',
-  'type ClockLive = Live<typeof Clock>;',
-  '',
-  'const Greeting = Module<ClockLive>()(',
-  "  'Greeting',",
-  '  ({ Clock }) => ({',
-  "    message: () => 'Hello at ' + Clock.now().toISOString(),",
-  '  }),',
-  ');',
-  '',
-  'Greeting({ Clock }).message();',
-].join('\n');
+// Present the public import and direct call from the executable example.
+const quickStart = greetingSource
+  .replace("'../../../di/src'", "'@favy/di'")
+  .replace('// prettier-ignore\n', '')
+  .replace('export const runGreeting = () => ', '')
+  .trimEnd();
 
 const proofPoints = [
   { value: '0', label: 'decorators' },
@@ -181,35 +172,50 @@ const paths = [
             <span></span><span></span><span></span>
           </div>
           <span class="panel-file">greeting.ts</span>
-          <button
-            class="copy-button code-copy"
-            type="button"
-            data-copy
-            data-copy-state="idle"
-            data-copy-value={quickStart}
-            aria-label="Copy quick start code"
-            data-copy-success-label="Quick start code copied"
-            data-copy-error-label="Could not copy quick start code"
-            hidden
-          >
-            <svg aria-hidden="true" viewBox="0 0 20 20">
-              <rect x="7" y="7" width="9" height="9" rx="2"></rect>
-              <path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"
-              ></path>
-            </svg>
-            <span data-copy-label aria-live="polite">Copy</span>
-          </button>
+          <div class="panel-actions">
+            <button
+              class="run-button"
+              type="button"
+              data-run-greeting
+              aria-label="Run greeting.ts"
+              aria-controls="greeting-output"
+              hidden
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20">
+                <path d="m6 3 11 7-11 7Z"></path>
+              </svg>
+              <span>Run</span>
+            </button>
+            <button
+              class="copy-button code-copy"
+              type="button"
+              data-copy
+              data-copy-state="idle"
+              data-copy-value={quickStart}
+              aria-label="Copy quick start code"
+              data-copy-success-label="Quick start code copied"
+              data-copy-error-label="Could not copy quick start code"
+              hidden
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20">
+                <rect x="7" y="7" width="9" height="9" rx="2"></rect>
+                <path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"
+                ></path>
+              </svg>
+              <span data-copy-label aria-live="polite">Copy</span>
+            </button>
+          </div>
         </div>
 
         <pre
           class="code-block"
           tabindex="0"
-          aria-label="TypeScript quick start"><code><span class="code-line"><span class="token-keyword">import</span> &#123; <span class="token-type">Module</span>, <span class="token-keyword">type</span> <span class="token-type">Live</span> &#125; <span class="token-keyword">from</span> <span class="token-string">'@favy/di'</span>;</span>
+          aria-label="TypeScript quick start"><code><span class="code-line"><span class="token-keyword">import</span> &#123; <span class="token-type">Module</span> &#125; <span class="token-keyword">from</span> <span class="token-string">'@favy/di'</span>;</span>
 <span class="code-line" />
 <span class="code-line"><span class="token-keyword">const</span> <span class="token-name">Clock</span> = <span class="token-call">Module</span>()(<span class="token-string">'Clock'</span>, () =&gt; (&#123;</span>
 <span class="code-line">  <span class="token-property">now</span>: () =&gt; <span class="token-keyword">new</span> <span class="token-call">Date</span>(),</span>
 <span class="code-line">&#125;));</span>
-<span class="code-line"><span class="token-keyword">type</span> <span class="token-type">ClockLive</span> = <span class="token-type">Live</span>&lt;<span class="token-keyword">typeof</span> <span class="token-name">Clock</span>&gt;;</span>
+<span class="code-line"><span class="token-keyword">type</span> <span class="token-type">ClockLive</span> = <span class="token-keyword">typeof</span> <span class="token-name">Clock</span>.<span class="token-property">Live</span>;</span>
 <span class="code-line" />
 <span class="code-line"><span class="token-keyword">const</span> <span class="token-name">Greeting</span> = <span class="token-call">Module</span>&lt;<span class="token-type">ClockLive</span>&gt;()(</span>
 <span class="code-line">  <span class="token-string">'Greeting'</span>,</span>
@@ -217,9 +223,16 @@ const paths = [
 <span class="code-line">    <span class="token-property">message</span>: () =&gt; <span class="token-string">'Hello at '</span> + <span class="token-name">Clock</span>.<span class="token-call">now</span>().<span class="token-call">toISOString</span>(),</span>
 <span class="code-line">  &#125;),</span>
 <span class="code-line">);</span>
+<span class="code-line"><span class="token-keyword">type</span> <span class="token-type">GreetingLive</span> = <span class="token-keyword">typeof</span> <span class="token-name">Greeting</span>.<span class="token-property">Live</span>;</span>
 <span class="code-line" />
 <span class="code-line"><span class="token-call">Greeting</span>(&#123; <span class="token-name">Clock</span> &#125;).<span class="token-call">message</span>();</span></code></pre>
         <span class="scroll-hint" aria-hidden="true">Swipe code →</span>
+
+        <div class="demo-output" data-run-output hidden>
+          <span class="output-label">Output</span>
+          <output id="greeting-output" aria-live="polite" aria-atomic="true"
+          ></output>
+        </div>
 
         <div class="graph-panel">
           <div class="module-graph" aria-hidden="true">
@@ -382,6 +395,26 @@ const paths = [
 </div>
 
 <script>
+  import { runGreeting } from '../examples/greeting';
+
+  const runButton = document.querySelector<HTMLButtonElement>(
+    '[data-run-greeting]',
+  );
+  const outputPanel = document.querySelector<HTMLElement>('[data-run-output]');
+  const output = document.querySelector<HTMLOutputElement>('#greeting-output');
+
+  if (runButton && outputPanel && output) {
+    runButton.hidden = false;
+    runButton.addEventListener('click', () => {
+      outputPanel.hidden = false;
+      try {
+        output.value = runGreeting();
+      } catch (error) {
+        output.value = `Error: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    });
+  }
+
   const copyTimers = new WeakMap<HTMLButtonElement, number>();
 
   for (const button of document.querySelectorAll<HTMLButtonElement>(
@@ -653,7 +686,8 @@ const paths = [
     white-space: nowrap;
   }
 
-  .copy-button {
+  .copy-button,
+  .run-button {
     display: inline-flex;
     min-width: 4.65rem;
     min-height: 2.75rem;
@@ -674,11 +708,13 @@ const paths = [
       border-color 160ms ease;
   }
 
-  .copy-button[hidden] {
+  .copy-button[hidden],
+  .run-button[hidden] {
     display: none;
   }
 
-  .copy-button:hover {
+  .copy-button:hover,
+  .run-button:hover {
     color: #fff;
     background: rgba(255, 255, 255, 0.09);
     border-color: rgba(173, 183, 222, 0.32);
@@ -694,7 +730,8 @@ const paths = [
     border-color: rgba(255, 181, 181, 0.34);
   }
 
-  .copy-button svg {
+  .copy-button svg,
+  .run-button svg {
     width: 0.9rem;
     height: 0.9rem;
     fill: none;
@@ -754,6 +791,44 @@ const paths = [
     min-width: 4.3rem;
     min-height: 2.75rem;
     justify-self: end;
+  }
+
+  .panel-actions {
+    display: flex;
+    gap: 8px;
+    justify-self: end;
+  }
+
+  .run-button {
+    min-width: 64px;
+    min-height: 44px;
+    color: #a9dd9d;
+  }
+
+  .run-button svg {
+    fill: currentColor;
+    stroke: none;
+  }
+
+  .demo-output {
+    padding: 16px;
+    border-top: 1px solid rgba(159, 169, 214, 0.14);
+    background: rgba(255, 255, 255, 0.025);
+  }
+
+  .output-label {
+    display: block;
+    margin-bottom: 8px;
+    color: #8f97ae;
+    font: 600 11px/1.5 var(--__sl-font);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .demo-output output {
+    color: #a9dd9d;
+    font: 500 12px/1.7 var(--__sl-font-mono);
+    overflow-wrap: anywhere;
   }
 
   .code-block {
@@ -1328,6 +1403,15 @@ const paths = [
   }
 
   @media (max-width: 30rem) {
+    .panel-bar {
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+
+    .window-dots {
+      display: none;
+    }
+
     .workbench-grid {
       padding: 1.25rem;
     }

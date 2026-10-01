@@ -7,6 +7,11 @@ import {
 } from '../src/components/playground/playground-sandbox';
 
 jest.mock(
+  '../../di/src/lib/context.ts?raw',
+  () => ({ __esModule: true, default: 'export const context = {};' }),
+  { virtual: true }
+);
+jest.mock(
   '../../di/src/lib/hkt.ts?raw',
   () => ({ __esModule: true, default: 'export type HKT = unknown;' }),
   { virtual: true }

@@ -1,35 +1,18 @@
-import { useEffect, useId, useMemo, useState } from 'react';
-import { TypeScriptEditor } from './typescript-editor';
+import { CodeEditor } from './code-editor';
+import { EditorFiles, type ExampleFile } from './editor-files';
 
-export function Editor({ code }: { code: string }) {
-  const editorId = useId();
-  const [value, setValue] = useState(code);
-  const modelPath = useMemo(
-    () => `file:///docs/example-${encodeURIComponent(editorId)}.ts`,
-    [editorId]
-  );
+type EditorProps =
+  | { code: string; files?: never; entry?: never }
+  | {
+      code?: never;
+      files: readonly [ExampleFile, ...ExampleFile[]];
+      entry?: string;
+    };
 
-  useEffect(() => {
-    setValue(code);
-  }, [code]);
-
-  const fallback = (
-    <pre
-      aria-label="TypeScript example"
-      style={{ maxWidth: '100%', overflowX: 'auto' }}
-    >
-      <code>{code}</code>
-    </pre>
-  );
-
-  return (
-    <TypeScriptEditor
-      value={value}
-      onChange={setValue}
-      height={code.split('\n').length * 27}
-      modelPath={modelPath}
-      ariaLabel="TypeScript example"
-      fallback={fallback}
-    />
+export function Editor(props: EditorProps) {
+  return props.files ? (
+    <EditorFiles files={props.files} entry={props.entry} />
+  ) : (
+    <CodeEditor code={props.code} />
   );
 }

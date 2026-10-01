@@ -32,5 +32,4 @@ export const Posts = Module<ApiLive & ButtonLive>()(
     };
   }
 );
-
 export type PostsLive = typeof Posts.Live;

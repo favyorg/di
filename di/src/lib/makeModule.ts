@@ -1,5 +1,6 @@
 /* eslint-disable */
 import type { HKT, Kind } from './hkt';
+import { contextTarget, createContext } from './context';
 const __deps__ = Symbol('Deps');
 type Key = PropertyKey;
 // D = dependencies, C = full context, P = provided values, R = result.
@@ -26,6 +27,7 @@ type Exact<D, P> = P & Record<Exclude<Keys<P>, Keys<D>>, never>;
 export type TModule<N extends Key, D, R, C = D> = {
   (...args: Args<D, C>): R;
   readonly name: N;
+  readonly Live: ModuleDeps<D> & { [K in N]: R };
   readonly [__deps__]: Brand<ModuleDeps<D>, R>;
   provide<const P extends Partial<Deps<D, C>> = {}>(
     ...args: {} extends D ? [deps?: Exact<D, P>] : [deps: Exact<D, P>]
@@ -94,22 +96,14 @@ type Make = {
 export const withModuleName = <D extends object, const N extends Key>(deps: D, name: N):
   Each<D, 'Module'> & Named<N> =>
   Object.assign(deps, { Module: { name } }) as any;
-// Getters push and restore this shared state synchronously during nested calls.
+// Getters identify internal provider calls without retaining state between reads.
 let activeContext: object | undefined;
-let activeMetadata: object | undefined;
 const own = Object.hasOwn;
 const define = Object.defineProperty;
 const getDescriptor = Object.getOwnPropertyDescriptor;
-const keys = (value: object) => {
-  const result: Key[] = Object.getOwnPropertyNames(value);
-  result.push(...Object.getOwnPropertySymbols(value));
-  return result;
-};
+const keys = Reflect.ownKeys;
 const hide = { enumerable: false };
 const show = { enumerable: true };
-const ADD = 0;
-const KEEP = 1;
-const REPLACE = 2;
 const set = (target: any, key: Key, value: any) =>
   define(target, key, { value, writable: true, enumerable: true, configurable: true });
 const copy = (target: any, source: object) => {
@@ -128,44 +122,53 @@ const makeModuleImplementation = (options: any = {}) => {
     transformInput: input = withModuleName,
     transformOutput: output = (value: any) => value,
   } = options;
-  const usesDefaultInput = input === withModuleName;
   let moduleCache: any = Object.create(null);
   const createModule = () => (name: Key, fn: (deps: any) => any) => {
-    const register = (target: any, source: object, mode = ADD) => {
+    const register = (target: any, source: object, keep = false) => {
       for (const key of keys(source)) {
-        if (mode === KEEP && own(target, key)) continue;
+        if (keep && own(target, key)) continue;
         const dep = (source as any)[key];
         if (typeof dep !== 'function' || !own(dep, __deps__)) {
-          if (mode === REPLACE) set(target, key, dep);
-          else target[key] = dep;
+          set(target, key, dep);
           continue;
         }
         let busy = false;
         let wrote = false;
-        const resolve = () => {
+        let hasValue = false;
+        let value: any;
+        const storeValue = (next: any) => {
+          // Sealed accessors retain their descriptor and cache inside the binding.
+          if (getDescriptor(target, key)?.configurable === false) {
+            value = next;
+            hasValue = true;
+          } else set(target, key, next);
+        };
+        const resolve = function (this: object) {
+          if (hasValue) return value;
           if (busy) throw new Error(`Circular dependency: ${String(key)}`);
           busy = true;
           wrote = false;
-          define(target, key, hide);
           let done = false;
           const previousContext = activeContext;
-          activeContext = target;
+          activeContext = this;
           try {
-            const result = dep.call(target);
+            if (getDescriptor(target, key)?.configurable) define(target, key, hide);
+            const result = dep.call(this);
             done = true;
-            if (cache !== 'none' && !wrote) set(target, key, result);
+            if (cache !== 'none' && !wrote) storeValue(result);
             return result;
           } finally {
             activeContext = previousContext;
             busy = false;
             if ((!done || cache === 'none') &&
-              getDescriptor(target, key)?.get === resolve)
+              getDescriptor(target, key)?.get === resolve &&
+              getDescriptor(target, key)?.configurable)
               define(target, key, show);
           }
         };
         define(target, key, {
           get: resolve, enumerable: true, configurable: true,
-          set(value) { wrote = busy; set(target, key, value); },
+          set(value) { wrote = busy; storeValue(value); },
         });
       }
     };
@@ -174,49 +177,17 @@ const makeModuleImplementation = (options: any = {}) => {
         const isRoot = !activeContext || this !== activeContext;
         if (isRoot && deps !== undefined) check(deps);
         if (cache === 'module' && own(moduleCache, name)) return moduleCache[name];
-        const context: any = isRoot ? Object.create(null) : this;
-        const previousMetadata = activeMetadata;
-        const restoreModuleByValue = !isRoot && !provided && usesDefaultInput &&
-          !!previousMetadata && context.Module === previousMetadata;
-        const savedDescriptors = !isRoot && provided
-          ? keys(provided).map((key) => [key, getDescriptor(context, key)] as const)
-          : undefined;
-        const previousModuleDescriptor = !isRoot && !restoreModuleByValue
-          ? getDescriptor(context, 'Module') : undefined;
-        let currentMetadata: object | undefined;
-        if (!usesDefaultInput) activeMetadata = undefined;
-        try {
-          if (provided) register(context, provided, isRoot ? ADD : REPLACE);
-          if (isRoot && deps) register(context, deps, provided ? KEEP : ADD);
-          if (!lazy)
-            for (const key of isRoot ? keys(context) : provided ? keys(provided) : [])
-              context[key];
-          let transformedDeps;
-          if (usesDefaultInput) {
-            currentMetadata = { name };
-            context.Module = currentMetadata;
-            transformedDeps = context;
-            activeMetadata = currentMetadata;
-          } else transformedDeps = input(context, name);
-          const result = output(fn(transformedDeps), transformedDeps, isRoot);
-          if (cache === 'module') set(moduleCache, name, result);
-          return result;
-        } finally {
-          activeMetadata = previousMetadata;
-          if (!isRoot) {
-            if (restoreModuleByValue) {
-              if (context.Module === currentMetadata)
-                context.Module = previousMetadata;
-              else set(context, 'Module', previousMetadata);
-            } else if (previousModuleDescriptor)
-              define(context, 'Module', previousModuleDescriptor);
-            else delete context.Module;
-            if (savedDescriptors) for (const [key, property] of savedDescriptors) {
-              if (property) define(context, key, property);
-              else delete context[key];
-            }
-          }
-        }
+        const context: any = createContext(isRoot ? undefined : this);
+        const target = contextTarget(context);
+        if (provided) register(target, provided);
+        if (isRoot && deps) register(target, deps, !!provided);
+        if (!lazy)
+          for (const key of isRoot ? keys(context) : provided ? keys(provided) : [])
+            context[key];
+        const transformedDeps = input(context, name);
+        const result = output(fn(transformedDeps), transformedDeps, isRoot);
+        if (cache === 'module') set(moduleCache, name, result);
+        return result;
       };
       module.provide = (partial?: object) => {
         if (partial === undefined) partial = {};
@@ -228,6 +199,7 @@ const makeModuleImplementation = (options: any = {}) => {
       };
       Object.defineProperties(module, {
         name: { value: name, configurable: true }, [__deps__]: { value: true },
+        Live: { get() { throw new TypeError('Live is type-only; use typeof Module.Live'); } },
       });
       return module;
     };

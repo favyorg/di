@@ -24,6 +24,7 @@ const Message = Module<MessageDeps>()(
   'Message',
   ({ message, Module }) => Module.name.toString() + ': ' + message,
 );
+type MessageLive = typeof Message.Live;
 
 console.log(Message({ message: 'hello' })); // "Message: hello"`} />
 
@@ -46,6 +47,7 @@ const Double = PlainModule<{ value: number }>()(
   'Double',
   ({ value }) => value * 2,
 );
+type DoubleLive = typeof Double.Live;
 
 console.log(Double({ value: 4 })); // 8`} />
 
@@ -61,6 +63,7 @@ const NamedModule = makeModule({
 });
 
 const CurrentName = NamedModule()('CurrentName', ({ Module }) => Module.name);
+type CurrentNameLive = typeof CurrentName.Live;
 
 console.log(CurrentName()); // "CurrentName"`} />
 
@@ -93,6 +96,7 @@ const ReadValue = WrappedModule<{ value: number }>()(
   'ReadValue',
   ({ wrapped }) => wrapped.value,
 );
+type ReadValueLive = typeof ReadValue.Live;
 
 console.log(ReadValue({ value: 42 })); // 42`} />
 

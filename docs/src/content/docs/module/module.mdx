@@ -37,6 +37,7 @@ const Greeter = Module<GreeterDeps>()(
   'Greeter',
   ({ recipient, Module }) => Module.name.toString() + ': Hello, ' + recipient,
 );
+type GreeterLive = typeof Greeter.Live;
 
 console.log(Greeter({ recipient: 'Ada' })); // "Greeter: Hello, Ada"
 console.log(Greeter.name); // "Greeter"`} />
@@ -45,22 +46,23 @@ The callable's `name` property is the declared key (`'Greeter'` here), including
 
 ## Describe a graph with `Live`
 
-For `TModule<Key, Deps, Result>`, `Live<T>` evaluates to `Deps & { [Key]: Result }`. It therefore includes both the named output and all requirements needed to produce that output.
+`typeof SomeModule.Live` includes both the named output and all remaining application dependencies needed to produce that output. Declare its alias immediately below the module. `.Live` is a type-only marker: the TypeScript type query is erased during compilation, while reading the property at runtime throws. The exported `Live<typeof SomeModule>` helper computes the same type and remains available for generic utilities.
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 const Config = Module<{ file: string }>()('Config', ({ file }) => ({ file }));
-type ConfigLive = Live<typeof Config>;
+type ConfigLive = typeof Config.Live;
 
 const Repository = Module<ConfigLive>()('Repository', ({ Config }) => ({
   source: Config.file,
 }));
-type RepositoryLive = Live<typeof Repository>;
+type RepositoryLive = typeof Repository.Live;
 
 const App = Module<RepositoryLive>()(
   'App',
   ({ Repository }) => Repository.source,
 );
+type AppLive = typeof App.Live;
 
 console.log(
   App({

@@ -15,8 +15,10 @@ const Calculator = Module<{ x: number; y: number }>()(
   'Calculator',
   ({ x, y }) => x + y,
 );
+type CalculatorLive = typeof Calculator.Live;
 
 const AddFive = Calculator.provide({ x: 5 });
+type AddFiveLive = typeof AddFive.Live;
 
 console.log(AddFive({ y: 3 })); // 8
 console.log(AddFive({ y: 10 })); // 15
@@ -34,10 +36,16 @@ const Expression = Module<{ a: number; b: number; c: number }>()(
   'Expression',
   ({ a, b, c }) => a * b + c,
 );
+type ExpressionLive = typeof Expression.Live;
 
 const WithA = Expression.provide({ a: 2 });
+type WithALive = typeof WithA.Live;
+
 const WithAB = WithA.provide({ b: 3 });
+type WithABLive = typeof WithAB.Live;
+
 const ReadyExpression = WithAB.provide({ c: 4 });
+type ReadyExpressionLive = typeof ReadyExpression.Live;
 
 console.log(ReadyExpression()); // 10
 console.log(ReadyExpression.name); // "Expression"`} />
@@ -51,13 +59,18 @@ A dependency can be bound to its final value or to a branded provider created by
 <Editor client:load code={`import { Module } from '@favy/di';
 
 const Prefix = Module<{ prefix: string }>()('Prefix', ({ prefix }) => prefix);
-
-const Uppercase = Module<{ Prefix: string }>()('Uppercase', ({ Prefix }) =>
-  Prefix.toUpperCase(),
-);
+type PrefixLive = typeof Prefix.Live;
 
 const BoundPrefix = Prefix.provide({ prefix: 'ready' });
+type BoundPrefixLive = typeof BoundPrefix.Live;
+
+const Uppercase = Module<BoundPrefixLive>()('Uppercase', ({ Prefix }) =>
+  Prefix.toUpperCase(),
+);
+type UppercaseLive = typeof Uppercase.Live;
+
 const ReadyUppercase = Uppercase.provide({ Prefix: BoundPrefix });
+type ReadyUppercaseLive = typeof ReadyUppercase.Live;
 
 console.log(ReadyUppercase()); // "READY"`} />
 
@@ -67,12 +80,12 @@ Each configured callable owns its bound dependencies. With `cache: 'run'` or `ca
 
 Providing a nested module's keyed output does **not** automatically remove that module's transitive dependencies from a parent `Live` type. Those requirements are explicit fields and must be provided at the parent as well.
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 const Database = Module()('Database', () => ({
   findUser: (id: number) => ({ id, name: 'User ' + id }),
 }));
-type DatabaseLive = Live<typeof Database>;
+type DatabaseLive = typeof Database.Live;
 
 const UserRepository = Module<DatabaseLive>()(
   'UserRepository',
@@ -80,7 +93,7 @@ const UserRepository = Module<DatabaseLive>()(
     findById: (id: number) => Database.findUser(id),
   }),
 );
-type UserRepositoryLive = Live<typeof UserRepository>;
+type UserRepositoryLive = typeof UserRepository.Live;
 
 const UserService = Module<UserRepositoryLive>()(
   'UserService',
@@ -88,19 +101,23 @@ const UserService = Module<UserRepositoryLive>()(
     displayName: (id: number) => UserRepository.findById(id).name,
   }),
 );
+type UserServiceLive = typeof UserService.Live;
 
 const BoundRepository = UserRepository.provide({ Database });
+type BoundRepositoryLive = typeof BoundRepository.Live;
 
 // Binding only UserRepository still leaves Database in UserRepositoryLive.
 const ServiceWithRepository = UserService.provide({
   UserRepository: BoundRepository,
 });
+type ServiceWithRepositoryLive = typeof ServiceWithRepository.Live;
 
 const ReadyService = ServiceWithRepository.provide({ Database });
+type ReadyServiceLive = typeof ReadyService.Live;
 
 console.log(ReadyService().displayName(1)); // "User 1"`} />
 
-This explicitness is intentional: `Live<typeof UserRepository>` contains both `DatabaseLive` and the keyed `UserRepository` result, so the composition root can always see the full graph contract. Bind all of those fields when you want a zero-argument callable.
+This explicitness is intentional: `typeof UserRepository.Live` contains both `DatabaseLive` and the keyed `UserRepository` result, so the composition root can always see the full graph contract. Bind all of those fields when you want a zero-argument callable.
 
 ## Summary
 

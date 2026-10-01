@@ -33,3 +33,8 @@ jobs:
         working-directory: docs
       - run: npx nx build docs --skip-nx-cache
       - run: npx nx run docs:smoke --skip-nx-cache
+      - name: Check DI types
+        run: npx tsc -p di/tsconfig.spec.json --noEmit
+      - name: Check documentation editor and homepage
+        run: npm run test:editor && npm run test:home
+        working-directory: docs

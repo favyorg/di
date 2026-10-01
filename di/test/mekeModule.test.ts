@@ -18,11 +18,14 @@ test('the production core remains compact', () => {
 
   expect(lines('lib/makeModule.ts')).toBeLessThanOrEqual(240);
   expect(
-    ['index.ts', 'lib/hkt.ts', 'lib/makeModule.ts', 'lib/module.ts'].reduce(
-      (total, file) => total + lines(file),
-      0
-    )
-  ).toBeLessThanOrEqual(290);
+    [
+      'index.ts',
+      'lib/hkt.ts',
+      'lib/makeModule.ts',
+      'lib/module.ts',
+      'lib/context.ts',
+    ].reduce((total, file) => total + lines(file), 0)
+  ).toBeLessThanOrEqual(420);
 });
 
 test('makeModule transformInput', () => {
@@ -122,13 +125,13 @@ test('makeModule transformInput withModuleName', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F * 3);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module<FLive>()('B', ({ F }) => F * 4);
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
 
   const C = Module<ALive & BLive>()('C', ($) => $.A + $.B);
   expect(C({ F, B, A })).toBe(7);
@@ -345,7 +348,7 @@ test('makeModule cache=module', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   A({ F });
@@ -360,7 +363,7 @@ test('makeModule cache=module flushCache', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   A({ F });
@@ -388,7 +391,7 @@ test('makeModule cache=run flushCache', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   A({ F });
@@ -404,10 +407,10 @@ test('makeModule cache=run', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module<ALive & FLive>()('A', ({ F, A }) => F + A);
   expect(B({ F, A })).toBe(2);
@@ -420,10 +423,10 @@ test('makeModule cache=run F+A', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module<ALive & FLive>()('A', ({ F, A }) => F + A);
   B({ F, A });
@@ -438,10 +441,10 @@ test('makeModule cache=none', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module<ALive & FLive>()('A', ({ F, A }) => F + A);
   expect(B({ F, A })).toBe(3);
@@ -454,7 +457,7 @@ test('makeModule lazy=true', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   expect(A({ F })).toBe(1);
@@ -467,7 +470,7 @@ test('makeModule lazy=true A->F', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', () => 0);
   A({ F });
@@ -481,7 +484,7 @@ test('makeModule lazy=false', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', () => 0);
   A({ F });
@@ -495,7 +498,7 @@ test('makeModule lazy=false A->F', () => {
 
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
   expect(A({ F })).toBe(1);
@@ -523,8 +526,8 @@ test('lazy=false eagerly resolves each root provider once with cache=none', () =
     events.push('B');
     return 2;
   });
-  type ALive = Live<typeof A>;
-  type BLive = Live<typeof B>;
+  type ALive = typeof A.Live;
+  type BLive = typeof B.Live;
   const Root = Module<ALive & BLive>()('Root', () => {
     events.push('Root');
     return 0;
@@ -544,7 +547,7 @@ test('transformOutput receives invocation-local module metadata', () => {
   });
 
   const Dependency = Module()('Dependency', () => 1);
-  type DependencyLive = Live<typeof Dependency>;
+  type DependencyLive = typeof Dependency.Live;
   const Root = Module<DependencyLive>()('Root', ({ Dependency }) => Dependency);
 
   expect(Root({ Dependency })).toBe(1);

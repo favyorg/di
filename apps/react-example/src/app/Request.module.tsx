@@ -21,5 +21,4 @@ export const Request = Module<RequestArgs>()(
     };
   }
 );
-
 export type RequestLive = typeof Request.Live;

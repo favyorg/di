@@ -1,0 +1,150 @@
+.editor-files,
+.editor-files-fallback {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.editor-file-toolbar {
+  display: flex;
+  border-block-end: 1px solid var(--docs-border);
+  background: var(--docs-surface);
+}
+
+.editor-file-tabs {
+  display: flex;
+  flex: 1;
+  min-inline-size: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.editor-file-tab {
+  flex: none;
+  min-block-size: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  color: var(--docs-muted);
+  background: transparent;
+  font-family: var(--sl-font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.editor-file-tab:hover {
+  color: var(--sl-color-white);
+  background: var(--docs-accent-soft);
+}
+
+.editor-file-tab[data-state='active'] {
+  border-block-end-color: var(--docs-accent);
+  color: var(--sl-color-white);
+  background: var(--docs-surface-raised);
+}
+
+html:not([data-has-hero]) .editor-file-tab:focus-visible,
+html:not([data-has-hero]) .example-run-button:focus-visible,
+html:not([data-has-hero]) .editor-files-fallback summary:focus-visible {
+  outline-offset: -3px;
+}
+
+.editor-files pre,
+.editor-files-fallback pre {
+  max-block-size: 600px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  color: var(--sl-color-white);
+  background: var(--docs-surface-raised);
+  font-size: 14px;
+  line-height: 24px;
+}
+
+.editor-files-fallback details + details {
+  border-block-start: 1px solid var(--docs-border);
+}
+
+.editor-files-fallback summary {
+  min-block-size: 44px;
+  padding: 12px 16px;
+  color: var(--sl-color-white);
+  background: var(--docs-surface);
+  font-family: var(--sl-font-mono);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.example-run-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding-inline: 4px;
+  border-inline-start: 1px solid var(--docs-border);
+}
+
+.example-run-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-block-size: 44px;
+  min-inline-size: 80px;
+  padding: 0 12px;
+  border: 0;
+  color: var(--sl-color-white);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.example-run-button svg {
+  inline-size: 14px;
+  block-size: 14px;
+  fill: currentColor;
+}
+
+.example-run-button:hover:not(:disabled) {
+  background: var(--docs-accent-soft);
+}
+
+.example-run-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.example-run-console {
+  border-block-start: 1px solid var(--docs-border);
+}
+
+.example-run-console-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  color: var(--docs-muted);
+  background: var(--docs-surface);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.editor-files .example-run-output {
+  max-block-size: 240px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.example-run-line[data-level='error'] {
+  color: var(--sl-color-red-high);
+}
+
+.example-run-line[data-level='warn'] {
+  color: var(--sl-color-orange-high);
+}
+
+.example-run-empty {
+  color: var(--docs-muted);
+}

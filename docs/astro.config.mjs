@@ -71,6 +71,22 @@ export default defineConfig({
       ),
     }),
     starlightThemeRapide(),
+    {
+      name: 'separate-vite-caches',
+      hooks: {
+        'astro:config:setup': ({ command, updateConfig }) => {
+          // Check/sync and build create temporary Vite servers. Sharing their
+          // cache invalidates optimized imports in an already running dev server.
+          updateConfig({
+            vite: {
+              cacheDir: fileURLToPath(
+                new URL(`./node_modules/.vite/${command}/`, import.meta.url),
+              ),
+            },
+          });
+        },
+      },
+    },
   ],
   markdown: {
     remarkPlugins: [preserveEditorCode],
