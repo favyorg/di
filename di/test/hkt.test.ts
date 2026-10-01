@@ -1,5 +1,5 @@
 /* eslint-disable require-yield */
-import { Live, makeModule, TModule } from '../src';
+import { GenModule, Live, makeModule, TModule } from '../src';
 import { HKT } from '../src/lib/hkt';
 
 type Equal<Actual, Expected> = (<T>() => T extends Actual ? 1 : 2) extends <
@@ -14,80 +14,22 @@ const expectType = <Actual, Expected>(equal: Equal<Actual, Expected>) => {
   expect(equal).toBe(true);
 };
 
-test('output HKT derives dependencies from yielded tags', () => {
-  let currentDeps: Record<PropertyKey, unknown> = {};
-  const Module = makeModule({
-    transformOutput: (res, deps) => {
-      type UnionToIntersection<U> = [U] extends [never]
-        ? object
-        : (U extends unknown ? (value: U) => void : never) extends (
-            value: infer I
-          ) => void
-        ? I
-        : never;
-
-      type GeneratorModule<
-        Name extends PropertyKey,
-        Result,
-        Deps
-      > = Result extends Generator<infer Yielded, infer Returned>
-        ? TModule<Name, UnionToIntersection<Yielded>, Returned>
-        : TModule<Name, Deps, Result>;
-
-      interface GeneratorHKT extends HKT {
-        readonly type: GeneratorModule<
-          this['_NAME'],
-          this['_RESULT'],
-          this['_DEPS']
-        >;
-      }
-
-      const generator = res as Iterator<unknown, unknown>;
-      if (res && typeof generator.next === 'function') {
-        currentDeps = deps;
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const step = generator.next();
-          if (step.done) {
-            return step.value as unknown as GeneratorHKT;
-          }
-        }
-      }
-
-      return res as unknown as GeneratorHKT;
-    },
-  });
-
-  type Tag<N extends PropertyKey, R> = {
-    readonly _tag: 'tag';
-    readonly name: N;
-    [Symbol.iterator](): Generator<Live<TModule<N, object, R>>, R, unknown>;
-  };
-
-  const Tag =
-    <N extends PropertyKey>(name: N) =>
-    <R>(): Tag<N, R> => {
-      return {
-        _tag: 'tag' as const,
-        name,
-        [Symbol.iterator]: function* () {
-          return currentDeps[name] as R;
-        },
-      } satisfies Tag<N, R>;
-    };
-
-  const B = Module()('B', function* () {
+test('output HKT derives dependencies from yielded modules', () => {
+  const B = GenModule()('B', function* () {
     return {
       getTime: () => 1_000_000,
     };
   });
 
-  const B_ = Tag('B')<{ getTime(): number }>();
-  const C_ = Tag('C')<{ get(): number }>();
+  const C = GenModule()('C', function* () {
+    return {
+      get: () => 2,
+    };
+  });
 
-  const A = Module()('A', function* () {
-    const b = yield* B_;
-    const cx = yield* C_;
+  const A = GenModule()('A', function* () {
+    const b = yield* B;
+    const cx = yield* C;
 
     return b.getTime() + cx.get();
   });
@@ -97,22 +39,18 @@ test('output HKT derives dependencies from yielded tags', () => {
   expectType<ReturnType<typeof A>, number>(true);
 
   const verifyDependencies = () => {
-    // @ts-expect-error Yielded tags become required module dependencies.
+    // @ts-expect-error Yielded modules become required module dependencies.
     A();
-    // @ts-expect-error Every yielded tag becomes a required dependency.
+    // @ts-expect-error Every yielded module becomes a required dependency.
     A({ B });
-    // @ts-expect-error Dependency values keep the yielded tag's result type.
+    // @ts-expect-error Dependency values keep the yielded module's result type.
     A({ B, C: { get: () => 'wrong' } });
   };
   void verifyDependencies;
 
   const result = A({
     B,
-    C: {
-      get() {
-        return 2;
-      },
-    },
+    C,
   });
   expectType<typeof result, number>(true);
   expect(result).toBe(1_000_002);

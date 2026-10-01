@@ -1442,6 +1442,13 @@ const checkExistingDocumentationPages = async (page, browser) => {
     .first();
   await waitForEditorLines(introductionEditor);
 
+  // Monaco may paint its first line before the rest of the model is laid out.
+  await introductionEditor
+    .locator('.monaco-editor .view-line:not(:first-child)')
+    .filter({ hasText: /^\s*$/ })
+    .first()
+    .waitFor({ state: 'visible' });
+
   const editorLineRhythm = await introductionEditor
     .locator('.monaco-editor .view-line')
     .evaluateAll((lines) => {
@@ -1691,6 +1698,17 @@ const checkExistingDocumentationPages = async (page, browser) => {
         )
     );
   assert.deepEqual(partialExampleIndents, [2, 2]);
+
+  const generatorLink = page
+    .locator('.sidebar-pane')
+    .getByRole('link', { name: 'Generator modules', exact: true });
+  await generatorLink.click();
+  await page.waitForURL((url) => /^\/module\/generator\/?$/.test(url.pathname));
+  assert.equal(
+    (await page.locator('.docs-page-title h1').textContent())?.trim(),
+    'Generator modules'
+  );
+  assert.equal(await generatorLink.getAttribute('aria-current'), 'page');
 
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('.docs-page-title').count(), 0);

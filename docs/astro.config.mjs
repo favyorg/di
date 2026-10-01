@@ -30,6 +30,7 @@ export default defineConfig({
           label: 'Core concepts',
           items: [
             { label: 'Module', slug: 'module/module' },
+            { label: 'Generator modules', slug: 'module/generator' },
             { label: 'Caching', slug: 'module/cache' },
             { label: 'Lazy', slug: 'module/lazy' },
             { label: 'Partial Application', slug: 'module/partial' },

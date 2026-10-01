@@ -277,6 +277,11 @@ jest.mock(
   { virtual: true }
 );
 jest.mock(
+  '../../di/src/lib/genModule.ts?raw',
+  () => ({ __esModule: true, default: 'export const GenModule = {};' }),
+  { virtual: true }
+);
+jest.mock(
   '../../di/src/lib/hkt.ts?raw',
   () => ({ __esModule: true, default: 'export type HKT = unknown;' }),
   { virtual: true }
@@ -524,6 +529,7 @@ it('maps the checked-out package sources to Monaco and Sandpack paths', () => {
   ).toEqual([
     ['src/index.ts', '/favy-di/index.ts'],
     ['src/lib/context.ts', '/favy-di/lib/context.ts'],
+    ['src/lib/genModule.ts', '/favy-di/lib/genModule.ts'],
     ['src/lib/hkt.ts', '/favy-di/lib/hkt.ts'],
     ['src/lib/makeModule.ts', '/favy-di/lib/makeModule.ts'],
     ['src/lib/module.ts', '/favy-di/lib/module.ts'],
@@ -1131,7 +1137,7 @@ it('uses distinct model paths and registers local libraries once', async () => {
   expect(modelPaths.every((path) => path?.startsWith('file:///docs/'))).toBe(
     true
   );
-  expect(mockAddExtraLib).toHaveBeenCalledTimes(7);
+  expect(mockAddExtraLib).toHaveBeenCalledTimes(8);
   expect(mockSetCompilerOptions).toHaveBeenCalledWith({
     target: 'ESNext',
     strict: true,

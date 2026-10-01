@@ -54,7 +54,7 @@ TypeScript accepts known keys with compatible values and updates the callable si
 
 ## Bind a provider callable
 
-A dependency can be bound to its final value or to a branded provider created by `Module` or `makeModule`. Arbitrary functions remain ordinary dependency values; branded callables always participate in DI resolution. Therefore, for a function-valued dependency, a branded provider must return that function rather than merely having a matching callable signature. A module returned from `.provide()` keeps the provider marker, so it can be nested inside another module. In a discriminated union, a branch-specific provider is accepted after the same partial selects a compatible branch, or after an earlier `.provide()` call narrows to that branch.
+A dependency can be bound to its final value or to a branded provider created by `Module`, `makeModule`, `GenModule`, or `makeGenModule`. Arbitrary functions remain ordinary dependency values; branded callables always participate in DI resolution. Therefore, for a function-valued dependency, a branded provider must return that function rather than merely having a matching callable signature. A module returned from `.provide()` keeps the provider marker, so it can be nested inside another module. Generator modules also preserve their iterable protocol, so a provided generator module remains usable with `yield*`. In a discriminated union, a branch-specific provider is accepted after the same partial selects a compatible branch, or after an earlier `.provide()` call narrows to that branch.
 
 <Editor client:load code={`import { Module } from '@favy/di';
 

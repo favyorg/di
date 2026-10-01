@@ -12,6 +12,7 @@ const route = '/module/transform-output/#return-typed-api-results';
 async function selectFile(page, name) {
   await page
     .locator('.editor-files')
+    .first()
     .getByRole('tab', { name, exact: true })
     .click();
   await assertActiveFile(page, name);
@@ -144,7 +145,7 @@ export async function assertEditorFiles(browser, origin) {
               .classList.contains(theme === 'dark' ? 'vs-dark' : 'vs'),
           theme
         );
-        const tabs = page.locator('.editor-files').getByRole('tab');
+        const tabs = page.locator('.editor-files').first().getByRole('tab');
         assert.deepEqual(
           await tabs.allTextContents(),
           names,
@@ -153,6 +154,7 @@ export async function assertEditorFiles(browser, origin) {
         assert.equal(
           await page
             .locator('.editor-files')
+            .first()
             .getByRole('tablist', { name: 'Example files' })
             .count(),
           1
@@ -278,6 +280,7 @@ export async function assertEditorFiles(browser, origin) {
 
         const firstTab = page
           .locator('.editor-files')
+          .first()
           .getByRole('tab', { name: 'api-module.ts', exact: true });
         await firstTab.focus();
         await page.keyboard.press('ArrowRight');
@@ -380,7 +383,10 @@ export async function assertEditorFiles(browser, origin) {
       });
       try {
         await fallback.goto(`${origin}${route}`);
-        const files = fallback.locator('.editor-files-fallback details');
+        const files = fallback
+          .locator('.editor-files-fallback')
+          .first()
+          .locator('details');
         assert.deepEqual(
           await files.locator('summary').allTextContents(),
           names,

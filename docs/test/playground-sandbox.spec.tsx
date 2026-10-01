@@ -12,6 +12,11 @@ jest.mock(
   { virtual: true }
 );
 jest.mock(
+  '../../di/src/lib/genModule.ts?raw',
+  () => ({ __esModule: true, default: 'export const GenModule = {};' }),
+  { virtual: true }
+);
+jest.mock(
   '../../di/src/lib/hkt.ts?raw',
   () => ({ __esModule: true, default: 'export type HKT = unknown;' }),
   { virtual: true }
@@ -466,6 +471,10 @@ it('creates isolated runtime files and installs registry dependencies only', () 
   expect(files).not.toHaveProperty('/frame.html');
   expect(files['/favy-di/index.ts']).toEqual({
     code: 'export const Module = {};',
+    hidden: true,
+  });
+  expect(files['/favy-di/lib/genModule.ts']).toEqual({
+    code: 'export const GenModule = {};',
     hidden: true,
   });
   expect(files['/favy-di/lib/hkt.ts']).toEqual({

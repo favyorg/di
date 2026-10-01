@@ -168,6 +168,12 @@ The module callback returns an object with an async `Load` method, such as `{ Lo
 
 `transformOutput` creates the wrapper without calling `Load`. Each `Load()` call invokes and awaits the original method inside `try/catch`; DI caches the module object, not the method's results. A throw while creating the original object still escapes before the transform runs. After awaiting `Load()`, callers narrow `ok` before accessing `value` or `error`.
 
+## Infer dependencies with generators
+
+[`GenModule`](/module/generator/) is a ready-to-use output-HKT extension. Its output HKT combines the requirements of yielded module requests and extracts the generator's final return type. Its output transform runs the generator against the current DI context, and a factory wrapper installs iteration on the callable and its `.provide()` results.
+
+`transformInput` alone cannot provide this behavior because it runs before the callback creates a generator. See [Generator modules](/module/generator/) for the runnable `User` / `Orders` example, inferred dependencies, async methods, and binding with `.provide()`.
+
 ## `transformInput` comparison
 
 | Feature                 | `transformInput`                      | `transformOutput`                   |

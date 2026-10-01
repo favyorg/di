@@ -5,17 +5,21 @@ description: Exported values and TypeScript declarations for @favy/di.
 
 import { Editor } from '../../../components/editor';
 
-The package root exports the default factory, the factory builder, module types,
+The package root exports ordinary and generator factories, module types,
 transform helpers, and the HKT encoding:
 
 ```ts
 export {
   Module,
   makeModule,
+  GenModule,
+  makeGenModule,
   withModuleName,
   type DefaultModuleFactory,
   type Live,
   type TModule,
+  type TGenModule,
+  type ModuleRequest,
   type ModuleLive,
   type MakeOptions,
   type transformInput,
@@ -28,11 +32,13 @@ export {
 <nav class="api-index" aria-label="API symbols">
   <strong>Common API</strong>
   <a href="#module">Module</a>
+  <a href="#genmodule">GenModule</a>
   <a href="#livet">Live</a>
   <a href="#modulelive">ModuleLive</a>
 
   <strong>Factory configuration</strong>
   <a href="#makemodule">makeModule</a>
+  <a href="#makegenmodule">makeGenModule</a>
   <a href="#makeoptionsd-m-p-i-o">MakeOptions</a>
   <a href="#defaultmodulefactory">DefaultModuleFactory</a>
   <a href="#withmodulename">withModuleName</a>
@@ -41,6 +47,8 @@ export {
 
   <strong>Advanced types</strong>
   <a href="#tmodulek-d-r-c--d">TModule</a>
+  <a href="#tgenmodulek-d-r-c--d">TGenModule</a>
+  <a href="#modulerequest">ModuleRequest</a>
   <a href="#hkt">HKT</a>
   <a href="#kindh-name-result-deps-meta-meta2">Kind</a>
 </nav>
@@ -87,6 +95,34 @@ caller does not supply that generated key.
 `Module.flushCache()` clears the factory-wide cache. The default factory uses
 `cache: 'run'`, so this normally matters only on a factory created with
 `makeModule({ cache: 'module' })`.
+
+### `GenModule`
+
+Creates iterable modules from synchronous generator callbacks:
+
+```ts
+GenModule<ExplicitDeps>()(name, function* (deps) {
+  const service = yield* Dependency;
+  return service;
+});
+```
+
+`ExplicitDeps` may be omitted. The returned `TGenModule` combines explicit
+callback requirements with the `Live` contracts of all yielded module requests.
+Its result is the generator's return type. `yield* Dependency` returns that
+dependency's service value; the root call must supply a compatible value or
+provider under `Dependency.name`, along with its transitive requirements.
+
+Only `GenModule` and `makeGenModule` install the iterable protocol. `.provide()`
+preserves it while binding dependencies. Modules from ordinary factories can
+consume generator modules through `typeof Foo.Live`, and can supply compatible
+implementations under yielded keys, but ordinary modules cannot themselves be
+used in `yield*`.
+
+Defaults are `cache: 'run'`, `lazy: true`, and the standard `Module.name`
+metadata. The runner accepts synchronous generators, not `async function*`
+callbacks or yielded promises. Returned service methods may be async. See the
+[runnable generator example](/module/generator/).
 
 ### `Live<T>`
 
@@ -271,6 +307,27 @@ export type MakeOptions<D, M, P, I, O> = {
 implementation. The actual `makeModule` value uses the overloads above so that
 omitted transforms receive their typed runtime defaults and HKT transforms can
 replace an ordinary callback or callable shape.
+
+### `makeGenModule`
+
+Creates an independent generator factory with the same callable interface as
+`GenModule`:
+
+```ts
+export declare const makeGenModule: (options?: {
+  cache?: 'run' | 'module' | 'none';
+  lazy?: boolean;
+}) => typeof GenModule;
+```
+
+Options default to `cache: 'run'` and `lazy: true`. The returned factory exposes
+`flushCache()`, which clears its own factory-wide module cache. Caching, lazy
+resolution, provider replacement, and `.provide()` use the same DI runtime as
+ordinary modules. Generator factories can resolve providers created by other
+generator or ordinary factories.
+
+The input and output transforms are fixed by this extension; its options only
+configure lifecycle behavior. For custom HKT transforms, use `makeModule`.
 
 ### `DefaultModuleFactory`
 
@@ -459,9 +516,9 @@ export type TModule<K extends PropertyKey, D, R, C = D> = {
 - A module with no remaining keys takes no argument. A contract compatible
   with `{}` takes an optional dependency object; other contracts require it.
 - Every dependency field accepts a final value or a branded module created by
-  `Module`/`makeModule`. Ordinary functions stay raw function values. A branded
-  provider is resolved even when the field's declared type is broad such as
-  `unknown` or `any`.
+  `Module`/`makeModule` or `GenModule`/`makeGenModule`. Ordinary functions stay
+  raw function values. A branded provider is resolved even when the field's
+  declared type is broad such as `unknown` or `any`.
 - A provider's remaining dependencies must fit a compatible branch of the
   consumer context. `typeof Provider.Live` is the usual way to carry those
   transitive requirements.
@@ -503,6 +560,48 @@ type ReadyAddLive = typeof ReadyAdd.Live;
 
 console.log(ReadyAdd()); // 5
 console.log(ReadyAdd.name); // "Add"`} />
+
+### `TGenModule<K, D, R, C = D>`
+
+The iterable extension of `TModule` returned by generator factories. It retains
+the call signature, `name`, and `Live` marker, and overrides `.provide()` to
+preserve its generator interface:
+
+```ts
+export interface TGenModule<K extends PropertyKey, D, R, C = D>
+  extends TModule<K, D, R, C> {
+  provide<const P extends Partial<Deps<D, C>> = {}>(
+    ...args: {} extends D ? [deps?: Exact<D, P>] : [deps: Exact<D, P>]
+  ): TGenModule<K, Flat<Rest<D, P>>, R, Rest<C, P, true>>;
+
+  [Symbol.iterator](): Generator<ModuleRequest<K, ModuleDeps<D>, R>, R, unknown>;
+}
+```
+
+The helper types are those shown under `TModule`. The iterator yields a typed
+dependency request and returns the resolved service sent back by the runner.
+A type annotation alone does not install this runtime behavior: use
+`GenModule` or `makeGenModule` to create iterable modules.
+
+### `ModuleRequest`
+
+The lightweight type yielded by a generator module's iterator:
+
+```ts
+export type ModuleRequest<
+  K extends PropertyKey = PropertyKey,
+  D = never,
+  R = unknown
+> = {
+  readonly name: K;
+  readonly [__deps__]: Brand<D, R>;
+} & Iterable<unknown>;
+```
+
+It carries the declared key, iterable protocol, and private dependency/result
+marker used by `Live`. The request describes a dependency; it is not the resolved service.
+Use `yield* SomeGenModule` to create one. A plain `{ name }` object is not a
+valid module request.
 
 ### `HKT`
 

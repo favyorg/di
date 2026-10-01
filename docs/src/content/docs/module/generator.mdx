@@ -1,0 +1,114 @@
+---
+title: Generator modules
+description: Infer dependency requirements with yield*, compose generator modules, and run async service methods.
+---
+
+import { Editor } from '../../../components/editor';
+import apiTypesSource from '../../../examples/api-result/api-types.ts?raw';
+import loadersSource from '../../../examples/generator/loaders.ts?raw';
+import mainSource from '../../../examples/generator/main.ts?raw';
+import appSource from '../../../examples/generator/app.ts?raw';
+
+`GenModule` creates a module from a synchronous generator. Each `yield* Dependency` retrieves a service from the current DI context and adds that module's requirements to the inferred dependency contract. The generator's final `return` becomes the module's result.
+
+You can use `GenModule` alongside ordinary [`Module`](/module/module/) callables. Both use the same provider resolution, caching, and `.provide()` behavior.
+
+## Run a complete example
+
+`User` and `Orders` return services with async `Load()` methods. `Main` retrieves them with `yield*` and returns an async `Run()` method. There is no need to write `UserLive & OrdersLive` on `Main`: TypeScript infers both services and their shared `api` requirement.
+
+The tabs separate the application module, services, API types, and startup. **Run** executes `app.ts`, which supplies the mocks and calls `Main` once. The console prints `Alex` and `1`.
+
+<Editor client:load entry="app.ts" files={[
+  {
+    name: 'main.ts',
+    code: mainSource.replace("'../../../../di/src'", "'@favy/di'"),
+  },
+  {
+    name: 'loaders.ts',
+    code: loadersSource
+      .replace("'../../../../di/src'", "'@favy/di'")
+      .replace("'../api-result/api-types'", "'./api-types'"),
+  },
+  { name: 'api-types.ts', code: apiTypesSource },
+  {
+    name: 'app.ts',
+    code: appSource.replace("'../api-result/api-types'", "'./api-types'"),
+  },
+]} />
+
+## What `yield*` does
+
+When `Main` executes `const user = yield* User`, the runner looks up the `User` key in the current context. A supplied module provider is resolved through DI; a supplied service object is returned directly. The generator resumes with that value, and `user` has the inferred return type of `User`.
+
+Yielding a module declares a requirement. The composition root still selects implementations:
+
+```ts
+void Main({ api, User, Orders }).Run();
+```
+
+Leaving out `User`, `Orders`, or their transitive `api` dependency is a TypeScript error. The module mentioned in `yield*` is not automatically installed as a default provider. You can replace it with a compatible value or provider under the same key.
+
+Requirements include every statically possible yield. A conditional branch can leave a provider unused at runtime, but its dependency remains part of the caller's contract. With the default lazy resolution, an unused provider is not executed.
+
+## Explicit inputs and `Live`
+
+Leaf modules can still declare raw inputs with `GenModule<Deps>()`. In the example, `User` and `Orders` accept `{ api: Api }` through their callback arguments. A module may combine these explicit inputs with dependencies requested through `yield*`; the resulting contract includes both.
+
+Declare each module's dependency type directly below it:
+
+```ts
+export type MainLive = typeof Main.Live;
+```
+
+`MainLive` contains `Main`'s result and all remaining requirements, just like an ordinary module's `Live` type. It is useful when an ordinary `Module` consumes a generator module. Reading `.Live` at runtime still throws; it is a type-only marker.
+
+## Bind dependencies with `.provide()`
+
+You can replace the final startup line in `app.ts` with a bound module:
+
+```ts
+const ReadyMain = Main.provide({ api }).provide({ User, Orders });
+type ReadyMainLive = typeof ReadyMain.Live;
+
+void ReadyMain().Run(); // Alex, 1
+```
+
+Each `.provide()` returns an independent callable and removes the supplied keys from the remaining requirements. The iterable protocol is preserved, so another generator can use `yield* ReadyMain`. That consumer then requires an implementation under `Main`, the original declared name; the already-bound `api`, `User`, and `Orders` keys are no longer required.
+
+See [Partial Application](/module/partial/) for binding precedence and replacement rules.
+
+## Async work and errors
+
+Use a synchronous `function*` to construct services, then perform asynchronous work in their methods. In the example, `Main(...)` synchronously returns `{ Run }`, while `Run()` awaits `User.Load()` and `Orders.Load()`.
+
+The runner does not execute `async function*` callbacks or await yielded promises. A generator may return a promise as its final result; the caller then receives that promise. This extension does not add cancellation or resource scopes.
+
+If resolving a dependency at `yield*` throws, the runner throws that error back into the generator. A surrounding `try/catch` can select a fallback, and `finally` runs during propagation. With `lazy: false`, failures during eager initialization happen before the generator starts and must be caught around the module call. Errors or rejections from a later async method call must be handled around that method call.
+
+## Factories, caching, and interoperability
+
+Use `makeGenModule` to create an independent generator factory:
+
+```ts
+import { makeGenModule } from '@favy/di';
+
+const CachedGenModule = makeGenModule({ cache: 'module' });
+// Create modules with CachedGenModule<Deps>()(name, function* (...) { ... }).
+
+CachedGenModule.flushCache();
+```
+
+The defaults are `cache: 'run'` and `lazy: true`. [Caching](/module/cache/) and [Lazy resolution](/module/lazy/) describe the same lifecycle rules used by generator modules. `flushCache()` clears only that factory's module cache. Input and output transforms are fixed by the extension; the options configure `cache` and `lazy`.
+
+Modules from different generator factories can yield one another. Ordinary modules can consume generator providers through `typeof Provider.Live`, and ordinary providers can replace a yielded service when their result and requirements are compatible. Ordinary `Module` callables have no iterable protocol, so they cannot themselves appear after `yield*`.
+
+| Feature | `Module` | `GenModule` |
+| --- | --- | --- |
+| Callback | Ordinary function | Synchronous generator |
+| Service access | Callback dependency object | `yield* Dependency` |
+| Dependency types | Explicit contract, often composed from `Live` | Explicit raw inputs plus inferred yielded requirements |
+| Async service methods | Supported | Supported |
+| Root wiring, `.provide()`, caching | Shared DI behavior | Shared DI behavior |
+
+For the exported signatures, see [`GenModule`](/reference/api/#genmodule) and [`TGenModule`](/reference/api/#tgenmodulek-d-r-c--d). For the extension mechanism behind generator modules, see [Transform Output](/module/transform-output/#infer-dependencies-with-generators).

@@ -86,3 +86,5 @@ With the defaults:
 4. another direct root call creates a fresh run cache.
 
 Use [`makeModule`](/reference/api/#makemodule) to change those defaults, [`provide()`](/module/partial/) to bind dependencies before the root, and [`Live`](/reference/api/#livet) to carry a module's full requirements through a larger graph.
+
+For dependency requirements inferred from `yield*` expressions, use [`GenModule`](/module/generator/). Its synchronous generators return ordinary service values, and implementations are still selected at the composition root.

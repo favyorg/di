@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 const route = '/module/transform-output/#return-typed-api-results';
 const sandbox = 'iframe[title="Isolated example execution"]';
 
-async function prepare(page, origin, theme) {
+async function prepare(
+  page,
+  origin,
+  theme,
+  widgetIndex = 0,
+  exampleRoute = route
+) {
   await page.addInitScript(() => {
     if (window.parent === window) {
       window.runWorkerAudit = { created: 0, terminated: 0 };
@@ -32,42 +38,50 @@ async function prepare(page, origin, theme) {
       });
     }
   });
-  await page.goto(`${origin}${route}`);
-  await page.locator('.editor-files .inputarea').waitFor();
-  await page.evaluate(async (theme) => {
-    document.documentElement.dataset.theme = theme;
-    const url = performance
-      .getEntriesByType('resource')
-      .find(({ name }) =>
-        /\/(?:editor\.api\.[^/]+|monaco-editor_esm_vs_editor_editor__api)\.js(?:\?|$)/.test(
-          name
-        )
-      )?.name;
-    if (!url) throw new Error('Monaco editor API module was not loaded');
-    const module = await import(url);
-    const monaco = module.editor?.getEditors
-      ? module
-      : Object.values(module).find((value) => value?.editor?.getEditors);
-    const widget = document.querySelector('.editor-files');
-    const editor = monaco.editor
-      .getEditors()
-      .find((entry) => widget.contains(entry.getDomNode()));
-    const base = editor
-      .getModel()
-      .uri.toString()
-      .replace(/[^/]+$/, '');
-    window.runRegression = {
-      editor,
-      widget,
-      island: widget.closest('astro-island'),
-      models: Object.fromEntries(
-        monaco.editor
-          .getModels()
-          .filter((model) => model.uri.toString().startsWith(base))
-          .map((model) => [model.uri.path.split('/').at(-1), model])
-      ),
-    };
-  }, theme);
+  await page.goto(`${origin}${exampleRoute}`);
+  await page
+    .locator('.editor-files')
+    .nth(widgetIndex)
+    .locator('.inputarea')
+    .waitFor();
+  await page.evaluate(
+    async ({ theme, widgetIndex }) => {
+      document.documentElement.dataset.theme = theme;
+      const url = performance
+        .getEntriesByType('resource')
+        .find(({ name }) =>
+          /\/(?:editor\.api\.[^/]+|monaco-editor_esm_vs_editor_editor__api)\.js(?:\?|$)/.test(
+            name
+          )
+        )?.name;
+      if (!url) throw new Error('Monaco editor API module was not loaded');
+      const module = await import(url);
+      const monaco = module.editor?.getEditors
+        ? module
+        : Object.values(module).find((value) => value?.editor?.getEditors);
+      const widget = document.querySelectorAll('.editor-files')[widgetIndex];
+      const editor = monaco.editor
+        .getEditors()
+        .find((entry) => widget.contains(entry.getDomNode()));
+      const base = editor
+        .getModel()
+        .uri.toString()
+        .replace(/[^/]+$/, '');
+      window.runRegression = {
+        monaco,
+        editor,
+        widget,
+        island: widget.closest('astro-island'),
+        models: Object.fromEntries(
+          monaco.editor
+            .getModels()
+            .filter((model) => model.uri.toString().startsWith(base))
+            .map((model) => [model.uri.path.split('/').at(-1), model])
+        ),
+      };
+    },
+    { theme, widgetIndex }
+  );
   await page.waitForFunction(
     (theme) =>
       window.runRegression.editor
@@ -77,12 +91,19 @@ async function prepare(page, origin, theme) {
   );
 }
 
-const runButton = (page) =>
-  page.locator('.editor-files').getByRole('button', { name: 'Run app.ts' });
-const output = (page) => page.getByRole('region', { name: 'Example output' });
+const runButton = (page, widgetIndex = 0) =>
+  page
+    .locator('.editor-files')
+    .nth(widgetIndex)
+    .getByRole('button', { name: 'Run app.ts' });
+const output = (page, widgetIndex = 0) =>
+  page
+    .locator('.editor-files')
+    .nth(widgetIndex)
+    .getByRole('region', { name: 'Example output' });
 
-async function start(page, key) {
-  const button = runButton(page);
+async function start(page, key, widgetIndex = 0) {
+  const button = runButton(page, widgetIndex);
   if (key) {
     await button.focus();
     await page.keyboard.press(key);
@@ -91,12 +112,14 @@ async function start(page, key) {
   }
 }
 
-async function waitForStatus(page, status, timeout = 30_000) {
+async function waitForStatus(page, status, timeout = 30_000, widgetIndex = 0) {
   await page.waitForFunction(
-    (status) =>
-      document.querySelector('.example-run-console [role="status"]')
+    ({ status, widgetIndex }) =>
+      document
+        .querySelectorAll('.editor-files')
+        [widgetIndex]?.querySelector('.example-run-console [role="status"]')
         ?.textContent === status,
-    status,
+    { status, widgetIndex },
     { timeout }
   );
 }
@@ -114,10 +137,13 @@ async function assertDisposed(page) {
   );
 }
 
-async function complete(page, expected, key) {
-  await start(page, key);
-  await waitForStatus(page, 'Finished');
-  assert.equal(await output(page).getByRole('log').textContent(), expected);
+async function complete(page, expected, key, widgetIndex = 0) {
+  await start(page, key, widgetIndex);
+  await waitForStatus(page, 'Finished', 30_000, widgetIndex);
+  assert.equal(
+    await output(page, widgetIndex).getByRole('log').textContent(),
+    expected
+  );
   await assertDisposed(page);
 }
 
@@ -190,6 +216,7 @@ async function assertLifecycle(page, origin) {
   await complete(page, 'first dependency 1\n');
   await page
     .locator('.editor-files')
+    .first()
     .getByRole('tab', { name: 'api-module.ts', exact: true })
     .click();
   await page.evaluate(() =>
@@ -199,6 +226,7 @@ async function assertLifecycle(page, origin) {
   );
   await page
     .locator('.editor-files')
+    .first()
     .getByRole('tab', { name: 'app.ts', exact: true })
     .click();
   await page.evaluate(() =>
@@ -298,8 +326,99 @@ async function assertLifecycle(page, origin) {
     window.runRegression.island.dispatchEvent(new CustomEvent('astro:unmount'))
   );
   await assertDisposed(page);
-  assert.equal(await page.locator('.editor-files').count(), 0);
+  assert.equal(
+    await page.evaluate(() =>
+      window.runRegression.island.querySelector('.editor-files')
+    ),
+    null
+  );
   assert.equal(new URL(page.url()).origin, new URL(origin).origin);
+}
+
+async function assertGeneratorExample(browser, origin) {
+  const widgetIndex = 0;
+  for (const theme of ['light', 'dark']) {
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+      colorScheme: theme,
+    });
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    try {
+      await prepare(page, origin, theme, widgetIndex, '/module/generator/');
+      assert.equal(
+        await page
+          .locator('.editor-files')
+          .nth(widgetIndex)
+          .getByRole('tab', { name: 'main.ts', exact: true })
+          .getAttribute('aria-selected'),
+        'true',
+        'The generator example must open on its yield* composition'
+      );
+      const diagnostics = await page.evaluate(async () => {
+        const { monaco, editor, models } = window.runRegression;
+        const getWorker =
+          await monaco.languages.typescript.getTypeScriptWorker();
+        // Ask for the active file only: unopened imports must already be synced.
+        const worker = await getWorker(editor.getModel().uri);
+        return Promise.all(
+          Object.entries(models).map(async ([name, model]) => {
+            const uri = model.uri.toString();
+            const errors = [
+              ...(await worker.getSyntacticDiagnostics(uri)),
+              ...(await worker.getSemanticDiagnostics(uri)),
+            ];
+            return {
+              name,
+              errors: errors.map(({ code, messageText }) => ({
+                code,
+                messageText,
+              })),
+            };
+          })
+        );
+      });
+      assert.deepEqual(
+        diagnostics.map(({ name }) => name).sort(),
+        ['api-types.ts', 'app.ts', 'loaders.ts', 'main.ts'],
+        'The generator example must load its real source files'
+      );
+      for (const file of diagnostics) {
+        assert.deepEqual(
+          file.errors,
+          [],
+          `Generator example ${file.name} must type-check in ${theme} theme`
+        );
+      }
+      await complete(page, 'Alex\n1\n', undefined, widgetIndex);
+
+      await page
+        .locator('.editor-files')
+        .nth(widgetIndex)
+        .getByRole('tab', { name: 'app.ts', exact: true })
+        .click();
+      await page.evaluate(() => {
+        const { editor } = window.runRegression;
+        if (!editor.getModel().uri.path.endsWith('/app.ts')) {
+          throw new Error('The generator app.ts tab must activate its model');
+        }
+        const source = editor.getValue();
+        if (!source.includes("name: 'Alex'")) {
+          throw new Error('The generator example must contain the API mock');
+        }
+        editor.setValue(source.replace("name: 'Alex'", "name: 'Sam'"));
+      });
+      await complete(page, 'Sam\n1\n', 'Enter', widgetIndex);
+      assert.deepEqual(
+        errors,
+        [],
+        'Running and editing the generator example must not raise page errors'
+      );
+      console.log(`Generator example Run regressions passed: ${theme}`);
+    } finally {
+      await page.close();
+    }
+  }
 }
 
 export async function assertEditorRun(browser, origin) {
@@ -333,4 +452,5 @@ export async function assertEditorRun(browser, origin) {
       }
     }
   }
+  await assertGeneratorExample(browser, origin);
 }

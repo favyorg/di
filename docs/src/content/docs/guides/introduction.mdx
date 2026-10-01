@@ -46,7 +46,7 @@ type AddOneLive = typeof AddOne.Live;
 
 console.log(AddOne({ value: 5 })); // 6`} />
 
-The library does not infer dependencies by inspecting a function body. You declare `AddOneDeps`; TypeScript then infers the callback result and reports missing or incorrectly typed inputs.
+With `Module`, you declare `AddOneDeps`; TypeScript then infers the callback result and reports missing or incorrectly typed inputs. For dependencies inferred from `yield*` expressions, use [generator modules](/module/generator/).
 
 ## Compose modules with `Live`
 
@@ -124,6 +124,7 @@ Because `App` reads the supplied `Service` value directly, lazy resolution does 
 ## Next steps
 
 - Learn the exact callable and `Live` model in [Module](/module/module/).
+- Infer dependencies with `yield*` in [Generator modules](/module/generator/).
 - Compare lifecycle choices in [Caching](/module/cache/) and [Lazy initialization](/module/lazy/).
 - Bind dependencies incrementally with [Partial application](/module/partial/).
 - Look up exported declarations in the [API reference](/reference/api/).

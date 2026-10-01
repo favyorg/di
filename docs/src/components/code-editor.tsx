@@ -5,6 +5,7 @@ import MonacoEditor, {
   type OnMount,
 } from '@monaco-editor/react';
 import contextSource from '../../../di/src/lib/context.ts?raw';
+import genModuleSource from '../../../di/src/lib/genModule.ts?raw';
 import hktSource from '../../../di/src/lib/hkt.ts?raw';
 import indexSource from '../../../di/src/index.ts?raw';
 import makeModuleSource from '../../../di/src/lib/makeModule.ts?raw';
@@ -13,6 +14,7 @@ import moduleSource from '../../../di/src/lib/module.ts?raw';
 const favyDiSources = [
   ['src/index.ts', indexSource],
   ['src/lib/context.ts', contextSource],
+  ['src/lib/genModule.ts', genModuleSource],
   ['src/lib/hkt.ts', hktSource],
   ['src/lib/makeModule.ts', makeModuleSource],
   ['src/lib/module.ts', moduleSource],

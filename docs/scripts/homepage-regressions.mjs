@@ -79,6 +79,7 @@ try {
   for (const path of [
     '/guides/introduction/',
     '/module/module/',
+    '/module/generator/',
     '/module/cache/',
     '/module/lazy/',
     '/module/partial/',

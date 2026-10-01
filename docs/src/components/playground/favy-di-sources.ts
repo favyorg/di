@@ -1,4 +1,5 @@
 import contextSource from '../../../../di/src/lib/context.ts?raw';
+import genModuleSource from '../../../../di/src/lib/genModule.ts?raw';
 import hktSource from '../../../../di/src/lib/hkt.ts?raw';
 import indexSource from '../../../../di/src/index.ts?raw';
 import makeModuleSource from '../../../../di/src/lib/makeModule.ts?raw';
@@ -20,6 +21,11 @@ export const favyDiSourceFiles: readonly FavyDiSourceFile[] = [
     packagePath: 'src/lib/context.ts',
     sandboxPath: '/favy-di/lib/context.ts',
     code: contextSource,
+  },
+  {
+    packagePath: 'src/lib/genModule.ts',
+    sandboxPath: '/favy-di/lib/genModule.ts',
+    code: genModuleSource,
   },
   {
     packagePath: 'src/lib/hkt.ts',

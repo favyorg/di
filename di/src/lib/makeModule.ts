@@ -33,6 +33,14 @@ export type TModule<N extends Key, D, R, C = D> = {
     ...args: {} extends D ? [deps?: Exact<D, P>] : [deps: Exact<D, P>]
   ): TModule<N, Flat<Rest<D, P>>, R, Rest<C, P, true>>;
 };
+export type ModuleRequest<N extends Key = Key, D = never, R = unknown> =
+  { readonly name: N; readonly [__deps__]: Brand<D, R> } & Iterable<unknown>;
+export interface TGenModule<N extends Key, D, R, C = D> extends TModule<N, D, R, C> {
+  provide<const P extends Partial<Deps<D, C>> = {}>(
+    ...args: {} extends D ? [deps?: Exact<D, P>] : [deps: Exact<D, P>]
+  ): TGenModule<N, Flat<Rest<D, P>>, R, Rest<C, P, true>>;
+  [Symbol.iterator](): Generator<ModuleRequest<N, ModuleDeps<D>, R>, R, unknown>;
+}
 export type Live<T> = T extends { name: infer N extends Key; [__deps__]: Brand<infer D, infer R> }
   ? D & { [K in N]: R } : never;
 export type transformInput<D extends object, P extends object> = <X extends D>(deps: X, name: Key) => X & P;
