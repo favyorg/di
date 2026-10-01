@@ -380,7 +380,7 @@ async function assertGeneratorExample(browser, origin) {
       });
       assert.deepEqual(
         diagnostics.map(({ name }) => name).sort(),
-        ['api-types.ts', 'app.ts', 'loaders.ts', 'main.ts'],
+        ['api-types.ts', 'app.ts', 'contracts.ts', 'loaders.ts', 'main.ts'],
         'The generator example must load its real source files'
       );
       for (const file of diagnostics) {

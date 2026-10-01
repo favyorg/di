@@ -5,6 +5,13 @@ import {
   type TGenModule,
 } from './makeModule';
 import type { HKT } from './hkt';
+import type { ModuleLive } from './module';
+
+/** A service contract and context key, independent of its implementation. */
+export interface TTag<N extends PropertyKey, R> extends ModuleRequest<N, object, R> {
+  readonly Live: { [K in N]: R };
+  [Symbol.iterator](): Generator<ModuleRequest<N, object, R>, R, unknown>;
+}
 
 type UnionToIntersection<U> = [U] extends [never]
   ? object
@@ -26,19 +33,45 @@ interface GeneratorHKT extends HKT {
   readonly type: GeneratorModule<this['_NAME'], this['_DEPS'], this['_RESULT']>;
 }
 
+const iterableRequests = new WeakSet<object>();
+const tags = new WeakSet<object>();
+const iterable = <T extends object>(request: T): T => {
+  Object.defineProperty(request, Symbol.iterator, {
+    value: function* (): Generator<T, unknown, unknown> {
+      return yield request;
+    },
+  });
+  iterableRequests.add(request);
+  return request;
+};
+
+/** Declares a yieldable service contract without installing a provider. */
+export const Tag = <R>() => <const N extends PropertyKey>(
+  name: N extends 'Module' ? never : N
+): TTag<N, R> => {
+  if (name === 'Module') {
+    throw new TypeError('The Module key is reserved for module metadata');
+  }
+  const tag = iterable(
+    Object.defineProperties({}, {
+      name: { value: name, enumerable: true },
+      Live: {
+        get() {
+          throw new TypeError('Live is type-only; use typeof Tag.Live');
+        },
+      },
+    })
+  );
+  tags.add(tag);
+  return Object.freeze(tag) as TTag<N, R>;
+};
+
 // Decorate the callable itself so its provider brand and receiver stay intact.
-const iterableModules = new WeakSet<object>();
 type Callable = { provide(deps?: object): Callable };
 const decorate = <M extends Callable>(module: M): M => {
   const provide = module.provide;
   module.provide = (deps?: object) => decorate(provide(deps));
-  Object.defineProperty(module, Symbol.iterator, {
-    value: function* (): Generator<M, unknown, unknown> {
-      return yield module;
-    },
-  });
-  iterableModules.add(module);
-  return module;
+  return iterable(module);
 };
 
 const run = (
@@ -59,7 +92,7 @@ const run = (
     let value: unknown;
     try {
       const request = step.value;
-      if (!iterableModules.has(request)) {
+      if (!iterableRequests.has(request)) {
         throw new TypeError(
           'GenModule expects dependencies yielded with yield*'
         );
@@ -89,11 +122,36 @@ export const makeGenModule = (
       deps
     ) => run(generator, deps) as GeneratorHKT,
   });
-  const factory = (() => {
-    const create = base();
-    return (name: PropertyKey, fn: Parameters<typeof create>[1]) =>
-      decorate(create(name, fn));
-  }) as typeof base;
+  const factory = <D extends object = ModuleLive>() => {
+    const create = base<D>();
+    const createGenerator = (
+      key: PropertyKey | TTag<PropertyKey, unknown>,
+      fn: Parameters<typeof create>[1]
+    ) => {
+      if (typeof key === 'object' && key !== null && !tags.has(key)) {
+        throw new TypeError('GenModule expects a module name or a Tag');
+      }
+      const name = typeof key === 'object' ? key.name : key;
+      return decorate(create(name, fn));
+    };
+    return createGenerator as typeof create & {
+      <
+        const T extends TTag<PropertyKey, unknown>,
+        const F extends (deps: D) => Generator<
+          ModuleRequest,
+          T['Live'][T['name']],
+          unknown
+        >
+      >(
+        tag: T,
+        fn: F
+      ): GeneratorModule<
+        T['name'],
+        D extends unknown ? Omit<D, 'Module'> : never,
+        ReturnType<F>
+      >;
+    };
+  };
   factory.flushCache = base.flushCache;
   return factory;
 };

@@ -5,7 +5,7 @@ description: Exported values and TypeScript declarations for @favy/di.
 
 import { Editor } from '../../../components/editor';
 
-The package root exports ordinary and generator factories, module types,
+The package root exports ordinary and generator factories, service tags, module types,
 transform helpers, and the HKT encoding:
 
 ```ts
@@ -14,11 +14,13 @@ export {
   makeModule,
   GenModule,
   makeGenModule,
+  Tag,
   withModuleName,
   type DefaultModuleFactory,
   type Live,
   type TModule,
   type TGenModule,
+  type TTag,
   type ModuleRequest,
   type ModuleLive,
   type MakeOptions,
@@ -33,6 +35,7 @@ export {
   <strong>Common API</strong>
   <a href="#module">Module</a>
   <a href="#genmodule">GenModule</a>
+  <a href="#tag">Tag</a>
   <a href="#livet">Live</a>
   <a href="#modulelive">ModuleLive</a>
 
@@ -48,6 +51,7 @@ export {
   <strong>Advanced types</strong>
   <a href="#tmodulek-d-r-c--d">TModule</a>
   <a href="#tgenmodulek-d-r-c--d">TGenModule</a>
+  <a href="#ttagk-service">TTag</a>
   <a href="#modulerequest">ModuleRequest</a>
   <a href="#hkt">HKT</a>
   <a href="#kindh-name-result-deps-meta-meta2">Kind</a>
@@ -101,19 +105,25 @@ caller does not supply that generated key.
 Creates iterable modules from synchronous generator callbacks:
 
 ```ts
-GenModule<ExplicitDeps>()(name, function* (deps) {
+GenModule<ExplicitDeps>()(nameOrTag, function* (deps) {
   const service = yield* Dependency;
   return service;
 });
 ```
 
 `ExplicitDeps` may be omitted. The returned `TGenModule` combines explicit
-callback requirements with the `Live` contracts of all yielded module requests.
-Its result is the generator's return type. `yield* Dependency` returns that
-dependency's service value; the root call must supply a compatible value or
-provider under `Dependency.name`, along with its transitive requirements.
+callback requirements with the `Live` contracts of all yielded tags or modules.
+Its result is the generator's return type. Passing a tag in place of a name
+checks that result against the tag's service contract and uses the tag's key
+as the module name. It does not register the implementation as a default.
 
-Only `GenModule` and `makeGenModule` install the iterable protocol. `.provide()`
+`yield* Dependency` returns the dependency's service value. Yielding a tag adds
+only its service contract; fully bind a provider's dependencies with `.provide()`
+before supplying it under `Dependency.name`. Yielding a concrete module also
+adds that module's transitive requirements. The composition root always selects
+the value or provider to use.
+
+`Tag`, `GenModule`, and `makeGenModule` install the iterable protocol. `.provide()`
 preserves it while binding dependencies. Modules from ordinary factories can
 consume generator modules through `typeof Foo.Live`, and can supply compatible
 implementations under yielded keys, but ordinary modules cannot themselves be
@@ -123,6 +133,43 @@ Defaults are `cache: 'run'`, `lazy: true`, and the standard `Module.name`
 metadata. The runner accepts synchronous generators, not `async function*`
 callbacks or yielded promises. Returned service methods may be async. See the
 [runnable generator example](/module/generator/).
+
+### `Tag`
+
+Declares a service key and type independently of an implementation:
+
+```ts
+import { Tag, GenModule } from '@favy/di';
+
+const Clock = Tag<{ now(): Date }>()('Clock');
+type ClockLive = typeof Clock.Live;
+
+const ClockImpl = GenModule()(Clock, function* () {
+  return { now: () => new Date('2026-01-01T09:00:00.000Z') };
+});
+type ClockImplLive = typeof ClockImpl.Live;
+
+const Main = GenModule()('Main', function* () {
+  const clock = yield* Clock;
+  return clock.now().toISOString();
+});
+type MainLive = typeof Main.Live;
+
+console.log(Main({ Clock: ClockImpl })); // 2026-01-01T09:00:00.000Z
+```
+
+`Tag<Service>()(key)` returns `TTag<typeof key, Service>`. A tag exposes `name`,
+the type-only `Live` marker, and an iterator. It is not callable and has no
+`.provide()` method. `typeof Clock.Live` is `{ Clock: { now(): Date } }` and
+carries no implementation dependencies. Reading `.Live` at runtime throws.
+
+Identity is the declared `PropertyKey`, not the tag object. Recreating a tag
+with the same string key addresses the same service; incompatible contracts
+for that key are not detected across declarations. Reuse an exported tag or
+choose distinct symbol keys for distinct services. `Tag` rejects the string key
+`'Module'`, which is reserved for built-in module metadata. Values and fully bound
+providers are supplied through the normal dependency object; a tag alone
+never installs an implementation.
 
 ### `Live<T>`
 
@@ -583,9 +630,19 @@ dependency request and returns the resolved service sent back by the runner.
 A type annotation alone does not install this runtime behavior: use
 `GenModule` or `makeGenModule` to create iterable modules.
 
+### `TTag<K, Service>`
+
+The non-callable service contract returned by `Tag<Service>()(key)`. It has a
+readonly `name: K`, a type-only `Live` marker containing `{ [P in K]: Service }`,
+and an iterator returning `Service` while yielding a `ModuleRequest<K, object, Service>`.
+It carries no implementation requirements, call signature, or `.provide()`.
+
+Use `Tag` to create the runtime object. A structural type annotation alone does
+not create a request accepted by the generator runner.
+
 ### `ModuleRequest`
 
-The lightweight type yielded by a generator module's iterator:
+The lightweight type yielded by a tag or generator module's iterator:
 
 ```ts
 export type ModuleRequest<
@@ -600,7 +657,7 @@ export type ModuleRequest<
 
 It carries the declared key, iterable protocol, and private dependency/result
 marker used by `Live`. The request describes a dependency; it is not the resolved service.
-Use `yield* SomeGenModule` to create one. A plain `{ name }` object is not a
+Use `yield* SomeTag` or `yield* SomeGenModule` to create one. A plain `{ name }` object is not a
 valid module request.
 
 ### `HKT`

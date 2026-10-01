@@ -10,7 +10,7 @@ Dependency graphs, just typed functions.
 
 - Create named modules with ordinary functions, without decorators or container setup
 - Carry transitive requirements through `typeof Foo.Live` while TypeScript infers module results
-- Infer dependencies from `yield*` with opt-in `GenModule` generator callbacks
+- Separate service contracts with `Tag` and infer dependencies from `yield*` in `GenModule` callbacks
 - Replace direct or transitive dependencies at the application boundary
 - Bind known values incrementally with `.provide()`
 - Choose per-run, factory-wide, or disabled caching
@@ -49,7 +49,8 @@ console.log(greet('Ada')); // Hello, Ada! It is 2026-01-01T09:00:00.000Z.
 - `Module<Deps>()(name, factory)` creates a named callable with explicit dependency types and an inferred result.
 - `typeof Clock.Live` combines the dependencies required by `Clock` with the value it provides under the `Clock` key. Declare the alias immediately below the module and compose these types to carry transitive requirements through the graph. `.Live` is a type-only marker: use it in a TypeScript type query; reading `Clock.Live` at runtime throws. The exported `Live<typeof Clock>` helper remains equivalent.
 - The **composition root** is the top-level call, here `Greeting({ Clock })`. Supply module implementations and dependency values there; @favy/di resolves the graph from that boundary.
-- `GenModule()('Key', function* () { ... })` infers dependencies from `yield*` expressions and returns the generator's final result. Implementations still come from the composition root. Its synchronous generators can return services with async methods; ordinary `Module` callables remain non-iterable.
+- `Tag<Service>()('Key')` declares an iterable service contract. `GenModule<Deps>()(tag, function* (deps) { ... })` creates a checked implementation. Consumers use `yield* tag` and require only the service; fully bind the implementation's dependencies with `.provide()` before wiring it at the composition root.
+- `GenModule()('Key', function* () { ... })` also supports named modules. Yielding a concrete module carries its transitive requirements. Synchronous generators can return services with async methods; ordinary `Module` callables remain non-iterable.
 
 ## Replace a Dependency at the Boundary
 
@@ -109,7 +110,7 @@ Keep the dependency object intact when access needs to remain conditional; destr
 - [Introduction](https://di.favy.dev/guides/introduction/) and [Module](https://di.favy.dev/module/module/) explain the core model.
 - [Testing](https://di.favy.dev/guides/testing/) and [Best Practices](https://di.favy.dev/guides/best-practices/) cover application boundaries and lifecycle choices.
 - [Transform Input](https://di.favy.dev/module/transform-input/) and [Transform Output](https://di.favy.dev/module/transform-output/) cover custom factories.
-- [Generator modules](https://di.favy.dev/module/generator/) shows `yield*`, inferred dependencies, and async service methods in a runnable example.
+- [Generator modules](https://di.favy.dev/module/generator/) shows service tags, separate implementations, `yield*`, and async methods in a runnable example.
 - [HKT support](https://di.favy.dev/reference/api/#hkt) describes advanced type transformations.
 - [API Reference](https://di.favy.dev/reference/api/) documents exports and signatures.
 

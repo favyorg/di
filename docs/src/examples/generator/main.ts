@@ -1,5 +1,5 @@
 import { GenModule } from '../../../../di/src';
-import { User, Orders } from './loaders';
+import { User, Orders } from './contracts';
 
 export const Main = GenModule()('Main', function* () {
   const user = yield* User;

@@ -1,12 +1,13 @@
 import { GenModule } from '../../../../di/src';
 import type { Api } from '../api-result/api-types';
+import { User, Orders } from './contracts';
 
-export const User = GenModule<{ api: Api }>()('User', function* ({ api }) {
+export const UserImpl = GenModule<{ api: Api }>()(User, function* ({ api }) {
   return { Load: async () => api.getUser() };
 });
-export type UserLive = typeof User.Live;
+export type UserImplLive = typeof UserImpl.Live;
 
-export const Orders = GenModule<{ api: Api }>()('Orders', function* ({ api }) {
+export const OrdersImpl = GenModule<{ api: Api }>()(Orders, function* ({ api }) {
   return { Load: async () => api.getOrders() };
 });
-export type OrdersLive = typeof Orders.Live;
+export type OrdersImplLive = typeof OrdersImpl.Live;

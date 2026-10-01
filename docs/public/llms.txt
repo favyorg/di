@@ -12,7 +12,7 @@
 - [Partial Application](https://di.favy.dev/module/partial/): Bind dependencies with `.provide()` and preserve remaining requirements.
 - [Caching](https://di.favy.dev/module/cache/): Per-run, factory-wide, and disabled caching.
 - [Lazy Initialization](https://di.favy.dev/module/lazy/): Resolve providers on demand or eagerly.
-- [Generator modules](https://di.favy.dev/module/generator/): Opt-in `GenModule` and `makeGenModule` infer dependencies from `yield*`; synchronous generators return services that can have async methods. Supply implementations at the composition root. Ordinary modules remain non-iterable.
+- [Generator modules](https://di.favy.dev/module/generator/): `Tag<Service>()(key)` separates a service contract from its implementation. `GenModule<Deps>()(tag, function* (deps) { ... })` checks the implementation; `yield* tag` infers only the service requirement. Fully bind implementation dependencies with `.provide()` before root wiring. Named generator modules and transitive inference via `yield* module` remain supported. Synchronous generators can return services with async methods; ordinary modules remain non-iterable.
 
 ## Guides
 

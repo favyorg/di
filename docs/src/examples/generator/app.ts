@@ -1,5 +1,5 @@
 import { Main } from './main';
-import { User, Orders } from './loaders';
+import { UserImpl, OrdersImpl } from './loaders';
 import type { Api } from '../api-result/api-types';
 
 const api: Api = {
@@ -7,4 +7,7 @@ const api: Api = {
   getOrders: async () => [{ id: 10, total: 49 }],
 };
 
-void Main({ api, User, Orders }).Run(); // Alex, 1
+void Main({
+  User: UserImpl.provide({ api }),
+  Orders: OrdersImpl.provide({ api }),
+}).Run(); // Alex, 1

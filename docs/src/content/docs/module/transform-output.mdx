@@ -170,9 +170,9 @@ The module callback returns an object with an async `Load` method, such as `{ Lo
 
 ## Infer dependencies with generators
 
-[`GenModule`](/module/generator/) is a ready-to-use output-HKT extension. Its output HKT combines the requirements of yielded module requests and extracts the generator's final return type. Its output transform runs the generator against the current DI context, and a factory wrapper installs iteration on the callable and its `.provide()` results.
+[`GenModule`](/module/generator/) is a ready-to-use output-HKT extension. Its output HKT combines the requirements of yielded tag or module requests and extracts the generator's final return type. Its output transform runs the generator against the current DI context, and a factory wrapper installs iteration on the callable and its `.provide()` results. `Tag<Service>()(name)` provides an iterable contract without an implementation, so consumers infer only the service requirement.
 
-`transformInput` alone cannot provide this behavior because it runs before the callback creates a generator. See [Generator modules](/module/generator/) for the runnable `User` / `Orders` example, inferred dependencies, async methods, and binding with `.provide()`.
+`transformInput` alone cannot provide this behavior because it runs before the callback creates a generator. See [Generator modules](/module/generator/) for the runnable `User` / `Orders` example with separate tags and implementations, inferred dependencies, async methods, and binding with `.provide()`.
 
 ## `transformInput` comparison
 

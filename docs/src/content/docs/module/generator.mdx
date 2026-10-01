@@ -1,28 +1,37 @@
 ---
 title: Generator modules
-description: Infer dependency requirements with yield*, compose generator modules, and run async service methods.
+description: Separate service contracts from implementations with Tag, infer requirements with yield*, and run async service methods.
 ---
 
 import { Editor } from '../../../components/editor';
 import apiTypesSource from '../../../examples/api-result/api-types.ts?raw';
+import contractsSource from '../../../examples/generator/contracts.ts?raw';
 import loadersSource from '../../../examples/generator/loaders.ts?raw';
 import mainSource from '../../../examples/generator/main.ts?raw';
 import appSource from '../../../examples/generator/app.ts?raw';
 
-`GenModule` creates a module from a synchronous generator. Each `yield* Dependency` retrieves a service from the current DI context and adds that module's requirements to the inferred dependency contract. The generator's final `return` becomes the module's result.
+`GenModule` creates a module from a synchronous generator. Each `yield* Dependency` retrieves a service from the current DI context and adds its requirements to the inferred dependency contract. The generator's final `return` becomes the module's result.
+
+Use `Tag<Service>()(name)` to declare a service contract independently of its implementation. A consumer can `yield*` the tag without importing a concrete provider or inheriting that provider's dependencies.
 
 You can use `GenModule` alongside ordinary [`Module`](/module/module/) callables. Both use the same provider resolution, caching, and `.provide()` behavior.
 
 ## Run a complete example
 
-`User` and `Orders` return services with async `Load()` methods. `Main` retrieves them with `yield*` and returns an async `Run()` method. There is no need to write `UserLive & OrdersLive` on `Main`: TypeScript infers both services and their shared `api` requirement.
+`User` and `Orders` are tags declaring services with async `Load()` methods. `UserImpl` and `OrdersImpl` implement those contracts using `api`. `Main` imports only the tags, retrieves the services with `yield*`, and returns an async `Run()` method.
 
-The tabs separate the application module, services, API types, and startup. **Run** executes `app.ts`, which supplies the mocks and calls `Main` once. The console prints `Alex` and `1`.
+TypeScript infers that `Main` requires `User` and `Orders`. Their implementations' `api` dependency stays outside that contract. The tabs separate the application module, contracts, implementations, API types, and startup. **Run** executes `app.ts`, which binds the mock API to each implementation and calls `Main` once. The console prints `Alex` and `1`.
 
 <Editor client:load entry="app.ts" files={[
   {
     name: 'main.ts',
     code: mainSource.replace("'../../../../di/src'", "'@favy/di'"),
+  },
+  {
+    name: 'contracts.ts',
+    code: contractsSource
+      .replace("'../../../../di/src'", "'@favy/di'")
+      .replace("'../api-result/api-types'", "'./api-types'"),
   },
   {
     name: 'loaders.ts',
@@ -39,44 +48,75 @@ The tabs separate the application module, services, API types, and startup. **Ru
 
 ## What `yield*` does
 
-When `Main` executes `const user = yield* User`, the runner looks up the `User` key in the current context. A supplied module provider is resolved through DI; a supplied service object is returned directly. The generator resumes with that value, and `user` has the inferred return type of `User`.
+When `Main` executes `const user = yield* User`, the runner looks up the `User` key in the current context. A supplied module provider is resolved through DI; a supplied service object is returned directly. The generator resumes with that value, and `user` has the service type declared by the tag.
 
-Yielding a module declares a requirement. The composition root still selects implementations:
+The tag declares a requirement. The composition root selects and prepares its implementation:
 
 ```ts
-void Main({ api, User, Orders }).Run();
+void Main({
+  User: UserImpl.provide({ api }),
+  Orders: OrdersImpl.provide({ api }),
+}).Run();
 ```
 
-Leaving out `User`, `Orders`, or their transitive `api` dependency is a TypeScript error. The module mentioned in `yield*` is not automatically installed as a default provider. You can replace it with a compatible value or provider under the same key.
+Leaving out `User` or `Orders` is a TypeScript error. Neither a tag nor `yield*` installs a default implementation. `GenModule<Deps>()(User, callback)` checks that the generator returns a compatible service and creates a provider named `User`; it does not register that provider anywhere.
+
+Fully bind an implementation's dependencies with `.provide()` before supplying it for a tag. `Main` knows nothing about `api`, so the type system does not infer a flat graph from `Main({ api, User: UserImpl, ... })`. A compatible service object also works, for example `User: { Load: async () => ({ id: 1, name: 'Alex' }) }`.
+
+Tags use their declared `PropertyKey` as identity. Two tags named `'User'` address the same context entry, even if they are different objects; TypeScript cannot detect incompatible contracts declared separately under the same key. Export and reuse one tag for each service, or use distinct symbol keys when services need separate identities. The string key `'Module'` is reserved for built-in module metadata, so `Tag` rejects it. Tags have no call signature or `.provide()` method: dependency binding belongs to the implementation.
 
 Requirements include every statically possible yield. A conditional branch can leave a provider unused at runtime, but its dependency remains part of the caller's contract. With the default lazy resolution, an unused provider is not executed.
 
 ## Explicit inputs and `Live`
 
-Leaf modules can still declare raw inputs with `GenModule<Deps>()`. In the example, `User` and `Orders` accept `{ api: Api }` through their callback arguments. A module may combine these explicit inputs with dependencies requested through `yield*`; the resulting contract includes both.
+Implementations can declare raw inputs with `GenModule<Deps>()`. In the example, `UserImpl` and `OrdersImpl` accept `{ api: Api }` through their callback arguments. A module may combine these explicit inputs with dependencies requested through `yield*`; its own contract includes both.
 
-Declare each module's dependency type directly below it:
+Declare each tag or module's dependency type directly below it:
 
 ```ts
 export type MainLive = typeof Main.Live;
 ```
 
-`MainLive` contains `Main`'s result and all remaining requirements, just like an ordinary module's `Live` type. It is useful when an ordinary `Module` consumes a generator module. Reading `.Live` at runtime still throws; it is a type-only marker.
+`typeof User.Live` contains only `{ User: UserService }`, where `UserService` is the type passed to `Tag`. `typeof UserImpl.Live` also carries the implementation's `api` requirement. `MainLive` contains `Main`'s result and its `User` and `Orders` requirements, just like an ordinary module's `Live` type. These types also work when an ordinary `Module` consumes a service. Reading `.Live` at runtime throws; it is a type-only marker.
 
 ## Bind dependencies with `.provide()`
 
 You can replace the final startup line in `app.ts` with a bound module:
 
 ```ts
-const ReadyMain = Main.provide({ api }).provide({ User, Orders });
+const ReadyMain = Main.provide({
+  User: UserImpl.provide({ api }),
+  Orders: OrdersImpl.provide({ api }),
+});
 type ReadyMainLive = typeof ReadyMain.Live;
 
 void ReadyMain().Run(); // Alex, 1
 ```
 
-Each `.provide()` returns an independent callable and removes the supplied keys from the remaining requirements. The iterable protocol is preserved, so another generator can use `yield* ReadyMain`. That consumer then requires an implementation under `Main`, the original declared name; the already-bound `api`, `User`, and `Orders` keys are no longer required.
+Each `.provide()` returns an independent callable and removes the supplied keys from the remaining requirements. The iterable protocol is preserved, so another generator can use `yield* ReadyMain`. That consumer then requires an implementation under `Main`, the original declared name; the bound `User` and `Orders` keys are no longer required.
 
 See [Partial Application](/module/partial/) for binding precedence and replacement rules.
+
+## Yielding a concrete module
+
+Tags are optional. You can still create a module with a name and yield the module itself:
+
+```ts
+const UserImpl = GenModule<{ api: Api }>()('User', function* ({ api }) {
+  return { Load: async () => api.getUser() };
+});
+type UserImplLive = typeof UserImpl.Live;
+
+const Main = GenModule()('Main', function* () {
+  const user = yield* UserImpl;
+  return { Run: () => user.Load() };
+});
+type MainLive = typeof Main.Live;
+
+void Main({ api, User: UserImpl }).Run();
+```
+
+In this form, `Main` imports the implementation and inherits its transitive `api` requirement. The root still supplies the provider under `User`. Choose a tag when consumers should depend only on a service contract.
 
 ## Async work and errors
 
@@ -94,21 +134,21 @@ Use `makeGenModule` to create an independent generator factory:
 import { makeGenModule } from '@favy/di';
 
 const CachedGenModule = makeGenModule({ cache: 'module' });
-// Create modules with CachedGenModule<Deps>()(name, function* (...) { ... }).
+// Create modules with CachedGenModule<Deps>()(nameOrTag, function* (...) { ... }).
 
 CachedGenModule.flushCache();
 ```
 
 The defaults are `cache: 'run'` and `lazy: true`. [Caching](/module/cache/) and [Lazy resolution](/module/lazy/) describe the same lifecycle rules used by generator modules. `flushCache()` clears only that factory's module cache. Input and output transforms are fixed by the extension; the options configure `cache` and `lazy`.
 
-Modules from different generator factories can yield one another. Ordinary modules can consume generator providers through `typeof Provider.Live`, and ordinary providers can replace a yielded service when their result and requirements are compatible. Ordinary `Module` callables have no iterable protocol, so they cannot themselves appear after `yield*`.
+Tags can be used across generator factories, and modules from different generator factories can yield one another. Ordinary modules can consume a tag contract through `typeof TagName.Live` or a generator provider through `typeof Provider.Live`. Ordinary providers can supply a tagged service when their result is compatible and their requirements are fully bound. Ordinary `Module` callables have no iterable protocol, so they cannot themselves appear after `yield*`.
 
 | Feature | `Module` | `GenModule` |
 | --- | --- | --- |
 | Callback | Ordinary function | Synchronous generator |
-| Service access | Callback dependency object | `yield* Dependency` |
-| Dependency types | Explicit contract, often composed from `Live` | Explicit raw inputs plus inferred yielded requirements |
+| Service access | Callback dependency object | `yield* Tag` or `yield* GenModule` |
+| Dependency types | Explicit contract, often composed from `Live` | Explicit raw inputs plus inferred tag or module requirements |
 | Async service methods | Supported | Supported |
 | Root wiring, `.provide()`, caching | Shared DI behavior | Shared DI behavior |
 
-For the exported signatures, see [`GenModule`](/reference/api/#genmodule) and [`TGenModule`](/reference/api/#tgenmodulek-d-r-c--d). For the extension mechanism behind generator modules, see [Transform Output](/module/transform-output/#infer-dependencies-with-generators).
+For the exported signatures, see [`Tag`](/reference/api/#tag), [`GenModule`](/reference/api/#genmodule), and [`TGenModule`](/reference/api/#tgenmodulek-d-r-c--d). For the extension mechanism behind generator modules, see [Transform Output](/module/transform-output/#infer-dependencies-with-generators).

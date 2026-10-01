@@ -10,3 +10,4 @@ exports.makeModule = makeModuleExports.makeModule;
 exports.withModuleName = makeModuleExports.withModuleName;
 exports.GenModule = genModuleExports.GenModule;
 exports.makeGenModule = genModuleExports.makeGenModule;
+exports.Tag = genModuleExports.Tag;
