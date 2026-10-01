@@ -49,6 +49,7 @@ const UserApi = Module<{ HttpClient: HttpClient }>()(
     getUser: (id: number) => HttpClient.get('/api/users/' + id),
   }),
 );
+type UserApiLive = typeof UserApi.Live;
 
 describe('UserApi', () => {
   it('requests and returns one user', async () => {
@@ -88,7 +89,7 @@ This test keeps `UserRepository` and `UserService` real. Only the database bound
 </dl>
 
 <Editor client:load code={`import { describe, expect, it } from '@jest/globals';
-import { Module, type Live } from '@favy/di';
+import { Module } from '@favy/di';
 
 interface Database {
   findUser: (id: number) => { name: string } | undefined;
@@ -97,11 +98,12 @@ interface Database {
 const UserRepository = Module<{ database: Database }>()('UserRepository', ({ database }) => ({
   findById: (id: number) => database.findUser(id),
 }));
-type UserRepositoryLive = Live<typeof UserRepository>;
+type UserRepositoryLive = typeof UserRepository.Live;
 
 const UserService = Module<UserRepositoryLive>()('UserService', ({ UserRepository }) => ({
   getDisplayName: (id: number) => UserRepository.findById(id)?.name ?? 'Unknown user',
 }));
+type UserServiceLive = typeof UserService.Live;
 
 describe('UserService integration', () => {
   it('passes the user ID through the real repository', () => {
@@ -151,6 +153,7 @@ const WelcomeMessage = Module<{ Mailer: Mailer }>()(
     sendTo: (address: string) => Mailer.send(address, 'Welcome!'),
   }),
 );
+type WelcomeMessageLive = typeof WelcomeMessage.Live;
 
 const createWelcomeFixture = () => {
   const sentMessages: Array<{ address: string; body: string }> = [];
@@ -160,6 +163,7 @@ const createWelcomeFixture = () => {
     },
   };
   const TestWelcomeMessage = WelcomeMessage.provide({ Mailer: fakeMailer });
+  type TestWelcomeMessageLive = typeof TestWelcomeMessage.Live;
 
   return { sentMessages, TestWelcomeMessage };
 };
@@ -200,6 +204,7 @@ const CachedModule = makeModule({ cache: 'module' });
 
 let initializationCount = 0;
 const Counter = CachedModule()('Counter', () => ++initializationCount);
+type CounterLive = typeof Counter.Live;
 
 beforeEach(() => {
   CachedModule.flushCache();
@@ -242,7 +247,7 @@ to test. Access it through the dependency object inside the branch:
 </dl>
 
 <Editor client:load code={`import { describe, expect, it } from '@jest/globals';
-import { Module, type Live } from '@favy/di';
+import { Module } from '@favy/di';
 
 let initializationCount = 0;
 const ExpensiveFeature = Module()('ExpensiveFeature', () => {
@@ -251,11 +256,12 @@ const ExpensiveFeature = Module()('ExpensiveFeature', () => {
     run: () => 42,
   };
 });
-type ExpensiveFeatureLive = Live<typeof ExpensiveFeature>;
+type ExpensiveFeatureLive = typeof ExpensiveFeature.Live;
 
 const App = Module<ExpensiveFeatureLive>()('App', ($) => ({
   run: (enabled: boolean) => (enabled ? $.ExpensiveFeature.run() : 0),
 }));
+type AppLive = typeof App.Live;
 
 describe('App lazy dependency', () => {
   it('initializes the feature only when the enabled branch uses it', () => {

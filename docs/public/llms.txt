@@ -1,26 +1,27 @@
 # @favy/di
 
-> @favy/di v3 builds TypeScript 5+ dependency graphs from typed, named functions without decorators or container configuration.
+> @favy/di v3 is a dependency injection library for TypeScript 5.0 or newer, built from typed named functions without decorators or container configuration.
 
-The standard `Module` is lazy and run-cached; `Live<T>` carries transitive requirements; the API Reference is authoritative for public signatures and types.
+`Module` creates a callable with explicit dependencies and an inferred result. Its defaults are `lazy: true` and `cache: 'run'`: resolve providers on first access and reuse their values within one top-level call. Declare `type FooLive = typeof Foo.Live` immediately below each module. This combines the module's provided value with its dependencies, carrying transitive requirements through the graph. `.Live` is a type-only marker; reading it at runtime throws. The exported `Live<typeof Foo>` helper remains equivalent. The API reference is authoritative for exports and signatures.
 
 ## Core documentation
 
-- [Introduction](https://di.favy.dev/guides/introduction/): Learn the core concepts and build a first dependency graph.
-- [Module](https://di.favy.dev/module/module/): Understand named providers, dependency maps, and composition.
-- [API Reference](https://di.favy.dev/reference/api/): Consult the authoritative public signatures and types.
-- [Partial Application](https://di.favy.dev/module/partial/): Bind known dependencies with `.provide()` while preserving the remaining types.
-- [Caching](https://di.favy.dev/module/cache/): Compare run, module, and uncached lifecycles.
-- [Lazy Initialization](https://di.favy.dev/module/lazy/): See when providers resolve and which operations trigger them.
+- [Introduction](https://di.favy.dev/guides/introduction/): Installation, first modules, and the composition root.
+- [Module](https://di.favy.dev/module/module/): Named callables, dependency contracts, and composition with `typeof Foo.Live`.
+- [API Reference](https://di.favy.dev/reference/api/): Public exports, signatures, and runtime semantics.
+- [Partial Application](https://di.favy.dev/module/partial/): Bind dependencies with `.provide()` and preserve remaining requirements.
+- [Caching](https://di.favy.dev/module/cache/): Per-run, factory-wide, and disabled caching.
+- [Lazy Initialization](https://di.favy.dev/module/lazy/): Resolve providers on demand or eagerly.
 
 ## Guides
 
-- [Testing](https://di.favy.dev/guides/testing/): Replace dependencies at the composition root for deterministic tests.
-- [Best Practices](https://di.favy.dev/guides/best-practices/): Apply recommended patterns for clear, maintainable graphs.
+- [Testing](https://di.favy.dev/guides/testing/): Replace dependencies with typed fakes and manage cache state.
+- [Best Practices](https://di.favy.dev/guides/best-practices/): Organize modules, choose lifetimes, and handle errors at boundaries.
 
 ## Optional
 
 - [Playground](https://di.favy.dev/playground/): Edit and run six focused @favy/di examples in an isolated browser sandbox.
-- [Transform Input](https://di.favy.dev/module/transform-input/): Customize dependency inputs, including HKT-based transforms.
-- [Transform Output](https://di.favy.dev/module/transform-output/): Customize callable outputs, including HKT-based transforms.
-- [Source Repository](https://github.com/favyorg/di): Inspect the implementation, report issues, and contribute.
+- [Transform Input](https://di.favy.dev/module/transform-input/): Customize callback dependencies and module metadata.
+- [Transform Output](https://di.favy.dev/module/transform-output/): Observe or transform successful module results.
+- [HKT support](https://di.favy.dev/reference/api/#hkt): Compute input and output types with higher-kinded transformations.
+- [Source repository](https://github.com/favyorg/di): Implementation, examples, and contributor information.

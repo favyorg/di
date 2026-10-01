@@ -7,20 +7,23 @@ import { Editor } from '../../../components/editor';
 
 The `cache` option controls whether a provider result is reused after dependency resolution. It accepts `'run'`, `'module'`, or `'none'`.
 
+The examples below use one factory throughout each graph. When composing different factories, cache behavior also depends on which module owns a dependency binding; see [Mixing factories](#mixing-factories).
+
 ## `cache: 'run'` (default)
 
 Each top-level module call starts a run with a fresh cache. Within that call, repeated access to the same dependency key reuses one result. A later top-level call computes it again.
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 let runs = 0;
 const A = Module()('A', () => ++runs);
-type ALive = Live<typeof A>;
+type ALive = typeof A.Live;
 
 const B = Module<ALive>()('B', ({ A }) => A);
-type BLive = Live<typeof B>;
+type BLive = typeof B.Live;
 
 const C = Module<ALive & BLive>()('C', ({ A, B }) => A + B);
+type CLive = typeof C.Live;
 
 console.log(C({ A, B })); // 2: A ran once, then its value was reused
 console.log(C({ A, B })); // 4: a new run computed A as 2
@@ -32,18 +35,19 @@ The direct calls to `C` are separate runs. The two paths to `A` inside each run 
 
 This mode uses one cache owned by the factory returned from `makeModule`. It survives separate root calls and is shared by every callable created from that factory. Entries are keyed by each callable's declared `name`.
 
-<Editor client:load code={`import { makeModule, type Live } from '@favy/di';
+<Editor client:load code={`import { makeModule } from '@favy/di';
 
 const CachedModule = makeModule({ cache: 'module' });
 
 let runs = 0;
 const A = CachedModule()('A', () => ++runs);
-type ALive = Live<typeof A>;
+type ALive = typeof A.Live;
 
 const B = CachedModule<ALive>()('B', ({ A }) => A);
-type BLive = Live<typeof B>;
+type BLive = typeof B.Live;
 
 const C = CachedModule<ALive & BLive>()('C', ({ A, B }) => A + B);
+type CLive = typeof C.Live;
 
 console.log(C({ A, B })); // 2
 console.log(C({ A, B })); // 2: C itself is cached by this factory
@@ -60,26 +64,59 @@ Only module results enter this factory-wide store. Plain input values still belo
 
 ## `cache: 'none'`
 
-No resolved dependency value is retained. Every access invokes its provider again, even during one root call.
+Dependency bindings owned by this factory do not retain resolved values. Every access invokes the bound provider again, even during one root call. A provider from another factory may still return its own factory-wide cached result.
 
-<Editor client:load code={`import { makeModule, type Live } from '@favy/di';
+<Editor client:load code={`import { makeModule } from '@favy/di';
 
 const UncachedModule = makeModule({ cache: 'none' });
 
 let runs = 0;
 const A = UncachedModule()('A', () => ++runs);
-type ALive = Live<typeof A>;
+type ALive = typeof A.Live;
 
 const B = UncachedModule<ALive>()('B', ({ A }) => A);
-type BLive = Live<typeof B>;
+type BLive = typeof B.Live;
 
 const C = UncachedModule<ALive & BLive>()('C', ({ A, B }) => A + B);
+type CLive = typeof C.Live;
 
 console.log(C({ A, B })); // 3: direct A = 1, then B's A = 2
 console.log(C({ A, B })); // 7: direct A = 3, then B's A = 4
 console.log(runs); // 4`} />
 
+## Mixing factories
+
+The factory that registers a dependency key controls whether that binding caches its result. Keys supplied at the root use the root module's factory. Keys bound with `.provide()` use the factory of the module receiving those bindings, even when that module is nested under a different root. Reading a forwarded dependency keeps the original binding's cache policy.
+
+Consequently, creating a provider with `cache: 'none'` does not prevent a consuming `cache: 'run'` root from caching that provider's result:
+
+<Editor client:load code={`import { Module, makeModule } from '@favy/di';
+
+const UncachedModule = makeModule({ cache: 'none' });
+let runs = 0;
+const Counter = UncachedModule()('Counter', () => ++runs);
+type CounterLive = typeof Counter.Live;
+
+const CachedReads = Module<CounterLive>()(
+  'CachedReads',
+  (deps) => [deps.Counter, deps.Counter],
+);
+type CachedReadsLive = typeof CachedReads.Live;
+
+const UncachedReads = UncachedModule<CounterLive>()(
+  'UncachedReads',
+  (deps) => [deps.Counter, deps.Counter],
+);
+type UncachedReadsLive = typeof UncachedReads.Live;
+
+console.log(CachedReads({ Counter })); // [1, 1]
+console.log(UncachedReads({ Counter })); // [2, 3]`} />
+
+The provider's own `cache: 'module'` is a separate layer. Such a provider returns its factory-wide cached result even when the consuming binding uses `cache: 'none'`. Flush the provider's factory to clear that store; flushing the consumer's factory does not clear it. Existing bindings that already cached a result retain it until their run is discarded, so a fresh root call may also be needed.
+
 ## Choosing a mode
+
+For a graph using one factory throughout:
 
 | Mode | Scope | Recomputed on a new root call? | Typical use |
 | --- | --- | --- | --- |

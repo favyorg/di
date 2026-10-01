@@ -4,6 +4,11 @@ description: Inspect or transform successful module results at runtime and with 
 ---
 
 import { Editor } from '../../../components/editor';
+import apiModuleSource from '../../../examples/api-result/api-module.ts?raw';
+import apiTypesSource from '../../../examples/api-result/api-types.ts?raw';
+import loadersSource from '../../../examples/api-result/loaders.ts?raw';
+import mainSource from '../../../examples/api-result/main.ts?raw';
+import appSource from '../../../examples/api-result/app.ts?raw';
 
 `transformOutput` runs after a module callback returns. It receives `(result, deps, isRoot)`:
 
@@ -29,6 +34,7 @@ const Sum = TracedModule<{ a: number; b: number }>()(
   'Sum',
   ({ a, b }) => a + b,
 );
+type SumLive = typeof Sum.Live;
 
 console.log(Sum({ a: 2, b: 3 })); // 5`} />
 
@@ -36,7 +42,7 @@ Use `isRoot` when root calls and internally resolved providers need different lo
 
 ## Callback errors are not intercepted
 
-The module callback is evaluated before `transformOutput` is called. If the callback throws, the transform never receives a result and cannot catch that error.
+The module callback is evaluated before `transformOutput` is called. If the callback throws synchronously, the transform never receives a result and cannot catch that error.
 
 <Editor client:load code={`import { makeModule } from '@favy/di';
 
@@ -52,6 +58,7 @@ const ObservedModule = makeModule({
 const Fails = ObservedModule()('Fails', () => {
   throw new Error('callback failed');
 });
+type FailsLive = typeof Fails.Live;
 
 try {
   Fails();
@@ -62,6 +69,8 @@ try {
 console.log(transformed); // 0`} />
 
 Handle callback failures in the callback itself or around the module call. `transformOutput` can validate a successfully returned value and may throw its own error.
+
+An output transform can return an object whose methods catch errors when called. The [API result example](#return-typed-api-results) below wraps an async `Load()` method to handle both thrown errors and rejected promises.
 
 ## Ordinary transforms define a concrete output type
 
@@ -74,6 +83,7 @@ const StringBoxModule = makeModule({
 });
 
 const Greeting = StringBoxModule()('Greeting', () => 'hello');
+type GreetingLive = typeof Greeting.Live;
 const box = Greeting();
 
 const message: string = box.value;
@@ -120,11 +130,43 @@ const BoxModule = makeModule({
 });
 
 const Greeting = BoxModule()('Greeting', () => 'hello');
+type GreetingLive = typeof Greeting.Live;
 const output = Greeting();
 
 console.log(\`\${output.name}: \${output.value}\`); // "Greeting: hello"`} />
 
 Here `this['_RESULT']` becomes the callback return type, `this['_NAME']` becomes the declared key, and `this['_DEPS']` preserves the callable's remaining dependencies. The runtime object and the statically computed result now have the same shape.
+
+## Return typed API results
+
+An application can use one result shape for API calls while keeping each endpoint's payload type. The following custom `ApiModule` factory wraps a module's async `Load()` method in `try/catch`: a fulfilled value becomes `{ ok: true, value }`, and a thrown error or rejection becomes `{ ok: false, error }`. `$.User.Load()` returns `Promise<Result<UserData>>`; `$.Orders.Load()` returns `Promise<Result<Order[]>>`.
+
+The example uses an in-memory API so it can run without a server. Supply another implementation at the same dependency boundary. The tabs separate the reusable factory (`api-module.ts`), API types (`api-types.ts`), endpoint modules (`loaders.ts`), application module (`main.ts`), and mocks and startup (`app.ts`).
+
+`Main` composes `UserLive` and `OrdersLive` and awaits `$.User.Load()` and `$.Orders.Load()` on the objects supplied by DI. The call in `app.ts` is the composition root: it supplies the API and providers and runs `Main` once. If loading the user fails, `Main` returns early without resolving `Orders`.
+
+Press **Run** to execute `app.ts` using the current code from all five tabs. The console prints `Alex` and `1`.
+
+<Editor client:load entry="app.ts" files={[
+  {
+    name: 'api-module.ts',
+    code: apiModuleSource.replace("'../../../../di/src'", "'@favy/di'"),
+  },
+  { name: 'api-types.ts', code: apiTypesSource },
+  {
+    name: 'loaders.ts',
+    code: loadersSource.replace("'../../../../di/src'", "'@favy/di'"),
+  },
+  {
+    name: 'main.ts',
+    code: mainSource.replace("'../../../../di/src'", "'@favy/di'"),
+  },
+  { name: 'app.ts', code: appSource },
+]} />
+
+The module callback returns an object with an async `Load` method, such as `{ Load: async () => api.getOrders() }`. The HKT extracts that method's return type with `infer Value`, unwraps its payload with `Awaited`, and changes the method's return type to `Promise<Result<Awaited<Value>>>`. It preserves the module name and dependency contract; `.provide()` still accepts a replacement API client. The cast to `ApiHKT` connects the runtime implementation to this type rule—it does not validate the implementation for you.
+
+`transformOutput` creates the wrapper without calling `Load`. Each `Load()` call invokes and awaits the original method inside `try/catch`; DI caches the module object, not the method's results. A throw while creating the original object still escapes before the transform runs. After awaiting `Load()`, callers narrow `ok` before accessing `value` or `error`.
 
 ## `transformInput` comparison
 

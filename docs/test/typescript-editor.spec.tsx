@@ -10,7 +10,6 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
-import { Editor } from '../src/components/editor';
 import {
   TypeScriptEditor,
   type TypeScriptEditorHandle,
@@ -273,6 +272,11 @@ jest.mock(
 );
 
 jest.mock(
+  '../../di/src/lib/context.ts?raw',
+  () => ({ __esModule: true, default: 'export const context = {};' }),
+  { virtual: true }
+);
+jest.mock(
   '../../di/src/lib/hkt.ts?raw',
   () => ({ __esModule: true, default: 'export type HKT = unknown;' }),
   { virtual: true }
@@ -519,6 +523,7 @@ it('maps the checked-out package sources to Monaco and Sandpack paths', () => {
     ])
   ).toEqual([
     ['src/index.ts', '/favy-di/index.ts'],
+    ['src/lib/context.ts', '/favy-di/lib/context.ts'],
     ['src/lib/hkt.ts', '/favy-di/lib/hkt.ts'],
     ['src/lib/makeModule.ts', '/favy-di/lib/makeModule.ts'],
     ['src/lib/module.ts', '/favy-di/lib/module.ts'],
@@ -1101,8 +1106,16 @@ it('does not initialize automatic typings after cleanup during module loading', 
 it('uses distinct model paths and registers local libraries once', async () => {
   render(
     <>
-      <Editor code="const first = 1" />
-      <Editor code="const second = 2" />
+      <TypeScriptEditor
+        {...props}
+        value="const first = 1"
+        modelPath="file:///docs/first.ts"
+      />
+      <TypeScriptEditor
+        {...props}
+        value="const second = 2"
+        modelPath="file:///docs/second.ts"
+      />
     </>
   );
 
@@ -1118,7 +1131,7 @@ it('uses distinct model paths and registers local libraries once', async () => {
   expect(modelPaths.every((path) => path?.startsWith('file:///docs/'))).toBe(
     true
   );
-  expect(mockAddExtraLib).toHaveBeenCalledTimes(6);
+  expect(mockAddExtraLib).toHaveBeenCalledTimes(7);
   expect(mockSetCompilerOptions).toHaveBeenCalledWith({
     target: 'ESNext',
     strict: true,

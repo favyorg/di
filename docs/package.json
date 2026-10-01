@@ -6,7 +6,11 @@
     "preview": "astro preview",
     "test": "jest --runInBand",
     "smoke": "node scripts/run-docs-smoke.mjs",
-    "astro": "astro"
+    "astro": "astro",
+    "test:browser": "npm run test:editor && npm run test:pages && npm run test:home",
+    "test:editor": "node scripts/editor-regressions.mjs",
+    "test:pages": "npm run smoke",
+    "test:home": "node scripts/homepage-regressions.mjs"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.3",

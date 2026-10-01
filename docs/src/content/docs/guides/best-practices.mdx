@@ -9,25 +9,16 @@ Use these practices after the [Introduction](/guides/introduction/) and [core Mo
 
 ## Organize Around Focused Modules
 
-Prefer one exported module per file when it represents a meaningful application capability. Export its `Live` type beside it so consumers can declare the dependency without repeating its return type.
+Prefer one exported module per file when it represents a meaningful application capability. Infer its dependency type with `typeof ModuleName.Live` and export it immediately below the module declaration. Consumers use that type without repeating the module's result shape. `.Live` is a type-only marker; do not access it at runtime.
 
 <Editor client:load code={`// logger.ts
-import { Module, type Live } from '@favy/di';
+import { Module } from '@favy/di';
 
-export interface LoggerService {
-  info: (message: string) => void;
-  error: (message: string) => void;
-}
-
-export const Logger = Module()(
-  'Logger',
-  (): LoggerService => ({
-    info: (message) => console.log('[INFO]', message),
-    error: (message) => console.error('[ERROR]', message),
-  }),
-);
-
-export type LoggerLive = Live<typeof Logger>;`} />
+export const Logger = Module()('Logger', () => ({
+  info: (message: string) => console.log('[INFO]', message),
+  error: (message: string) => console.error('[ERROR]', message),
+}));
+export type LoggerLive = typeof Logger.Live;`} />
 
 Small modules are easier to replace, but avoid splitting code merely to increase the module count. A useful module owns one responsibility and exposes a stable return value.
 
@@ -45,6 +36,7 @@ const Timestamp = Module<{ Clock: ClockPort }>()(
   'Timestamp',
   ({ Clock }) => Clock.now(),
 );
+type TimestampLive = typeof Timestamp.Live;
 
 const fakeClock: ClockPort = { now: () => 123 };
 
@@ -53,21 +45,22 @@ console.log(Timestamp({ Clock: fakeClock })); // 123`} />
 Use an interface when the dependency is an external or application boundary
 that callers should replace without knowing a concrete module.
 
-Use `Live<typeof Module>` when the dependency is a concrete provider in the
+Use `typeof Module.Live` when the dependency is a concrete provider in the
 application graph:
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 const Config = Module<{ environment: 'dev' | 'prod' }>()(
   'Config',
   ({ environment }) => ({ environment }),
 );
-type ConfigLive = Live<typeof Config>;
+type ConfigLive = typeof Config.Live;
 
 const ApiUrl = Module<ConfigLive>()(
   'ApiUrl',
   ({ Config }) => 'https://' + Config.environment + '.example.com',
 );
+type ApiUrlLive = typeof ApiUrl.Live;
 
 console.log(ApiUrl({ environment: 'dev', Config }));
 // "https://dev.example.com"`} />
@@ -82,19 +75,20 @@ Root calls and `.provide()` accept any non-null object as a dependency map, incl
 
 The default `cache: 'run'` reuses dependencies during one top-level module call. It acts like request-scoped state only when the application invokes its composition root once per request:
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 let contextCreationCount = 0;
 const RequestContext = Module<{ requestId: string }>()(
   'RequestContext',
   ({ requestId }) => requestId + ':' + ++contextCreationCount,
 );
-type RequestContextLive = Live<typeof RequestContext>;
+type RequestContextLive = typeof RequestContext.Live;
 
 const ReadContextTwice = Module<RequestContextLive>()(
   'ReadContextTwice',
   ($) => [$.RequestContext, $.RequestContext] as const,
 );
+type ReadContextTwiceLive = typeof ReadContextTwice.Live;
 
 console.log(ReadContextTwice({ requestId: 'a', RequestContext }));
 // ["a:1", "a:1"]
@@ -124,6 +118,7 @@ const DatabasePool = InfrastructureModule()('DatabasePool', () => {
     }),
   };
 });
+type DatabasePoolLive = typeof DatabasePool.Live;
 
 const firstPool = DatabasePool();
 const secondPool = DatabasePool();
@@ -135,7 +130,7 @@ InfrastructureModule.flushCache();`} />
 
 Own cleanup explicitly: `flushCache()` removes cached values but does not call resource-specific disposal methods.
 
-Use `cache: 'none'` when every dependency access must recompute. See [Caching](/module/cache/) for comparisons.
+Use `cache: 'none'` on the factory that owns the root or `.provide()` binding when each access should invoke its provider again. A provider from a `cache: 'module'` factory can still return its own cached result. See [Mixing factories](/module/cache/#mixing-factories) for how the two cache layers interact.
 
 ## Handle Errors Where They Can Be Recovered
 
@@ -170,6 +165,7 @@ const GetUser = Module<{ UserRepository: UserRepositoryPort }>()(
     }
   },
 );
+type GetUserLive = typeof GetUser.Live;
 
 const getUser = GetUser({
   UserRepository: {
@@ -197,6 +193,7 @@ Keep observations in the object returned by a mock factory. Do not attach per-te
 type LoggerPort = { info: (message: string) => void };
 
 const Audit = Module<{ Logger: LoggerPort }>()('Audit', ({ Logger }) => Logger.info);
+type AuditLive = typeof Audit.Live;
 
 const createMockLogger = () => {
   const logs: string[] = [];
@@ -217,7 +214,7 @@ For complete unit and integration examples, see [Testing](/guides/testing/).
 
 Parameter destructuring reads a dependency before the function body can evaluate a condition. Keep the dependency object and access the property inside the branch:
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 let initializationCount = 0;
 const ExpensiveFeature = Module()('ExpensiveFeature', () => {
@@ -226,11 +223,12 @@ const ExpensiveFeature = Module()('ExpensiveFeature', () => {
     run: () => 'expensive result',
   };
 });
-type ExpensiveFeatureLive = Live<typeof ExpensiveFeature>;
+type ExpensiveFeatureLive = typeof ExpensiveFeature.Live;
 
 const App = Module<ExpensiveFeatureLive>()('App', ($) => ({
   run: (enabled: boolean) => (enabled ? $.ExpensiveFeature.run() : 'fast path'),
 }));
+type AppLive = typeof App.Live;
 
 const app = App({ ExpensiveFeature });
 
@@ -258,6 +256,7 @@ const loadReport = (): Report => ({
 const Reports = Module()('Reports', () => ({
   load: () => loadReport(),
 }));
+type ReportsLive = typeof Reports.Live;
 
 const reports = Reports();
 console.log(reports.load());`} />

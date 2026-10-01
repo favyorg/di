@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/ban-types -- type-level regression cases intentionally exercise forbidden wrapper contracts */
 import { Module, type ModuleLive } from '../src/index';
-import type { Live } from '../src';
 
 test('---', () => {
   const A = Module()('A', () => 1);
@@ -32,9 +31,9 @@ test('---', () => {
 
 test('---', () => {
   const A = Module()('A', () => 42);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
   const B = Module()('B', () => 28);
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
 
   const C = Module<ALive & BLive>()('C', ($) => $.A + $.B);
   expect(C({ A, B })).toBe(70);
@@ -42,13 +41,13 @@ test('---', () => {
 
 test('---', () => {
   const F = Module()('F', () => 15);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F + 42);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module<FLive>()('B', ({ F }) => 28 + F);
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
 
   const C = Module<ALive & BLive>()('C', ($) => $.A + $.B);
   expect(C({ F, B, A })).toBe(100);
@@ -57,13 +56,13 @@ test('---', () => {
 test('---', () => {
   let i = 0;
   const F = Module()('F', () => ++i);
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F * 3);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module<FLive>()('B', ({ F }) => F * 4);
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
 
   const C = Module<ALive & BLive>()('C', ($) => $.A + $.B);
   expect(C({ F, B, A })).toBe(7);
@@ -71,13 +70,13 @@ test('---', () => {
 
 test('---', () => {
   const F = Module()('F', () => Date.now());
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module<FLive>()('A', ({ F }) => F);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module<FLive>()('B', ({ F }) => F);
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
 
   const C = Module<ALive & BLive>()('C', ($) => $.A === $.B);
   expect(C({ F, B, A })).toBe(true);
@@ -85,13 +84,13 @@ test('---', () => {
 
 test('---', () => {
   const F = Module()('F', () => 'F');
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module()('A', () => 'A');
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module()('B', () => 'B');
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
   const C = Module<ALive & BLive & FLive>()('C', ($) => $.A + $.B + $.F);
 
   expect(C.provide({ F })({ B, A })).toBe('ABF');
@@ -101,29 +100,51 @@ test('---', () => {
 
 test('---', () => {
   const F = Module()('F', () => 'F');
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   const A = Module()('A', () => 'A');
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module()('B', () => 'B');
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
 
   const C = Module<ALive & BLive & FLive>()('C', ($) => $.A + $.B + $.F);
 
   expect(C.provide({ F: 'F', A })({ B: 'B' })).toBe('ABF');
 });
 
-test('module exposes its declared name', () => {
-  const Named = Module()('Named', () => 1);
+test('module exposes its declared name and type-only Live', () => {
+  let runs = 0;
+  const Named = Module()('Named', () => ++runs);
+  type NamedLive = typeof Named.Live;
+  const value: NamedLive = { Named: 1 };
 
   expect(Named.name).toBe('Named');
+  expect(value.Named).toBe(1);
+  expect(Object.getOwnPropertyDescriptor(Named, 'Live')).toMatchObject({
+    enumerable: false,
+    configurable: false,
+    set: undefined,
+  });
+  expect(() => Named.Live).toThrow('Live is type-only');
+  expect(() => Named.provide().Live).toThrow('Live is type-only');
+  expect(runs).toBe(0);
+  expect(Named()).toBe(1);
+
+  const verifyLive = () => {
+    // @ts-expect-error Live cannot be overwritten with a runtime dependency map.
+    Named.Live = value;
+    // @ts-expect-error Live preserves the inferred result type.
+    const invalid: NamedLive = { Named: 'wrong' };
+    return invalid;
+  };
+  void verifyLive;
 });
 
 test('symbol-named modules can be resolved as dependencies', () => {
   const DependencyKey = Symbol('Dependency');
   const Dependency = Module()(DependencyKey, () => 42);
-  type DependencyLive = Live<typeof Dependency>;
+  type DependencyLive = typeof Dependency.Live;
 
   const Consumer = Module<DependencyLive>()(
     'Consumer',
@@ -136,7 +157,7 @@ test('symbol-named modules can be resolved as dependencies', () => {
 
 test('nested resolution preserves the current module name', () => {
   const Dependency = Module()('Dependency', () => 1);
-  type DependencyLive = Live<typeof Dependency>;
+  type DependencyLive = typeof Dependency.Live;
 
   const Root = Module<DependencyLive & ModuleLive>()(
     'Root',
@@ -153,8 +174,20 @@ test('provide can be chained', () => {
   );
 
   const WithAB = Sum.provide({ a: 1 }).provide({ b: 2 });
+  type WithABLive = typeof WithAB.Live;
+
+  const remaining: WithABLive = { c: 3, Sum: 6 };
+  const verifyLive = () => {
+    // @ts-expect-error The unbound c dependency remains required in Live.
+    const missing: WithABLive = { Sum: 6 };
+    // @ts-expect-error Bound fields are removed from Live after chained provide.
+    const supplied: WithABLive = { a: 1, c: 3, Sum: 6 };
+    return [missing, supplied];
+  };
+  void verifyLive;
 
   expect(WithAB.name).toBe('Sum');
+  expect(remaining.Sum).toBe(6);
   expect(WithAB({ c: 3 })).toBe(6);
 
   const widerRoot = { a: 100, b: 2, c: 3 };
@@ -173,7 +206,7 @@ test('provided modules can be resolved as dependencies', () => {
 test('provided variants isolate partials and share the parent run cache', () => {
   let sharedRuns = 0;
   const Shared = Module()('Shared', () => ++sharedRuns);
-  type SharedLive = Live<typeof Shared>;
+  type SharedLive = typeof Shared.Live;
 
   type VariantDeps = SharedLive & { prefix: string; suffix: string };
   const VariantBase = Module<VariantDeps>()(
@@ -378,7 +411,7 @@ test('dependency maps consume own fields from object instances', () => {
 
 test('dependency contexts support object rest and spread', () => {
   const A = Module()('A', () => 4);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const CopyRoot = Module<ALive>()('CopyRoot', ({ ...all }) => all.A.toFixed());
   expect(CopyRoot({ A })).toBe('4');
@@ -386,7 +419,7 @@ test('dependency contexts support object rest and spread', () => {
   const CopyNested = Module<ALive>()('CopyNested', ({ ...all }) =>
     all.A.toFixed()
   );
-  type CopyNestedLive = Live<typeof CopyNested>;
+  type CopyNestedLive = typeof CopyNested.Live;
   const Root = Module<ALive & CopyNestedLive>()(
     'Root',
     ({ CopyNested }) => CopyNested
@@ -397,7 +430,7 @@ test('dependency contexts support object rest and spread', () => {
 
 test('provider-backed dependency fields can be reassigned', () => {
   const A = Module()('A', () => 1);
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
   const Replace = Module<ALive>()('Replace', (deps) => {
     deps.A = 2;
     return deps.A;
@@ -509,19 +542,19 @@ test('optional-only dependencies can be omitted, passed, or provided', () => {
 
 test('---', () => {
   const A = Module()('A', () => 'A');
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const B = Module<ALive>()('B', ({ A }) => A + 'B');
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
 
   const C = Module<BLive>()('C', ($) => $.B + 'C');
-  type CLive = Live<typeof C>;
+  type CLive = typeof C.Live;
 
   const D = Module<CLive>()('D', ($) => $.C + 'D');
-  type DLive = Live<typeof D>;
+  type DLive = typeof D.Live;
 
   const E = Module<DLive>()('E', ($) => $.D + 'E');
-  type ELive = Live<typeof E>;
+  type ELive = typeof E.Live;
 
   const F = Module<ELive>()('F', ($) => $.E + 'F');
 
@@ -530,13 +563,13 @@ test('---', () => {
 
 test('---', () => {
   const LVL4 = Module()('LVL4', () => '4');
-  type LVL4Live = Live<typeof LVL4>;
+  type LVL4Live = typeof LVL4.Live;
 
   const LVL3 = Module<LVL4Live>()('LVL3', ($) => $.LVL4 + '3');
-  type LVL3Live = Live<typeof LVL3>;
+  type LVL3Live = typeof LVL3.Live;
 
   const LVL2 = Module<LVL3Live>()('LVL2', ($) => $.LVL3 + '2');
-  type LVL2Live = Live<typeof LVL2>;
+  type LVL2Live = typeof LVL2.Live;
 
   const LVL1 = Module<LVL2Live>()('LVL1', ($) => $.LVL2 + '1');
 
@@ -545,44 +578,44 @@ test('---', () => {
 
 test('deep', () => {
   const A = Module()('A', ($) => ({ a: [$.Module.name.toString()] }));
-  type ALive = Live<typeof A>;
+  type ALive = typeof A.Live;
 
   const A1 = Module()('A1', () => ({ a: ['A1'], x: [''] }));
-  type A1Live = Live<typeof A1>;
+  type A1Live = typeof A1.Live;
 
   const A2 = Module()('A2', () => ({ a: ['A2'], x: [''] }));
-  type A2Live = Live<typeof A2>;
+  type A2Live = typeof A2.Live;
 
   // 1
   const B = Module<ALive & A1Live & A2Live>()('B', ({ A }) => ({
     c: [A.a[0] + 'B'],
     x: '1',
   }));
-  type BLive = Live<typeof B>;
+  type BLive = typeof B.Live;
 
   // 2
   const C = Module<BLive>()('C', ($) => ({ res: [$.B.c[0] + 'C'], z: 1 }));
-  type CLive = Live<typeof C>;
+  type CLive = typeof C.Live;
 
   // 3
   const D = Module<CLive>()('D', ($) => $.C.res[0] + 'D');
-  type DLive = Live<typeof D>;
+  type DLive = typeof D.Live;
 
   // 4
   const E = Module<DLive>()('E', ($) => [$.D + 'E']);
-  type ELive = Live<typeof E>;
+  type ELive = typeof E.Live;
 
   // 5
   const F = Module<ELive>()('F', ($) => $.E[0] + 'F');
-  type FLive = Live<typeof F>;
+  type FLive = typeof F.Live;
 
   // 6
   const G = Module<FLive>()('G', ($) => $.F + 'G');
-  type GLive = Live<typeof G>;
+  type GLive = typeof G.Live;
 
   // 7
   const H = Module<GLive>()('H', ($) => $.G + 'H');
-  type HLive = Live<typeof H>;
+  type HLive = typeof H.Live;
 
   // 8
   const I = Module<HLive>()('I', ($) => $.H + 'I');

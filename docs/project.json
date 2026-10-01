@@ -6,6 +6,7 @@
   "targets": {
     "build": {
       "executor": "@nxtensions/astro:build",
+      "outputs": ["{projectRoot}/dist"],
       "options": {}
     },
     "dev": {
@@ -28,6 +29,14 @@
       "dependsOn": ["build"],
       "options": {
         "command": "npm --prefix docs run smoke"
+      }
+    },
+    "browser": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["build"],
+      "options": {
+        "command": "npm --prefix docs run test:browser"
       }
     }
   },

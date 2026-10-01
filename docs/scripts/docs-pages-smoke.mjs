@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
-import { chromium } from 'playwright';
+import { startBrowserSession } from './browser-session.mjs';
 
-const origin = process.env.DOCS_URL ?? 'http://127.0.0.1:4321';
-const browser = await chromium.launch();
+const { browser, origin, close } = await startBrowserSession();
 const context = await browser.newContext({
   viewport: { width: 1440, height: 1000 },
   colorScheme: 'dark',
@@ -1312,6 +1311,13 @@ console.log([
   await page.setViewportSize({ width: 1440, height: 1000 });
 };
 
+const waitForEditorLines = async (editor) => {
+  await editor.locator('.monaco-editor .view-line').first().waitFor({
+    state: 'visible',
+    timeout: 15_000,
+  });
+};
+
 const checkExistingDocumentationPages = async (page, browser) => {
   await page.goto(`${origin}/guides/introduction/`, {
     waitUntil: 'domcontentloaded',
@@ -1431,11 +1437,12 @@ const checkExistingDocumentationPages = async (page, browser) => {
   }, originalTheme);
   await contentPrimitives.evaluate((fixture) => fixture.remove());
 
-  await page.waitForSelector('.monaco-editor', { timeout: 15_000 });
-
-  const editorLineRhythm = await page
+  const introductionEditor = page
     .locator("astro-island[component-export='Editor']")
-    .first()
+    .first();
+  await waitForEditorLines(introductionEditor);
+
+  const editorLineRhythm = await introductionEditor
     .locator('.monaco-editor .view-line')
     .evaluateAll((lines) => {
       const blankLineIndex = lines.findIndex(
@@ -1456,18 +1463,15 @@ const checkExistingDocumentationPages = async (page, browser) => {
     `Editor blank-line delta was ${editorLineRhythm.blankLineDelta}px for a ${editorLineRhythm.lineHeight}px line`
   );
 
-  const editorSurface = await page
-    .locator("astro-island[component-export='Editor']")
-    .first()
-    .evaluate((element) => {
-      const style = getComputedStyle(element);
-      const cue = getComputedStyle(element, '::before').content;
-      return {
-        borderWidth: Number.parseFloat(style.borderTopWidth),
-        radius: Number.parseFloat(style.borderTopLeftRadius),
-        cue,
-      };
-    });
+  const editorSurface = await introductionEditor.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const cue = getComputedStyle(element, '::before').content;
+    return {
+      borderWidth: Number.parseFloat(style.borderTopWidth),
+      radius: Number.parseFloat(style.borderTopLeftRadius),
+      cue,
+    };
+  });
 
   assert.ok(editorSurface.borderWidth >= 1);
   assert.ok(editorSurface.radius >= 12);
@@ -1481,15 +1485,14 @@ const checkExistingDocumentationPages = async (page, browser) => {
     true
   );
   assert.match(
-    await page
-      .locator("astro-island[component-export='Editor']")
-      .first()
-      .evaluate((element) => getComputedStyle(element, '::before').content),
+    await introductionEditor.evaluate(
+      (element) => getComputedStyle(element, '::before').content
+    ),
     /scroll|swipe/i
   );
 
   await page.setViewportSize({ width: 1440, height: 1000 });
-  const modulePosition = await page
+  const modulePosition = await introductionEditor
     .locator('.monaco-editor .view-line')
     .first()
     .evaluate((line) => {
@@ -1643,24 +1646,24 @@ const checkExistingDocumentationPages = async (page, browser) => {
   await page.goto(`${origin}/module/lazy/`, {
     waitUntil: 'domcontentloaded',
   });
-  await page.waitForSelector('.monaco-editor', { timeout: 15_000 });
+  const lazyEditors = page.locator("astro-island[component-export='Editor']");
+  for (const editor of await lazyEditors.all()) {
+    await waitForEditorLines(editor);
+  }
 
-  const lazyExampleIndents = await page
-    .locator("astro-island[component-export='Editor']")
-    .evaluateAll((editors) =>
-      editors.map((editor) =>
-        [...editor.querySelectorAll('.view-line')]
-          .filter((line) =>
-            /^\s*(?:'(?:IgnoreResource|ReadTwice)'|\(\) =>|\(\w+\) =>)/.test(
-              (line.textContent ?? '').replaceAll('\u00a0', ' ')
-            )
+  const lazyExampleIndents = await lazyEditors.evaluateAll((editors) =>
+    editors.map((editor) =>
+      [...editor.querySelectorAll('.view-line')]
+        .filter((line) =>
+          /^\s*(?:'(?:IgnoreResource|ReadTwice)'|\(\) =>|\(\w+\) =>)/.test(
+            (line.textContent ?? '').replaceAll('\u00a0', ' ')
           )
-          .map(
-            (line) =>
-              line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0
-          )
-      )
-    );
+        )
+        .map(
+          (line) => line.textContent?.match(/^(?:\s|\u00a0)*/)?.[0].length ?? 0
+        )
+    )
+  );
   assert.deepEqual(lazyExampleIndents, [
     [2, 2, 2, 2],
     [2, 2],
@@ -1669,11 +1672,12 @@ const checkExistingDocumentationPages = async (page, browser) => {
   await page.goto(`${origin}/module/partial/`, {
     waitUntil: 'domcontentloaded',
   });
-  await page.waitForSelector('.monaco-editor', { timeout: 15_000 });
-
-  const partialExampleIndents = await page
+  const partialEditor = page
     .locator("astro-island[component-export='Editor']")
-    .first()
+    .first();
+  await waitForEditorLines(partialEditor);
+
+  const partialExampleIndents = await partialEditor
     .locator('.view-line')
     .evaluateAll((lines) =>
       lines
@@ -1740,7 +1744,7 @@ try {
     await checkExistingDocumentationPages(page, browser);
   }
 } finally {
-  await browser.close();
+  await close();
 }
 
 console.log(

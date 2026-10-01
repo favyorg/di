@@ -11,3 +11,4 @@ export const App = Module<PostsLive>()('App', ({ Posts }) => {
     );
   };
 });
+export type AppLive = typeof App.Live;

@@ -11,18 +11,19 @@ The `lazy` option controls when dependency providers supplied in a root dependen
 
 A provider runs on the first read of its key. If the root module never reads that key, the provider does not run. With the default `cache: 'run'`, later reads in the same root call reuse the first value.
 
-<Editor client:load code={`import { makeModule, type Live } from '@favy/di';
+<Editor client:load code={`import { makeModule } from '@favy/di';
 
 const LazyModule = makeModule({ lazy: true });
 
 let resourceRuns = 0;
 const Resource = LazyModule()('Resource', () => ++resourceRuns);
-type ResourceLive = Live<typeof Resource>;
+type ResourceLive = typeof Resource.Live;
 
 const IgnoreResource = LazyModule<ResourceLive>()(
   'IgnoreResource',
   () => 'unused',
 );
+type IgnoreResourceLive = typeof IgnoreResource.Live;
 
 console.log(IgnoreResource({ Resource })); // "unused"
 console.log(resourceRuns); // 0
@@ -31,6 +32,7 @@ const ReadTwice = LazyModule<ResourceLive>()(
   'ReadTwice',
   (deps) => deps.Resource + deps.Resource,
 );
+type ReadTwiceLive = typeof ReadTwice.Live;
 
 console.log(ReadTwice({ Resource })); // 2: 1 + 1 in one run
 console.log(resourceRuns); // 1
@@ -43,18 +45,19 @@ Access includes parameter destructuring. A callback parameter such as `({ Resour
 
 When the root module itself is evaluated, the root call invokes every provider supplied at that root before running its own callback, including providers the callback never reads. With `cache: 'module'`, an already cached root returns before this eager pass. Nested module calls do not eagerly walk forwarded siblings again; only dependencies supplied locally to that invocation are added to its eager pass.
 
-<Editor client:load code={`import { makeModule, type Live } from '@favy/di';
+<Editor client:load code={`import { makeModule } from '@favy/di';
 
 const EagerModule = makeModule({ lazy: false });
 
 let resourceRuns = 0;
 const Resource = EagerModule()('Resource', () => ++resourceRuns);
-type ResourceLive = Live<typeof Resource>;
+type ResourceLive = typeof Resource.Live;
 
 const IgnoreResource = EagerModule<ResourceLive>()(
   'IgnoreResource',
   () => 'unused',
 );
+type IgnoreResourceLive = typeof IgnoreResource.Live;
 
 console.log(IgnoreResource({ Resource })); // "unused"
 console.log(resourceRuns); // 1`} />

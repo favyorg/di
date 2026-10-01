@@ -22,11 +22,14 @@ The package works with npm-compatible package managers, including Yarn, pnpm, an
 <Editor client:load code={`import { Module } from '@favy/di';
 
 const Ready = Module()('Ready', () => 'Server ready!');
+type ReadyLive = typeof Ready.Live;
 
 console.log(Ready()); // "Server ready!"
 console.log(Ready.name); // "Ready"`} />
 
 The callable's `name` is the exact key passed to the constructor. A module with no application dependencies can be called with no arguments.
+
+Declare `type ReadyLive = typeof Ready.Live` immediately below the module. `.Live` is a type-only marker: TypeScript's type query does not evaluate it, while reading `Ready.Live` at runtime throws.
 
 ## Declare dependencies explicitly
 
@@ -39,6 +42,7 @@ interface AddOneDeps {
 }
 
 const AddOne = Module<AddOneDeps>()('AddOne', ({ value }) => value + 1);
+type AddOneLive = typeof AddOne.Live;
 
 console.log(AddOne({ value: 5 })); // 6`} />
 
@@ -46,27 +50,28 @@ The library does not infer dependencies by inspecting a function body. You decla
 
 ## Compose modules with `Live`
 
-`Live<typeof SomeModule>` contains two parts:
+`typeof SomeModule.Live` contains two parts:
 
 - every dependency required to run `SomeModule`, including requirements inherited from modules below it;
 - the result of `SomeModule`, under its declared name.
 
 That makes dependencies transitive and keeps the complete graph visible at the composition root.
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 const Config = Module<{ environment: 'dev' | 'prod' }>()(
   'Config',
   ({ environment }) => ({ apiUrl: 'https://' + environment + '.example.com' }),
 );
-type ConfigLive = Live<typeof Config>;
+type ConfigLive = typeof Config.Live;
 
 const Service = Module<ConfigLive>()('Service', ({ Config }) => ({
   endpoint: Config.apiUrl + '/users',
 }));
-type ServiceLive = Live<typeof Service>;
+type ServiceLive = typeof Service.Live;
 
 const App = Module<ServiceLive>()('App', ({ Service }) => Service.endpoint);
+type AppLive = typeof App.Live;
 
 const result = App({
   environment: 'dev',
@@ -84,22 +89,23 @@ The top-level call is the **composition root**: the one place where concrete val
 
 The default `Module` factory is lazy. At a root call, it installs the supplied providers into a shared dependency context and evaluates a provider only when a module reads that key. Its default `cache: 'run'` then reuses the resolved value for the rest of that root call. Calling the root module again starts a new run with a new run cache.
 
-This also makes replacement straightforward. The static dependency contract does not shrink just because a nested output is replaced: `Live<typeof Service>` still includes `Service`'s transitive `Config` requirements.
+This also makes replacement straightforward. The static dependency contract does not shrink just because a nested output is replaced: `typeof Service.Live` still includes `Service`'s transitive `Config` requirements.
 
-<Editor client:load code={`import { Module, type Live } from '@favy/di';
+<Editor client:load code={`import { Module } from '@favy/di';
 
 const Config = Module<{ environment: string }>()(
   'Config',
   ({ environment }) => ({ label: environment }),
 );
-type ConfigLive = Live<typeof Config>;
+type ConfigLive = typeof Config.Live;
 
 const Service = Module<ConfigLive>()('Service', ({ Config }) => ({
   describe: () => 'service:' + Config.label,
 }));
-type ServiceLive = Live<typeof Service>;
+type ServiceLive = typeof Service.Live;
 
 const App = Module<ServiceLive>()('App', ({ Service }) => Service.describe());
+type AppLive = typeof App.Live;
 
 const fakeService = {
   describe: () => 'service:test',

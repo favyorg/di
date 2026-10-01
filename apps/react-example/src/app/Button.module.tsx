@@ -10,5 +10,4 @@ export const Button = Module()('Button', () => {
     return <button onClick={props.onClick}>{props.text}</button>;
   };
 });
-
 export type ButtonLive = typeof Button.Live;
