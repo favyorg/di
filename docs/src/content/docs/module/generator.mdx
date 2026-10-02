@@ -18,6 +18,8 @@ You can use `GenModule` alongside ordinary [`Module`](/module/module/) callables
 
 ## Run a complete example
 
+[Open a complete generator project in the playground →](/playground/?example=generator-services)
+
 `User` and `Orders` are tags declaring services with async `Load()` methods. `UserImpl` and `OrdersImpl` implement those contracts using `api`. `Main` imports only the tags, retrieves the services with `yield*`, and returns an async `Run()` method.
 
 TypeScript infers that `Main` requires `User` and `Orders`. Their implementations' `api` dependency stays outside that contract. The tabs separate the application module, contracts, implementations, API types, and startup. **Run** executes `app.ts`, which binds the mock API to each implementation and calls `Main` once. The console prints `Alex` and `1`.

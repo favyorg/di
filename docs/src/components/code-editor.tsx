@@ -41,6 +41,7 @@ const prepareMonaco = () => {
     import('monaco-editor/esm/vs/editor/editor.api'),
     import('monaco-editor/esm/vs/editor/editor.worker?worker'),
     import('monaco-editor/esm/vs/language/typescript/ts.worker?worker'),
+    import('monaco-editor/esm/vs/language/json/json.worker?worker'),
     // The minimal editor API does not register these editing features.
     Promise.all([
       import('monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard'),
@@ -70,6 +71,12 @@ const prepareMonaco = () => {
       import(
         'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution'
       ),
+      import(
+        'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
+      ),
+      import('monaco-editor/esm/vs/basic-languages/css/css.contribution'),
+      import('monaco-editor/esm/vs/basic-languages/html/html.contribution'),
+      import('monaco-editor/esm/vs/language/json/monaco.contribution'),
       // @ts-expect-error Monaco does not publish types for this controller.
       import('monaco-editor/esm/vs/editor/browser/config/tabFocus').then(
         ({
@@ -83,10 +90,17 @@ const prepareMonaco = () => {
       ),
     ]),
   ]).then(
-    ([monaco, { default: EditorWorker }, { default: TypeScriptWorker }]) => {
+    ([
+      monaco,
+      { default: EditorWorker },
+      { default: TypeScriptWorker },
+      { default: JsonWorker },
+    ]) => {
       self.MonacoEnvironment = {
         getWorker(_moduleId: string, label: string) {
-          return label === 'typescript' || label === 'javascript'
+          return label === 'json'
+            ? new JsonWorker()
+            : label === 'typescript' || label === 'javascript'
             ? new TypeScriptWorker()
             : new EditorWorker();
         },

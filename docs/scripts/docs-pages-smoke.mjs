@@ -23,7 +23,7 @@ const checkPlaygroundFirstPaint = async (browser) => {
         }
         await route.continue();
       });
-      await firstPaintPage.goto(`${origin}/playground/`, {
+      await firstPaintPage.goto(`${origin}/playground/basics/`, {
         waitUntil: 'domcontentloaded',
       });
       assert.equal(
@@ -356,6 +356,8 @@ const checkPlayground = async (page) => {
   assert.equal(await playgroundLink.count(), 1);
   await playgroundLink.click();
   await page.waitForURL(`${origin}/playground/`);
+  await page.getByRole('link', { name: 'Basic snippets' }).click();
+  await page.waitForURL(`${origin}/playground/basics/`);
 
   const themeToggle = page.locator('[data-theme-toggle]');
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
@@ -369,7 +371,7 @@ const checkPlayground = async (page) => {
   );
   assert.equal(
     await page.locator('link[rel="canonical"]').getAttribute('href'),
-    'https://di.favy.dev/playground/'
+    'https://di.favy.dev/playground/basics/'
   );
   assert.equal(
     await page.locator('link[rel~="icon"][href="/favicon.svg"]').count(),

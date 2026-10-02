@@ -135,6 +135,15 @@ body {
   padding: clamp(0.75rem, 2vw, 1.5rem);
 }
 
+.playground-basics-back {
+  margin: 0 0 16px;
+  font-size: 14px;
+}
+
+.playground-basics-back a {
+  color: var(--playground-accent);
+}
+
 @media (max-width: 32rem) {
   .playground-shell__header {
     flex-wrap: wrap;

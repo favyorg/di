@@ -1,0 +1,9 @@
+---
+import PlaygroundLayout from '../../layouts/playground.astro';
+import { Playground } from '../../components/playground/playground';
+---
+
+<PlaygroundLayout>
+  <p class="playground-basics-back"><a href="/playground/">← Project examples</a></p>
+  <Playground client:load />
+</PlaygroundLayout>

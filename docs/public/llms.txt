@@ -21,7 +21,8 @@
 
 ## Optional
 
-- [Playground](https://di.favy.dev/playground/): Edit and run six focused @favy/di examples in an isolated browser sandbox.
+- [Playground](https://di.favy.dev/playground/): Multi-file React, browser Request/Response, and Tag/GenModule projects with a file tree, TypeScript editor, live preview, and console. Select projects with ?example=react-orders, http-handler, or generator-services. Run executes a snapshot; Stop removes it. Drafts persist in the current tab.
+- [Basic snippets](https://di.favy.dev/playground/basics/): Six focused @favy/di examples with editable TypeScript and console output.
 - [Transform Input](https://di.favy.dev/module/transform-input/): Customize callback dependencies and module metadata.
 - [Transform Output](https://di.favy.dev/module/transform-output/): Observe or transform successful module results.
 - [HKT support](https://di.favy.dev/reference/api/#hkt): Compute input and output types with higher-kinded transformations.
