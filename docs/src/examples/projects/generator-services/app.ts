@@ -1,52 +1,104 @@
 import { Main } from './main';
-import { UserImpl, OrdersImpl } from '../../generator/loaders';
-import type { Api } from '../../api-result/api-types';
-import '../shared/styles.css';
-
-const api: Api = {
-  getUser: async () => ({ id: 1, name: 'Alex' }),
-  getOrders: async () => [{ id: 10, total: 49 }],
-};
-
-const main = Main({
-  User: UserImpl.provide({ api }),
-  Orders: OrdersImpl.provide({ api }),
-});
+import { HtmlFormatter, PlainTextFormatter } from './formatters';
+import type { RenderedDocument } from './types';
+import './styles.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root element');
 root.innerHTML = `
   <main class="page">
-    <span class="eyebrow">Tag + GenModule</span>
-    <h1>Compose generator services</h1>
-    <p class="lead">Main requests service contracts with yield*. The application chooses their implementations.</p>
-    <div class="toolbar"><button class="button" id="load">Load services</button></div>
-    <section class="card" aria-label="Service result">
-      <h2 id="load-status" role="status">Ready</h2>
-      <pre class="code" id="result"></pre>
+    <span class="eyebrow">Replaceable services · Tag + GenModule</span>
+    <h1>One document, two formats</h1>
+    <p class="lead">Write a note and switch its formatter. Main only knows the Formatter contract.</p>
+    <div class="document-fields">
+      <label class="field" for="document-title"><span class="label">Title</span><input id="document-title" value="Release notes" placeholder="Document title" /></label>
+      <label class="field" for="document-body"><span class="label">Body · blank lines separate paragraphs</span><textarea id="document-body" placeholder="Write your document…">The playground now supports multiple files.
+
+Choose a formatter, edit this text, and export the result.</textarea></label>
+    </div>
+    <fieldset class="format-options">
+      <legend class="label">Formatter implementation</legend>
+      <label><input type="radio" name="format" value="html" checked /> HTML</label>
+      <label><input type="radio" name="format" value="text" /> Plain text</label>
+    </fieldset>
+    <p id="format-error" class="error" role="alert" hidden></p>
+    <section class="card" aria-label="Formatted document">
+      <div id="document-preview" class="document-preview"></div>
     </section>
-    <p class="note">Change the API values in app.ts or provide another implementation. Main only knows the User and Orders tags.</p>
+    <details class="source-view">
+      <summary>Generated source</summary>
+      <pre class="code" id="generated-source"></pre>
+    </details>
+    <div class="document-actions">
+      <p class="status" id="format-status" role="status"></p>
+      <button class="button" id="download">Download document</button>
+    </div>
   </main>`;
 
-const button = root.querySelector<HTMLButtonElement>('#load')!;
-const status = root.querySelector<HTMLElement>('#load-status')!;
-const output = root.querySelector<HTMLElement>('#result')!;
+const title = root.querySelector<HTMLInputElement>('#document-title')!;
+const body = root.querySelector<HTMLTextAreaElement>('#document-body')!;
+const preview = root.querySelector<HTMLElement>('#document-preview')!;
+const source = root.querySelector<HTMLElement>('#generated-source')!;
+const status = root.querySelector<HTMLElement>('#format-status')!;
+const error = root.querySelector<HTMLElement>('#format-error')!;
+const download = root.querySelector<HTMLButtonElement>('#download')!;
+let rendered: RenderedDocument | undefined;
 
-async function load() {
-  button.disabled = true;
-  status.textContent = 'Loading…';
+function render() {
+  const format = root!.querySelector<HTMLInputElement>(
+    'input[name="format"]:checked'
+  )!.value;
+  const main = Main({
+    Formatter: format === 'html' ? HtmlFormatter : PlainTextFormatter,
+  });
   try {
-    const result = await main.Load();
-    output.textContent = JSON.stringify(result, null, 2);
-    status.textContent = 'Services resolved';
-    console.log('Main.Load():', result);
-  } catch (error) {
-    status.textContent = 'Load failed';
-    output.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    button.disabled = false;
+    rendered = main.Render({ title: title.value, body: body.value });
+    if (rendered.format === 'html') {
+      // HtmlFormatter escapes the document before adding its own markup.
+      preview.innerHTML = rendered.content;
+    } else {
+      const text = document.createElement('pre');
+      text.className = 'code';
+      text.textContent = rendered.content;
+      preview.replaceChildren(text);
+    }
+    source.textContent = rendered.content;
+    status.textContent = `${rendered.mime} · ${
+      new TextEncoder().encode(rendered.content).length
+    } bytes`;
+    download.textContent = `Download .${rendered.extension}`;
+    download.disabled = false;
+    error.hidden = true;
+  } catch (cause) {
+    rendered = undefined;
+    preview.replaceChildren();
+    source.textContent = '';
+    status.textContent = '';
+    download.disabled = true;
+    error.textContent = cause instanceof Error ? cause.message : String(cause);
+    error.hidden = false;
   }
 }
 
-button.addEventListener('click', () => void load());
-void load();
+title.addEventListener('input', render);
+body.addEventListener('input', render);
+root
+  .querySelectorAll('input[name="format"]')
+  .forEach((input) => input.addEventListener('change', render));
+download.addEventListener('click', () => {
+  if (!rendered) return;
+  const content =
+    rendered.format === 'html'
+      ? `<!doctype html>\n<meta charset="utf-8">\n${rendered.content}`
+      : rendered.content;
+  const url = URL.createObjectURL(
+    new Blob([content], { type: `${rendered.mime};charset=utf-8` })
+  );
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `document.${rendered.extension}`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  console.log(`Exported ${link.download}`, rendered.content);
+});
+render();

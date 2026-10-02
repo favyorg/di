@@ -1,15 +1,16 @@
 import { GenModule } from '../../../../../di/src';
-import { User, Orders } from '../../generator/contracts';
+import { Formatter } from './contracts';
+import type { Document } from './types';
 
 export const Main = GenModule()('Main', function* () {
-  const user = yield* User;
-  const orders = yield* Orders;
+  const formatter = yield* Formatter;
 
   return {
-    async Load() {
-      const profile = await user.Load();
-      const purchases = await orders.Load();
-      return { user: profile.name, orderCount: purchases.length };
+    Render(document: Document) {
+      const title = document.title.trim();
+      const body = document.body.replace(/\r\n?/g, '\n').trim();
+      if (!title || !body) throw new Error('Add a title and some text.');
+      return formatter.Render({ title, body });
     },
   };
 });

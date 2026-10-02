@@ -1,28 +1,49 @@
-import { GenModule } from '../../../../../di/src';
-import { UserRepository } from './contracts';
+import { Module } from '../../../../../di/src';
+import type { LinkStoreLive } from './store';
 
-export const Main = GenModule()('Main', function* () {
-  const users = yield* UserRepository;
-
+export const Main = Module<LinkStoreLive>()('Main', ({ LinkStore }) => {
   return {
     async Handle(request: Request): Promise<Response> {
-      if (request.method !== 'GET') {
+      const { pathname } = new URL(request.url);
+      const allow = pathname === '/links' ? 'GET, POST' : 'GET';
+      if (!allow.split(', ').includes(request.method)) {
         return Response.json(
           { error: 'Method not allowed' },
           {
             status: 405,
-            headers: { Allow: 'GET' },
+            headers: { Allow: allow },
           }
         );
       }
-      const match = /^\/users\/(\d+)$/.exec(new URL(request.url).pathname);
-      if (!match)
-        return Response.json({ error: 'Route not found' }, { status: 404 });
+      if (pathname === '/links' && request.method === 'POST') {
+        let url: URL;
+        try {
+          const body: unknown = await request.json();
+          if (
+            !body ||
+            typeof body !== 'object' ||
+            !('url' in body) ||
+            typeof body.url !== 'string'
+          )
+            throw new Error('Missing URL');
+          url = new URL(body.url);
+          if (!['http:', 'https:'].includes(url.protocol))
+            throw new Error('Unsupported URL');
+        } catch {
+          return Response.json(
+            { error: 'Enter an absolute HTTP or HTTPS URL.' },
+            { status: 400 }
+          );
+        }
+        return Response.json(LinkStore.Create(url.href), { status: 201 });
+      }
+      if (pathname === '/links') return Response.json(LinkStore.List());
 
-      const user = await users.Load(Number(match[1]));
-      return user
-        ? Response.json(user)
-        : Response.json({ error: 'User not found' }, { status: 404 });
+      const code = /^\/s\/([a-z0-9]+)$/.exec(pathname)?.[1];
+      const link = code ? LinkStore.Visit(code) : undefined;
+      return link
+        ? new Response(null, { status: 302, headers: { Location: link.url } })
+        : Response.json({ error: 'Short link not found' }, { status: 404 });
     },
   };
 });

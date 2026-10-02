@@ -18,7 +18,7 @@ You can use `GenModule` alongside ordinary [`Module`](/module/module/) callables
 
 ## Run a complete example
 
-[Open a complete generator project in the playground →](/playground/?example=generator-services)
+[Try swapping HTML and plain-text formatters in the playground →](/playground/?example=generator-services)
 
 `User` and `Orders` are tags declaring services with async `Load()` methods. `UserImpl` and `OrdersImpl` implement those contracts using `api`. `Main` imports only the tags, retrieves the services with `yield*`, and returns an async `Run()` method.
 

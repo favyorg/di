@@ -356,7 +356,7 @@ function ProjectWorkspace({
               </h3>
               <p>
                 {project.kind === 'backend'
-                  ? 'Run the example, then send a request to the browser handler and inspect its response.'
+                  ? 'Run the example, then create a short link and inspect the API responses and redirects.'
                   : 'Explore the files, make a change, and press Run to preview this project.'}
               </p>
               <button type="button" disabled={!withinLimit} onClick={start}>

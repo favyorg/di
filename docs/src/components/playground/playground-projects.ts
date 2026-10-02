@@ -1,16 +1,16 @@
-import generatorApiTypes from '../../examples/api-result/api-types.ts?raw';
-import generatorContracts from '../../examples/generator/contracts.ts?raw';
-import generatorServices from '../../examples/generator/loaders.ts?raw';
+import generatorTypes from '../../examples/projects/generator-services/types.ts?raw';
+import generatorContracts from '../../examples/projects/generator-services/contracts.ts?raw';
+import generatorFormatters from '../../examples/projects/generator-services/formatters.ts?raw';
+import generatorStyles from '../../examples/projects/generator-services/styles.css?raw';
 import generatorApp from '../../examples/projects/generator-services/app.ts?raw';
 import generatorHtml from '../../examples/projects/generator-services/index.html?raw';
 import generatorMain from '../../examples/projects/generator-services/main.ts?raw';
-import httpApiTypes from '../../examples/projects/http-handler/api-types.ts?raw';
+import httpTypes from '../../examples/projects/http-handler/types.ts?raw';
 import httpApp from '../../examples/projects/http-handler/app.ts?raw';
-import httpContracts from '../../examples/projects/http-handler/contracts.ts?raw';
 import httpHtml from '../../examples/projects/http-handler/index.html?raw';
 import httpMain from '../../examples/projects/http-handler/main.ts?raw';
-import httpMockData from '../../examples/projects/http-handler/mock-data.ts?raw';
-import httpRepository from '../../examples/projects/http-handler/repository.ts?raw';
+import httpStore from '../../examples/projects/http-handler/store.ts?raw';
+import httpStyles from '../../examples/projects/http-handler/styles.css?raw';
 import reactApiTypes from '../../examples/projects/react-orders/api-types.ts?raw';
 import reactApp from '../../examples/projects/react-orders/app.tsx?raw';
 import reactContracts from '../../examples/projects/react-orders/contracts.ts?raw';
@@ -34,10 +34,7 @@ export type PlaygroundProject = Readonly<{
 function source(code: string): string {
   return code
     .replace(/(?:\.\.\/)+di\/src/g, '@favy/di')
-    .replace('../shared/styles.css', './styles.css')
-    .replace('../../generator/contracts', './services/contracts')
-    .replace('../../generator/loaders', './services/loaders')
-    .replace('../../api-result/api-types', './api-types');
+    .replace('../shared/styles.css', './styles.css');
 }
 
 export const playgroundProjects: readonly PlaygroundProject[] = [
@@ -72,41 +69,30 @@ export const playgroundProjects: readonly PlaygroundProject[] = [
   },
   {
     id: 'http-handler',
-    title: 'HTTP handler and repository',
+    title: 'URL shortener API',
     description:
-      'Run a Request → Response handler with a mock repository. Try successful requests and a missing user.',
+      'Build a stateful API with ordinary modules. Create short links, follow redirects, and count visits in an injected store.',
     kind: 'backend',
     entry: '/src/app.ts',
     activeFile: '/src/main.ts',
     files: {
       '/index.html': httpHtml,
-      '/src/app.ts': source(httpApp).replace(
-        "'./repository'",
-        "'./services/repository'"
+      '/src/app.ts': source(httpApp),
+      '/src/main.ts': source(httpMain),
+      '/src/types.ts': httpTypes,
+      '/src/store.ts': source(httpStore),
+      '/src/styles.css': httpStyles.replace(
+        "@import '../shared/styles.css';",
+        styles
       ),
-      '/src/main.ts': source(httpMain).replace(
-        "'./contracts'",
-        "'./services/contracts'"
-      ),
-      '/src/api-types.ts': httpApiTypes,
-      '/src/mock-data.ts': httpMockData,
-      '/src/services/contracts.ts': source(httpContracts).replace(
-        "'./api-types'",
-        "'../api-types'"
-      ),
-      '/src/services/repository.ts': source(httpRepository).replace(
-        "'./api-types'",
-        "'../api-types'"
-      ),
-      '/src/styles.css': styles,
     },
     dependencies: {},
   },
   {
     id: 'generator-services',
-    title: 'Generator service composition',
+    title: 'Document formatter',
     description:
-      'Request contracts with yield*, bind implementations with .provide(), and inspect the composed result.',
+      'Edit a document, swap HTML and plain-text implementations of a Formatter tag, and download the generated file.',
     kind: 'console',
     entry: '/src/app.ts',
     activeFile: '/src/main.ts',
@@ -114,16 +100,13 @@ export const playgroundProjects: readonly PlaygroundProject[] = [
       '/index.html': generatorHtml,
       '/src/app.ts': source(generatorApp),
       '/src/main.ts': source(generatorMain),
-      '/src/api-types.ts': generatorApiTypes,
-      '/src/services/contracts.ts': source(generatorContracts).replace(
-        "'../api-result/api-types'",
-        "'../api-types'"
+      '/src/types.ts': generatorTypes,
+      '/src/contracts.ts': source(generatorContracts),
+      '/src/formatters.ts': source(generatorFormatters),
+      '/src/styles.css': generatorStyles.replace(
+        "@import '../shared/styles.css';",
+        styles
       ),
-      '/src/services/loaders.ts': source(generatorServices).replace(
-        "'../api-result/api-types'",
-        "'../api-types'"
-      ),
-      '/src/styles.css': styles,
     },
     dependencies: {},
   },
