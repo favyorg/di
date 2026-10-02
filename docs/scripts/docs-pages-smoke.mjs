@@ -1659,6 +1659,17 @@ const checkExistingDocumentationPages = async (page, browser) => {
   for (const editor of await lazyEditors.all()) {
     await waitForEditorLines(editor);
   }
+  // A visible first line does not mean Monaco has painted the callback lines.
+  await lazyEditors
+    .nth(0)
+    .locator('.view-line')
+    .filter({ hasText: '(deps) =>' })
+    .waitFor();
+  await lazyEditors
+    .nth(1)
+    .locator('.view-line')
+    .filter({ hasText: "() => 'unused'" })
+    .waitFor();
 
   const lazyExampleIndents = await lazyEditors.evaluateAll((editors) =>
     editors.map((editor) =>

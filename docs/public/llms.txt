@@ -21,7 +21,7 @@
 
 ## Optional
 
-- [Playground](https://di.favy.dev/playground/): Three progressive lessons using one small Greeting service: create a module (?example=first-module), add a typed dependency (?example=dependencies), then request it with Tag/GenModule and yield* (?example=generators). Each has 2–3 TypeScript files, a short exercise, and Run/Stop with console output. Drafts persist in the current tab.
+- [Playground](https://di.favy.dev/playground/): 20 progressive lessons grouped into Fundamentals (1–6), Generators (7–9), Lifecycle (10–13), Applications (14–15), and Extensions (16–20). Start with ?example=first-module; key lessons include ?example=generators, ?example=provide, ?example=frontend, ?example=backend, and ?example=async-result. Each lesson includes editable files, an exercise, expected output, a guide link, and Run/Stop. The frontend lesson has an interactive browser preview; the backend Request/Response example runs locally without a server. Drafts persist in the current tab.
 - [More examples](https://di.favy.dev/playground/basics/): Six focused @favy/di snippets covering composition, replacement, partial application, caching, and HKT.
 - [Transform Input](https://di.favy.dev/module/transform-input/): Customize callback dependencies and module metadata.
 - [Transform Output](https://di.favy.dev/module/transform-output/): Observe or transform successful module results.

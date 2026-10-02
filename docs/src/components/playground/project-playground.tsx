@@ -7,11 +7,13 @@ import {
 import * as Tabs from '@radix-ui/react-tabs';
 import {
   playgroundProjects,
+  lessonSections,
   projectById,
   type PlaygroundProject,
 } from './playground-projects';
 import { ProjectEditor, type ProjectEditorRuntime } from './project-editor';
 import { useExampleRunner } from '../example-runner';
+import { useBrowserRunner } from './use-browser-runner';
 import {
   projectWithinLimit,
   readProjectDraft,
@@ -67,6 +69,29 @@ export function ProjectPlayground() {
 
   return (
     <section className="project-playground" aria-label="Project playground">
+      <nav className="project-chapters" aria-label="Learning path">
+        {lessonSections.map((section) => {
+          const first = playgroundProjects.findIndex(
+            (lesson) => lesson.section === section
+          );
+          const count = playgroundProjects.filter(
+            (lesson) => lesson.section === section
+          ).length;
+          return (
+            <button
+              key={section}
+              type="button"
+              aria-current={project.section === section ? 'step' : undefined}
+              onClick={() => select(playgroundProjects[first].id)}
+            >
+              <span>
+                {first + 1}–{first + count}
+              </span>{' '}
+              {section}
+            </button>
+          );
+        })}
+      </nav>
       <div className="project-catalog">
         <div className="project-catalog__select">
           <label htmlFor="project-example">Lesson</label>
@@ -75,10 +100,17 @@ export function ProjectPlayground() {
             value={selectedId}
             onChange={(event) => select(event.target.value)}
           >
-            {playgroundProjects.map(({ id, title }, index) => (
-              <option key={id} value={id}>
-                {index + 1}. {title}
-              </option>
+            {lessonSections.map((section) => (
+              <optgroup key={section} label={section}>
+                {playgroundProjects.map(
+                  (lesson, index) =>
+                    lesson.section === section && (
+                      <option key={lesson.id} value={lesson.id}>
+                        {index + 1}. {lesson.title}
+                      </option>
+                    )
+                )}
+              </optgroup>
             ))}
           </select>
         </div>
@@ -114,9 +146,36 @@ export function ProjectPlayground() {
         </div>
         <span className="project-kind">{project.concept}</span>
       </div>
+      {project.comparison && (
+        <div
+          className="project-chapters"
+          role="group"
+          aria-label="Compare syntax"
+        >
+          {project.comparison.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={selectedId === id}
+              onClick={() => select(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <p className="project-exercise">
         <strong>Try it:</strong> {project.exercise}
       </p>
+      <div className="project-lesson-details" key={project.id}>
+        <details>
+          <summary>
+            {project.preview ? 'What to expect' : 'Expected output'}
+          </summary>
+          <pre>{project.expectedOutput}</pre>
+        </details>
+        <a href={project.docs}>Read the guide ↗</a>
+      </div>
       {ready ? (
         <ProjectSession
           key={`${project.id}:${reset}`}
@@ -132,6 +191,7 @@ export function ProjectPlayground() {
           Loading workspace…
         </div>
       )}
+      {project.note && <p className="project-note">{project.note}</p>}
     </section>
   );
 }
@@ -160,16 +220,18 @@ function ProjectSession({
       options={options}
       theme={theme}
     >
-      <ProjectWorkspace project={project} onReset={onReset} />
+      <ProjectWorkspace project={project} theme={theme} onReset={onReset} />
     </SandpackProvider>
   );
 }
 
 function ProjectWorkspace({
   project,
+  theme,
   onReset,
 }: {
   project: PlaygroundProject;
+  theme: Theme;
   onReset(): void;
 }) {
   const { sandpack } = useSandpack();
@@ -191,11 +253,18 @@ function ProjectWorkspace({
   const draft = useRef({ files, activeFile: sandpack.activeFile });
   draft.current = { files, activeFile: sandpack.activeFile };
   const withinLimit = projectWithinLimit(files);
-  const runner = useExampleRunner({
+  const consoleRunner = useExampleRunner({
     entry: project.entry,
     monaco: runtime?.monaco,
     models: runtime?.models ?? emptyModels,
   });
+  const browserRunner = useBrowserRunner({
+    runtime,
+    entry: project.entry,
+    theme,
+  });
+  const runner = project.preview ? browserRunner : consoleRunner;
+  const canStop = runner.busy || (project.preview && browserRunner.running);
   const changed =
     runFiles &&
     Object.keys(files).some((path) => files[path] !== runFiles[path]);
@@ -264,7 +333,7 @@ function ProjectWorkspace({
         >
           ▶ Run
         </button>
-        <button type="button" disabled={!runner.busy} onClick={runner.stop}>
+        <button type="button" disabled={!canStop} onClick={runner.stop}>
           Stop
         </button>
         <button
@@ -339,8 +408,12 @@ function ProjectWorkspace({
               <span className="project-empty__icon" aria-hidden="true">
                 ▷
               </span>
-              <h3>Console output</h3>
-              <p>Press Run to execute app.ts. The output will appear here.</p>
+              <h3>{project.preview ? 'App preview' : 'Console output'}</h3>
+              <p>
+                {project.preview
+                  ? 'Press Run to open the app, then try its button.'
+                  : 'Press Run to execute app.ts. The output will appear here.'}
+              </p>
               <button
                 type="button"
                 disabled={!withinLimit || !runtime}

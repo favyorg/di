@@ -2,6 +2,6 @@ import { Module } from '../../../../../di/src';
 import type { MessagesLive } from './messages';
 
 export const Greeting = Module<MessagesLive>()('Greeting', ({ Messages }) => ({
-  Say: (name: string) => `${Messages.hello}, ${name}!`,
+  Say: (name: string) => `${Messages.hello}, ${name}! (${Messages.locale})`,
 }));
 export type GreetingLive = typeof Greeting.Live;
