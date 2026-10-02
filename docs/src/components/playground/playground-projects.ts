@@ -1,114 +1,69 @@
-import generatorTypes from '../../examples/projects/generator-services/types.ts?raw';
-import generatorContracts from '../../examples/projects/generator-services/contracts.ts?raw';
-import generatorFormatters from '../../examples/projects/generator-services/formatters.ts?raw';
-import generatorStyles from '../../examples/projects/generator-services/styles.css?raw';
-import generatorApp from '../../examples/projects/generator-services/app.ts?raw';
-import generatorHtml from '../../examples/projects/generator-services/index.html?raw';
-import generatorMain from '../../examples/projects/generator-services/main.ts?raw';
-import httpTypes from '../../examples/projects/http-handler/types.ts?raw';
-import httpApp from '../../examples/projects/http-handler/app.ts?raw';
-import httpHtml from '../../examples/projects/http-handler/index.html?raw';
-import httpMain from '../../examples/projects/http-handler/main.ts?raw';
-import httpStore from '../../examples/projects/http-handler/store.ts?raw';
-import httpStyles from '../../examples/projects/http-handler/styles.css?raw';
-import reactApiTypes from '../../examples/projects/react-orders/api-types.ts?raw';
-import reactApp from '../../examples/projects/react-orders/app.tsx?raw';
-import reactContracts from '../../examples/projects/react-orders/contracts.ts?raw';
-import reactDashboard from '../../examples/projects/react-orders/dashboard.tsx?raw';
-import reactHtml from '../../examples/projects/react-orders/index.html?raw';
-import reactMain from '../../examples/projects/react-orders/main.ts?raw';
-import reactServices from '../../examples/projects/react-orders/services.ts?raw';
-import styles from '../../examples/projects/shared/styles.css?raw';
+import firstGreeting from '../../examples/projects/first-module/greeting.ts?raw';
+import firstApp from '../../examples/projects/first-module/app.ts?raw';
+import dependencyMessages from '../../examples/projects/dependencies/messages.ts?raw';
+import dependencyGreeting from '../../examples/projects/dependencies/greeting.ts?raw';
+import dependencyApp from '../../examples/projects/dependencies/app.ts?raw';
+import generatorMessages from '../../examples/projects/generators/messages.ts?raw';
+import generatorGreeting from '../../examples/projects/generators/greeting.ts?raw';
+import generatorApp from '../../examples/projects/generators/app.ts?raw';
 
 export type PlaygroundProject = Readonly<{
   id: string;
   title: string;
   description: string;
-  kind: 'frontend' | 'backend' | 'console';
+  exercise: string;
+  concept: string;
   entry: string;
   activeFile: string;
   files: Readonly<Record<string, string>>;
-  dependencies: Readonly<Record<string, string>>;
 }>;
 
-function source(code: string): string {
-  return code
-    .replace(/(?:\.\.\/)+di\/src/g, '@favy/di')
-    .replace('../shared/styles.css', './styles.css');
-}
+const source = (code: string) =>
+  code.replace(/(?:\.\.\/)+di\/src/g, '@favy/di');
 
 export const playgroundProjects: readonly PlaygroundProject[] = [
   {
-    id: 'react-orders',
-    title: 'React orders dashboard',
+    id: 'first-module',
+    title: 'Create a module',
     description:
-      'Inject User and Orders services into a React dashboard. Load data, simulate an API failure, and recover.',
-    kind: 'frontend',
-    entry: '/src/app.tsx',
-    activeFile: '/src/main.ts',
-    files: {
-      '/index.html': reactHtml,
-      '/src/app.tsx': source(reactApp),
-      '/src/main.ts': source(reactMain).replace(
-        "'./contracts'",
-        "'./services/contracts'"
-      ),
-      '/src/dashboard.tsx': reactDashboard,
-      '/src/api-types.ts': reactApiTypes,
-      '/src/services/contracts.ts': source(reactContracts).replace(
-        "'./api-types'",
-        "'../api-types'"
-      ),
-      '/src/services/index.ts': source(reactServices).replace(
-        "'./api-types'",
-        "'../api-types'"
-      ),
-      '/src/styles.css': styles,
-    },
-    dependencies: { react: '18.3.1', 'react-dom': '18.3.1' },
+      'Module defines a service. Calling Greeting() creates its value; Say is an ordinary method on that value.',
+    exercise: 'In app.ts, change Alex to your name and press Run.',
+    concept: 'Module',
+    entry: '/app.ts',
+    activeFile: '/greeting.ts',
+    files: { '/greeting.ts': source(firstGreeting), '/app.ts': firstApp },
   },
   {
-    id: 'http-handler',
-    title: 'URL shortener API',
+    id: 'dependencies',
+    title: 'Add a dependency',
     description:
-      'Build a stateful API with ordinary modules. Create short links, follow redirects, and count visits in an injected store.',
-    kind: 'backend',
-    entry: '/src/app.ts',
-    activeFile: '/src/main.ts',
+      'Move the greeting word into Messages. typeof Messages.Live describes the dependency; app.ts supplies its implementation.',
+    exercise:
+      "In app.ts, replace { Messages } with { Messages: { hello: 'Hi' } }. Run again: Greeting stays unchanged.",
+    concept: 'Typed dependencies',
+    entry: '/app.ts',
+    activeFile: '/greeting.ts',
     files: {
-      '/index.html': httpHtml,
-      '/src/app.ts': source(httpApp),
-      '/src/main.ts': source(httpMain),
-      '/src/types.ts': httpTypes,
-      '/src/store.ts': source(httpStore),
-      '/src/styles.css': httpStyles.replace(
-        "@import '../shared/styles.css';",
-        styles
-      ),
+      '/greeting.ts': source(dependencyGreeting),
+      '/messages.ts': source(dependencyMessages),
+      '/app.ts': dependencyApp,
     },
-    dependencies: {},
   },
   {
-    id: 'generator-services',
-    title: 'Document formatter',
+    id: 'generators',
+    title: 'Use a generator',
     description:
-      'Edit a document, swap HTML and plain-text implementations of a Formatter tag, and download the generated file.',
-    kind: 'console',
-    entry: '/src/app.ts',
-    activeFile: '/src/main.ts',
+      'Keep the same greeting. Tag declares the Messages contract; yield* requests it and infers the dependency type automatically.',
+    exercise:
+      'Compare greeting.ts with step 2. Then change hello in DefaultMessages and run: the value is supplied through the tag.',
+    concept: 'Tag + GenModule',
+    entry: '/app.ts',
+    activeFile: '/greeting.ts',
     files: {
-      '/index.html': generatorHtml,
-      '/src/app.ts': source(generatorApp),
-      '/src/main.ts': source(generatorMain),
-      '/src/types.ts': generatorTypes,
-      '/src/contracts.ts': source(generatorContracts),
-      '/src/formatters.ts': source(generatorFormatters),
-      '/src/styles.css': generatorStyles.replace(
-        "@import '../shared/styles.css';",
-        styles
-      ),
+      '/greeting.ts': source(generatorGreeting),
+      '/messages.ts': source(generatorMessages),
+      '/app.ts': generatorApp,
     },
-    dependencies: {},
   },
 ];
 

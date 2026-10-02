@@ -47,6 +47,11 @@ export function useExampleRunner({
 
   useEffect(() => cancel, []);
 
+  const stop = () => {
+    cancel();
+    setPhase('stopped');
+  };
+
   const start = async () => {
     if (!entry || !monaco || active.current) return;
     const run: ActiveRun = { controller: new AbortController() };
@@ -92,6 +97,10 @@ export function useExampleRunner({
   };
 
   return {
+    start,
+    stop,
+    busy,
+    status: labels[phase],
     controls: entry ? (
       <div className="example-run-controls">
         <button
@@ -102,8 +111,7 @@ export function useExampleRunner({
           disabled={!monaco}
           onClick={() => {
             if (busy) {
-              cancel();
-              setPhase('stopped');
+              stop();
             } else {
               void start();
             }

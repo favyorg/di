@@ -21,8 +21,8 @@
 
 ## Optional
 
-- [Playground](https://di.favy.dev/playground/): Multi-file projects with a file tree, TypeScript editor, live preview, and console: React orders dashboard (?example=react-orders), stateful URL shortener using ordinary Module and browser Request/Response (?example=http-handler), and a document editor with interchangeable Tag/GenModule formatters and file export (?example=generator-services). Run executes a snapshot; Stop removes it. Drafts persist in the current tab.
-- [Basic snippets](https://di.favy.dev/playground/basics/): Six focused @favy/di examples with editable TypeScript and console output.
+- [Playground](https://di.favy.dev/playground/): Three progressive lessons using one small Greeting service: create a module (?example=first-module), add a typed dependency (?example=dependencies), then request it with Tag/GenModule and yield* (?example=generators). Each has 2–3 TypeScript files, a short exercise, and Run/Stop with console output. Drafts persist in the current tab.
+- [More examples](https://di.favy.dev/playground/basics/): Six focused @favy/di snippets covering composition, replacement, partial application, caching, and HKT.
 - [Transform Input](https://di.favy.dev/module/transform-input/): Customize callback dependencies and module metadata.
 - [Transform Output](https://di.favy.dev/module/transform-output/): Observe or transform successful module results.
 - [HKT support](https://di.favy.dev/reference/api/#hkt): Compute input and output types with higher-kinded transformations.

@@ -356,7 +356,7 @@ const checkPlayground = async (page) => {
   assert.equal(await playgroundLink.count(), 1);
   await playgroundLink.click();
   await page.waitForURL(`${origin}/playground/`);
-  await page.getByRole('link', { name: 'Basic snippets' }).click();
+  await page.getByRole('link', { name: 'More examples' }).click();
   await page.waitForURL(`${origin}/playground/basics/`);
 
   const themeToggle = page.locator('[data-theme-toggle]');

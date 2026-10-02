@@ -106,7 +106,7 @@ Keep the dependency object intact when access needs to remain conditional; destr
 
 ## Documentation
 
-- [Playground](https://di.favy.dev/playground/) includes multi-file React, browser HTTP-handler, and generator projects with an editor, file tree, and live preview. [Basic snippets](https://di.favy.dev/playground/basics/) cover the core API.
+- [Playground](https://di.favy.dev/playground/) teaches modules, dependencies, and generators step by step with small editable examples and console output. [More examples](https://di.favy.dev/playground/basics/) cover replacement, partial application, caching, and HKT.
 - [Introduction](https://di.favy.dev/guides/introduction/) and [Module](https://di.favy.dev/module/module/) explain the core model.
 - [Testing](https://di.favy.dev/guides/testing/) and [Best Practices](https://di.favy.dev/guides/best-practices/) cover application boundaries and lifecycle choices.
 - [Transform Input](https://di.favy.dev/module/transform-input/) and [Transform Output](https://di.favy.dev/module/transform-output/) cover custom factories.

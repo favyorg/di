@@ -10,8 +10,8 @@ import {
   projectById,
   type PlaygroundProject,
 } from './playground-projects';
-import { ProjectEditor } from './project-editor';
-import { ProjectPreview } from './project-preview';
+import { ProjectEditor, type ProjectEditorRuntime } from './project-editor';
+import { useExampleRunner } from '../example-runner';
 import {
   projectWithinLimit,
   readProjectDraft,
@@ -21,7 +21,7 @@ import {
 import './project-playground.css';
 
 type Theme = 'light' | 'dark';
-type Run = { id: number; files: Record<string, string> };
+const emptyModels: ProjectEditorRuntime['models'] = new Map();
 
 function selectedProject() {
   const id = new URL(window.location.href).searchParams.get('example');
@@ -69,20 +69,15 @@ export function ProjectPlayground() {
     <section className="project-playground" aria-label="Project playground">
       <div className="project-catalog">
         <div className="project-catalog__select">
-          <label htmlFor="project-example">Example</label>
+          <label htmlFor="project-example">Lesson</label>
           <select
             id="project-example"
             value={selectedId}
             onChange={(event) => select(event.target.value)}
           >
-            {playgroundProjects.map(({ id, title, kind }) => (
+            {playgroundProjects.map(({ id, title }, index) => (
               <option key={id} value={id}>
-                {kind === 'frontend'
-                  ? 'Frontend'
-                  : kind === 'backend'
-                  ? 'Backend'
-                  : 'DI'}{' '}
-                · {title}
+                {index + 1}. {title}
               </option>
             ))}
           </select>
@@ -109,7 +104,7 @@ export function ProjectPlayground() {
           </button>
         </nav>
         <a className="project-basics-link" href="/playground/basics/">
-          Basic snippets ↗
+          More examples ↗
         </a>
       </div>
       <div className="project-intro">
@@ -117,14 +112,11 @@ export function ProjectPlayground() {
           <h2>{project.title}</h2>
           <p>{project.description}</p>
         </div>
-        <span className="project-kind">
-          {project.kind === 'frontend'
-            ? 'React + TypeScript'
-            : project.kind === 'backend'
-            ? 'Browser HTTP handler'
-            : 'Tags + generators'}
-        </span>
+        <span className="project-kind">{project.concept}</span>
       </div>
+      <p className="project-exercise">
+        <strong>Try it:</strong> {project.exercise}
+      </p>
       {ready ? (
         <ProjectSession
           key={`${project.id}:${reset}`}
@@ -168,25 +160,23 @@ function ProjectSession({
       options={options}
       theme={theme}
     >
-      <ProjectWorkspace project={project} theme={theme} onReset={onReset} />
+      <ProjectWorkspace project={project} onReset={onReset} />
     </SandpackProvider>
   );
 }
 
 function ProjectWorkspace({
   project,
-  theme,
   onReset,
 }: {
   project: PlaygroundProject;
-  theme: Theme;
   onReset(): void;
 }) {
   const { sandpack } = useSandpack();
-  const [run, setRun] = useState<Run>();
+  const [runFiles, setRunFiles] = useState<Record<string, string>>();
+  const [runtime, setRuntime] = useState<ProjectEditorRuntime>();
   const [filesOpen, setFilesOpen] = useState(false);
   const [opened, setOpened] = useState([sandpack.activeFile]);
-  const counter = useRef(0);
   const discardingDraft = useRef(false);
   const files = useMemo(
     () =>
@@ -201,8 +191,14 @@ function ProjectWorkspace({
   const draft = useRef({ files, activeFile: sandpack.activeFile });
   draft.current = { files, activeFile: sandpack.activeFile };
   const withinLimit = projectWithinLimit(files);
+  const runner = useExampleRunner({
+    entry: project.entry,
+    monaco: runtime?.monaco,
+    models: runtime?.models ?? emptyModels,
+  });
   const changed =
-    run && Object.keys(files).some((path) => files[path] !== run.files[path]);
+    runFiles &&
+    Object.keys(files).some((path) => files[path] !== runFiles[path]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -231,7 +227,9 @@ function ProjectWorkspace({
   }, [sandpack.activeFile]);
 
   const start = () => {
-    if (withinLimit) setRun({ id: ++counter.current, files: { ...files } });
+    if (!withinLimit || !runtime || runner.busy) return;
+    setRunFiles({ ...files });
+    void runner.start();
   };
   const active = sandpack.activeFile;
   return (
@@ -261,12 +259,12 @@ function ProjectWorkspace({
         <button
           className="project-run"
           type="button"
-          disabled={!withinLimit}
+          disabled={!withinLimit || !runtime || runner.busy}
           onClick={start}
         >
           ▶ Run
         </button>
-        <button type="button" disabled={!run} onClick={() => setRun(undefined)}>
+        <button type="button" disabled={!runner.busy} onClick={runner.stop}>
           Stop
         </button>
         <button
@@ -283,9 +281,7 @@ function ProjectWorkspace({
             ? 'Project exceeds the 64 KiB limit.'
             : changed
             ? 'Changes ready to run'
-            : run
-            ? 'Preview active'
-            : 'Run to start the preview'}
+            : runner.status || 'Run to see the output'}
         </span>
         <span className="project-shortcut">⌘ / Ctrl + Enter</span>
       </div>
@@ -330,36 +326,26 @@ function ProjectWorkspace({
               activeFile={active}
               onSelect={(path) => sandpack.setActiveFile(path)}
               onChange={(path, code) => sandpack.updateFile(path, code, false)}
+              onReady={setRuntime}
             />
           </Tabs.Content>
           <div className="project-file-path">{active}</div>
         </Tabs.Root>
         <div className="project-result" aria-label="Project result">
-          {run ? (
-            <ProjectPreview
-              key={run.id}
-              files={run.files}
-              entry={project.entry}
-              kind={project.kind}
-              dependencies={project.dependencies}
-              theme={theme}
-            />
+          {runFiles ? (
+            runner.output
           ) : (
             <div className="project-empty">
               <span className="project-empty__icon" aria-hidden="true">
                 ▷
               </span>
-              <h3>
-                {project.kind === 'backend'
-                  ? 'Try a request'
-                  : 'See it in action'}
-              </h3>
-              <p>
-                {project.kind === 'backend'
-                  ? 'Run the example, then create a short link and inspect the API responses and redirects.'
-                  : 'Explore the files, make a change, and press Run to preview this project.'}
-              </p>
-              <button type="button" disabled={!withinLimit} onClick={start}>
+              <h3>Console output</h3>
+              <p>Press Run to execute app.ts. The output will appear here.</p>
+              <button
+                type="button"
+                disabled={!withinLimit || !runtime}
+                onClick={start}
+              >
                 Run example →
               </button>
             </div>

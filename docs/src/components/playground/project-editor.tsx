@@ -2,7 +2,11 @@ import { useEffect, useId, useRef } from 'react';
 import type { BeforeMount, Monaco, OnMount } from '@monaco-editor/react';
 import type { editor, IDisposable } from 'monaco-editor';
 import { CodeEditor } from '../code-editor';
-import { configureProjectLanguageService } from './project-editor-typings';
+
+export type ProjectEditorRuntime = {
+  monaco: Monaco;
+  models: ReadonlyMap<string, editor.ITextModel>;
+};
 
 export type ProjectEditorProps = {
   projectId: string;
@@ -10,6 +14,7 @@ export type ProjectEditorProps = {
   activeFile: string;
   onChange(path: string, code: string): void;
   onSelect(path: string): void;
+  onReady(runtime: ProjectEditorRuntime): void;
 };
 
 const languageFor = (path: string): string => {
@@ -139,11 +144,12 @@ export function ProjectEditor(props: ProjectEditorProps) {
   const onMount: OnMount = (codeEditor, monaco) => {
     instance.current = codeEditor;
     monacoApi.current = monaco;
-    configureProjectLanguageService(monaco);
     codeEditor.updateOptions({
       automaticLayout: true,
       fontSize: 14,
       lineNumbers: 'on',
+      wordWrap: 'on',
+      wrappingIndent: 'indent',
       scrollBeyondLastLine: false,
       tabSize: 2,
       gotoLocation: { multipleDefinitions: 'goto' },
@@ -174,6 +180,7 @@ export function ProjectEditor(props: ProjectEditorProps) {
         return true;
       },
     });
+    latest.current.onReady({ monaco, models: models.current });
   };
 
   return (
